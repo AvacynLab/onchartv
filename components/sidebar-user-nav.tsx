@@ -30,6 +30,12 @@ export function SidebarUserNav({ user }: { user: User }) {
   const isGuest = sessionUserType === "guest";
   const displayEmail = isGuest ? "Guest" : user?.email ?? data?.user?.email ?? "User";
   const avatarIdentifier = user.email ?? data?.user?.email ?? "guest";
+  // The Playwright environment lacks outbound network access, so we swap the
+  // remote avatar for a bundled SVG placeholder to avoid `ENETUNREACH` errors.
+  const disableRemoteAvatars = process.env.NEXT_PUBLIC_PLAYWRIGHT === "true";
+  const avatarSrc = disableRemoteAvatars
+    ? "/playwright/avatar-placeholder.svg"
+    : `https://avatar.vercel.sh/${avatarIdentifier}`;
 
   return (
     <SidebarMenu>
@@ -57,7 +63,7 @@ export function SidebarUserNav({ user }: { user: User }) {
                   alt={displayEmail}
                   className="rounded-full"
                   height={24}
-                  src={`https://avatar.vercel.sh/${avatarIdentifier}`}
+                  src={avatarSrc}
                   width={24}
                 />
                 <span className="truncate" data-testid="user-email">

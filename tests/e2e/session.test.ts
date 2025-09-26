@@ -40,6 +40,13 @@ test.describe.serial("Login and Registration", () => {
     await authPage.expectToastToContain("Account created successfully!");
   });
 
+  test("Reject login attempts with invalid credentials", async () => {
+    // Use an obviously incorrect password to confirm the UI surfaces the
+    // authentication error toast returned by the server action.
+    await authPage.login(testUser.email, "incorrect-password");
+    await authPage.expectToastToContain("Invalid credentials!");
+  });
+
   test("Register new account with existing email", async () => {
     await authPage.register(testUser.email, testUser.password);
     await authPage.expectToastToContain("Account already exists!");
