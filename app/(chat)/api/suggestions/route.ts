@@ -19,6 +19,10 @@ export async function GET(request: Request) {
     return new ChatSDKError("unauthorized:suggestions").toResponse();
   }
 
+  if (session.user.type !== "regular") {
+    return new ChatSDKError("forbidden:suggestions").toResponse();
+  }
+
   const suggestions = await getSuggestionsByDocumentId({
     documentId,
   });

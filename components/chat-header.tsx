@@ -14,10 +14,12 @@ function PureChatHeader({
   chatId,
   selectedVisibilityType,
   isReadonly,
+  showNewChatButton = true,
 }: {
   chatId: string;
   selectedVisibilityType: VisibilityType;
   isReadonly: boolean;
+  showNewChatButton?: boolean;
 }) {
   const router = useRouter();
   const { open } = useSidebar();
@@ -28,7 +30,7 @@ function PureChatHeader({
     <header className="sticky top-0 flex items-center gap-2 bg-background px-2 py-1.5 md:px-2">
       <SidebarToggle />
 
-      {(!open || windowWidth < 768) && (
+      {showNewChatButton && (!open || windowWidth < 768) && (
         <Button
           className="order-2 ml-auto h-8 px-2 md:order-1 md:ml-0 md:h-fit md:px-2"
           onClick={() => {
@@ -71,6 +73,10 @@ export const ChatHeader = memo(PureChatHeader, (prevProps, nextProps) => {
   return (
     prevProps.chatId === nextProps.chatId &&
     prevProps.selectedVisibilityType === nextProps.selectedVisibilityType &&
-    prevProps.isReadonly === nextProps.isReadonly
+    prevProps.isReadonly === nextProps.isReadonly &&
+    prevProps.showNewChatButton === nextProps.showNewChatButton
   );
 });
+
+
+

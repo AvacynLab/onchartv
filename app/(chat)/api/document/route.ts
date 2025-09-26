@@ -24,6 +24,10 @@ export async function GET(request: Request) {
     return new ChatSDKError("unauthorized:document").toResponse();
   }
 
+  if (session.user.type !== "regular") {
+    return new ChatSDKError("forbidden:document").toResponse();
+  }
+
   const documents = await getDocumentsById({ id });
 
   const [document] = documents;
@@ -54,6 +58,10 @@ export async function POST(request: Request) {
 
   if (!session?.user) {
     return new ChatSDKError("not_found:document").toResponse();
+  }
+
+  if (session.user.type !== "regular") {
+    return new ChatSDKError("forbidden:document").toResponse();
   }
 
   const {

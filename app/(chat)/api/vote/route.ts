@@ -19,6 +19,10 @@ export async function GET(request: Request) {
     return new ChatSDKError("unauthorized:vote").toResponse();
   }
 
+  if (session.user.type !== "regular") {
+    return new ChatSDKError("forbidden:vote").toResponse();
+  }
+
   const chat = await getChatById({ id: chatId });
 
   if (!chat) {
@@ -53,6 +57,10 @@ export async function PATCH(request: Request) {
 
   if (!session?.user) {
     return new ChatSDKError("unauthorized:vote").toResponse();
+  }
+
+  if (session.user.type !== "regular") {
+    return new ChatSDKError("forbidden:vote").toResponse();
   }
 
   const chat = await getChatById({ id: chatId });

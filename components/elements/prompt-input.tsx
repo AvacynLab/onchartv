@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import type { ChatStatus } from "ai";
 import { Loader2Icon, SendIcon, SquareIcon, XIcon } from "lucide-react";
@@ -174,6 +174,7 @@ export const PromptInputSubmit = ({
     <Button
       className={cn("gap-1.5 rounded-lg", className)}
       size={size}
+      data-testid="send-button"
       type="submit"
       variant={variant}
       {...props}

@@ -41,6 +41,7 @@ export function Chat({
   isReadonly,
   autoResume,
   initialLastContext,
+  showNewChatButton = true,
 }: {
   id: string;
   initialMessages: ChatMessage[];
@@ -49,6 +50,7 @@ export function Chat({
   isReadonly: boolean;
   autoResume: boolean;
   initialLastContext?: AppUsage;
+  showNewChatButton?: boolean;
 }) {
   const { visibilityType } = useChatVisibility({
     chatId: id,
@@ -161,6 +163,7 @@ export function Chat({
           chatId={id}
           isReadonly={isReadonly}
           selectedVisibilityType={initialVisibilityType}
+          showNewChatButton={showNewChatButton}
         />
 
         <Messages
@@ -247,3 +250,5 @@ export function Chat({
     </>
   );
 }
+
+

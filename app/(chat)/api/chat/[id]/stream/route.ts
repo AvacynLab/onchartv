@@ -34,6 +34,10 @@ export async function GET(
     return new ChatSDKError("unauthorized:chat").toResponse();
   }
 
+  if (session.user.type !== "regular") {
+    return new ChatSDKError("forbidden:chat").toResponse();
+  }
+
   let chat: Chat | null;
 
   try {

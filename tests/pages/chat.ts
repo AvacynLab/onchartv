@@ -48,11 +48,52 @@ export class ChatPage {
   }
 
   async isGenerationComplete() {
-    const response = await this.page.waitForResponse((currentResponse) =>
-      currentResponse.url().includes("/api/chat")
-    );
+    const assistantMessages = this.page.getByTestId("message-assistant");
+    const initialAssistantCount = await assistantMessages.count();
 
-    await response.finished();
+    const chatResponse = await this.page.waitForResponse((currentResponse) => {
+      return (
+        currentResponse.url().includes("/api/chat") &&
+        currentResponse.request().method() === "POST"
+      );
+    });
+    await chatResponse.finished();
+
+    await expect
+      .poll(async () => await assistantMessages.count())
+      .toBeGreaterThan(initialAssistantCount);
+
+    await expect(this.page.getByTestId("message-assistant-loading")).toHaveCount(0);
+    await expect(this.page.getByTestId("stop-button")).toHaveCount(0);
+
+    const sendButton = this.sendButton;
+    await expect(sendButton).toBeVisible();
+
+    const latestMessageContent = assistantMessages
+      .nth(-1)
+      .getByTestId("message-content");
+
+    let previousText = "";
+    let stableIterations = 0;
+
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const currentText = (await latestMessageContent.innerText()).trim();
+
+      if (currentText && currentText === previousText) {
+        stableIterations += 1;
+        if (stableIterations >= 2) {
+          break;
+        }
+      } else {
+        stableIterations = 0;
+        previousText = currentText;
+      }
+
+      await this.page.waitForTimeout(200);
+    }
+
+    const finalText = (await latestMessageContent.innerText()).trim();
+    expect(finalText.length).toBeGreaterThan(0);
   }
 
   async isVoteComplete() {
@@ -142,13 +183,14 @@ export class ChatPage {
     const lastMessageElement = messageElements.at(-1);
 
     if (!lastMessageElement) {
-      return null;
+      throw new Error("No assistant message found");
     }
 
     const content = await lastMessageElement
       .getByTestId("message-content")
       .innerText()
-      .catch(() => null);
+      .then((value) => value?.trim() ?? "")
+      .catch(() => "");
 
     const reasoningElement = await lastMessageElement
       .getByTestId("message-reasoning")
@@ -191,7 +233,8 @@ export class ChatPage {
     const content = await lastMessageElement
       .getByTestId("message-content")
       .innerText()
-      .catch(() => null);
+      .then((value) => value?.trim() ?? "")
+      .catch(() => "");
 
     const hasAttachments = await lastMessageElement
       .getByTestId("message-attachments")
@@ -218,7 +261,6 @@ export class ChatPage {
       },
     };
   }
-
   async expectToastToContain(text: string) {
     await expect(this.page.getByTestId("toast")).toContainText(text);
   }

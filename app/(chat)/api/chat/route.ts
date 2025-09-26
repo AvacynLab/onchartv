@@ -113,6 +113,10 @@ export async function POST(request: Request) {
       return new ChatSDKError("unauthorized:chat").toResponse();
     }
 
+    if (session.user.type !== "regular") {
+      return new ChatSDKError("forbidden:chat").toResponse();
+    }
+
     const userType: UserType = session.user.type;
 
     const messageCount = await getMessageCountByUserId({
@@ -319,6 +323,10 @@ export async function DELETE(request: Request) {
 
   if (!session?.user) {
     return new ChatSDKError("unauthorized:chat").toResponse();
+  }
+
+  if (session.user.type !== "regular") {
+    return new ChatSDKError("forbidden:chat").toResponse();
   }
 
   const chat = await getChatById({ id });

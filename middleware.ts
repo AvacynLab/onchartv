@@ -1,14 +1,18 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
-import { guestRegex, isDevelopmentEnvironment } from "./lib/constants";
+import { isDevelopmentEnvironment } from "./lib/constants";
+
+const AUTH_PAGES = new Set(["/login", "/register"]);
+
+function buildLoginRedirect(request: NextRequest) {
+  const loginUrl = new URL("/login", request.url);
+  loginUrl.searchParams.set("callbackUrl", request.nextUrl.href);
+  return loginUrl;
+}
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  /*
-   * Playwright starts the dev server and requires a 200 status to
-   * begin the tests, so this ensures that the tests can start
-   */
   if (pathname.startsWith("/ping")) {
     return new Response("pong", { status: 200 });
   }
@@ -23,17 +27,35 @@ export async function middleware(request: NextRequest) {
     secureCookie: !isDevelopmentEnvironment,
   });
 
-  if (!token) {
-    const redirectUrl = encodeURIComponent(request.url);
+  const isSharePath = pathname.startsWith("/share");
+  const isAuthPage = AUTH_PAGES.has(pathname);
 
-    return NextResponse.redirect(
-      new URL(`/api/auth/guest?redirectUrl=${redirectUrl}`, request.url)
-    );
+  if (!token) {
+    if (isSharePath) {
+      const redirectUrl = encodeURIComponent(request.nextUrl.href);
+      return NextResponse.redirect(
+        new URL(`/api/auth/guest?redirectUrl=${redirectUrl}`, request.url)
+      );
+    }
+
+    if (isAuthPage) {
+      return NextResponse.next();
+    }
+
+    return NextResponse.redirect(buildLoginRedirect(request));
   }
 
-  const isGuest = guestRegex.test(token?.email ?? "");
+  const tokenType = (token as { type?: string }).type ?? "regular";
 
-  if (token && !isGuest && ["/login", "/register"].includes(pathname)) {
+  if (isSharePath) {
+    return NextResponse.next();
+  }
+
+  if (tokenType !== "regular") {
+    return NextResponse.redirect(buildLoginRedirect(request));
+  }
+
+  if (isAuthPage) {
     return NextResponse.redirect(new URL("/", request.url));
   }
 
@@ -44,16 +66,10 @@ export const config = {
   matcher: [
     "/",
     "/chat/:id",
+    "/share/:path*",
     "/api/:path*",
     "/login",
     "/register",
-
-    /*
-     * Match all request paths except for the ones starting with:
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico, sitemap.xml, robots.txt (metadata files)
-     */
     "/((?!_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt).*)",
   ],
 };

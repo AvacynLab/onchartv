@@ -9,13 +9,15 @@ export class AuthPage {
   }
 
   async gotoLogin() {
+    await this.page.context().clearCookies();
     await this.page.goto("/login");
-    await expect(this.page.getByRole("heading")).toContainText("Sign In");
+    await expect(this.page.getByRole("heading", { level: 3, name: "Sign In" })).toBeVisible();
   }
 
   async gotoRegister() {
+    await this.page.context().clearCookies();
     await this.page.goto("/register");
-    await expect(this.page.getByRole("heading")).toContainText("Sign Up");
+    await expect(this.page.getByRole("heading", { level: 3, name: "Sign Up" })).toBeVisible();
   }
 
   async register(email: string, password: string) {
@@ -54,8 +56,8 @@ export class AuthPage {
 
     await authMenuItem.click();
 
-    const userEmail = this.page.getByTestId("user-email");
-    await expect(userEmail).toContainText("Guest");
+    await this.page.waitForURL(/\/login/);
+    await expect(this.page.getByRole("heading", { level: 3, name: "Sign In" })).toBeVisible();
   }
 
   async expectToastToContain(text: string) {
@@ -67,3 +69,4 @@ export class AuthPage {
     await sidebarToggleButton.click();
   }
 }
+

@@ -24,6 +24,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  if (session.user.type !== "regular") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   if (request.body === null) {
     return new Response("Request body is empty", { status: 400 });
   }

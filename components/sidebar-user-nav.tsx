@@ -18,7 +18,6 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
-import { guestRegex } from "@/lib/constants";
 import { LoaderIcon } from "./icons";
 import { toast } from "./toast";
 
@@ -27,7 +26,10 @@ export function SidebarUserNav({ user }: { user: User }) {
   const { data, status } = useSession();
   const { setTheme, resolvedTheme } = useTheme();
 
-  const isGuest = guestRegex.test(data?.user?.email ?? "");
+  const sessionUserType = data?.user?.type ?? user.type ?? "regular";
+  const isGuest = sessionUserType === "guest";
+  const displayEmail = isGuest ? "Guest" : user?.email ?? data?.user?.email ?? "User";
+  const avatarIdentifier = user.email ?? data?.user?.email ?? "guest";
 
   return (
     <SidebarMenu>
@@ -52,14 +54,14 @@ export function SidebarUserNav({ user }: { user: User }) {
                 data-testid="user-nav-button"
               >
                 <Image
-                  alt={user.email ?? "User Avatar"}
+                  alt={displayEmail}
                   className="rounded-full"
                   height={24}
-                  src={`https://avatar.vercel.sh/${user.email}`}
+                  src={`https://avatar.vercel.sh/${avatarIdentifier}`}
                   width={24}
                 />
                 <span className="truncate" data-testid="user-email">
-                  {isGuest ? "Guest" : user?.email}
+                  {displayEmail}
                 </span>
                 <ChevronUp className="ml-auto" />
               </SidebarMenuButton>

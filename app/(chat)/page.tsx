@@ -9,8 +9,8 @@ import { auth } from "../(auth)/auth";
 export default async function Page() {
   const session = await auth();
 
-  if (!session) {
-    redirect("/api/auth/guest");
+  if (!session || session.user.type !== "regular") {
+    redirect("/login");
   }
 
   const id = generateUUID();

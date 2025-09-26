@@ -11,27 +11,18 @@ import { convertToUIMessages } from "@/lib/utils";
 export default async function Page(props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
   const { id } = params;
+
   const chat = await getChatById({ id });
 
-  if (!chat) {
+  if (!chat || chat.visibility !== "public") {
     notFound();
   }
 
   const session = await auth();
 
-  if (!session || session.user.type !== "regular") {
-    const callbackUrl = encodeURIComponent(`/chat/${id}`);
-    redirect(`/login?callbackUrl=${callbackUrl}`);
-  }
-
-  if (chat.visibility === "private") {
-    if (!session.user) {
-      return notFound();
-    }
-
-    if (session.user.id !== chat.userId) {
-      return notFound();
-    }
+  if (!session) {
+    const redirectUrl = encodeURIComponent(`/share/${id}`);
+    redirect(`/api/auth/guest?redirectUrl=${redirectUrl}`);
   }
 
   const messagesFromDb = await getMessagesByChatId({
@@ -42,34 +33,19 @@ export default async function Page(props: { params: Promise<{ id: string }> }) {
 
   const cookieStore = await cookies();
   const chatModelFromCookie = cookieStore.get("chat-model");
-
-  if (!chatModelFromCookie) {
-    return (
-      <>
-        <Chat
-          autoResume={true}
-          id={chat.id}
-          initialChatModel={DEFAULT_CHAT_MODEL}
-          initialLastContext={chat.lastContext ?? undefined}
-          initialMessages={uiMessages}
-          initialVisibilityType={chat.visibility}
-          isReadonly={session?.user?.id !== chat.userId}
-        />
-        <DataStreamHandler />
-      </>
-    );
-  }
+  const initialChatModel = chatModelFromCookie?.value ?? DEFAULT_CHAT_MODEL;
 
   return (
     <>
       <Chat
-        autoResume={true}
+        autoResume={false}
         id={chat.id}
-        initialChatModel={chatModelFromCookie.value}
+        initialChatModel={initialChatModel}
         initialLastContext={chat.lastContext ?? undefined}
         initialMessages={uiMessages}
         initialVisibilityType={chat.visibility}
-        isReadonly={session?.user?.id !== chat.userId}
+        isReadonly={true}
+        showNewChatButton={false}
       />
       <DataStreamHandler />
     </>

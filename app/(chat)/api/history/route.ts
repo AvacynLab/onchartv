@@ -23,6 +23,10 @@ export async function GET(request: NextRequest) {
     return new ChatSDKError("unauthorized:chat").toResponse();
   }
 
+  if (session.user.type !== "regular") {
+    return new ChatSDKError("forbidden:chat").toResponse();
+  }
+
   const chats = await getChatsByUserId({
     id: session.user.id,
     limit,
