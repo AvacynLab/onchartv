@@ -41,6 +41,8 @@ import {
 import { ChatSDKError } from "@/lib/errors";
 import type { ChatMessage } from "@/lib/types";
 import type { AppUsage } from "@/lib/usage";
+import type { UIDataTypes, UIMessagePart, UITools } from "ai";
+
 import { convertToUIMessages, generateUUID } from "@/lib/utils";
 import { generateTitleFromUserMessage } from "../../actions";
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
@@ -72,9 +74,17 @@ const getTokenlensCatalog = tokenlensFetchEnabled
     )
   : async (): Promise<ModelCatalog | undefined> => undefined;
 
-type FilePart = Extract<ChatMessage["parts"][number], { type: "file" }>;
+/**
+ * AI SDK streams emit `UIMessagePart` objects while persisted history uses the
+ * narrower `ChatMessage` structure. The extractor handles both so it can
+ * serialise attachments during streaming as well as on final persistence.
+ */
+type AttachmentCandidate =
+  | ChatMessage["parts"][number]
+  | UIMessagePart<UIDataTypes, UITools>;
+type FilePart = Extract<AttachmentCandidate, { type: "file" }>;
 
-const extractAttachments = (parts: ChatMessage["parts"]) => {
+const extractAttachments = (parts: ReadonlyArray<AttachmentCandidate>) => {
   return parts
     .filter((part): part is FilePart => part.type === "file")
     .map((filePart) => {

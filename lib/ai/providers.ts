@@ -10,9 +10,14 @@ const openaiApiKey = process.env.OPENAI_API_KEY;
 const isPlaywrightEnvironment = isPlaywrightLikeEnvironment(process.env);
 
 function createMockProvider() {
-  const models = isTestEnvironment
-    ? require("./models.test")
-    : require("./models.mock");
+  /**
+   * Next.js attempts to statically analyze `require` calls during the build.
+   * Using `eval` defers module resolution to runtime so the bundle skips our
+   * test-only helpers while still letting local unit tests `require` them.
+   */
+  const nodeRequire = eval("require") as NodeJS.Require;
+  const modelsModuleId = isTestEnvironment ? "./models.test" : "./models.mock";
+  const models = nodeRequire(modelsModuleId);
   const {
     artifactModel,
     chatModel,

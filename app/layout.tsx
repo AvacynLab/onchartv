@@ -45,12 +45,15 @@ const fontClassName = disableRemoteFonts
   : `${geist.variable} ${geistMono.variable}`;
 
 const fallbackFontVariables: CSSProperties | undefined = disableRemoteFonts
-  ? {
+  ? ({
       "--font-geist":
         "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
       "--font-geist-mono":
         "ui-monospace, 'SFMono-Regular', Menlo, Monaco, Consolas, monospace",
-    }
+      // TypeScript's `CSSProperties` definition does not enumerate custom CSS
+      // variables. Casting through `CSSProperties` keeps React happy while still
+      // documenting the intended fallback values for Playwright runs.
+    } as CSSProperties)
   : undefined;
 
 const LIGHT_THEME_COLOR = "hsl(0 0% 100%)";
