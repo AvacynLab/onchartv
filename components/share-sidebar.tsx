@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+
 import { Button } from "@/components/ui/button";
 import {
   Sidebar,
@@ -12,6 +13,11 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
 
+/**
+ * ShareSidebar renders the sidebar displayed on shared chat pages. The layout
+ * nudges visitors to authenticate so they can start their own conversations
+ * instead of browsing the read-only preview.
+ */
 export function ShareSidebar() {
   const pathname = usePathname();
   const loginHref = pathname
@@ -23,7 +29,7 @@ export function ShareSidebar() {
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <span className="font-semibold text-lg">Conversation partagée</span>
+            <span className="font-semibold text-lg">Conversation partagÃ©e</span>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
@@ -32,7 +38,7 @@ export function ShareSidebar() {
           <SidebarMenuItem>
             <p className="text-muted-foreground text-sm">
               Cet espace est accessible en lecture seule. Connectez-vous pour
-              démarrer vos propres conversations et interagir en temps réel.
+              dÃ©marrer vos propres conversations et interagir en temps rÃ©el.
             </p>
           </SidebarMenuItem>
         </SidebarMenu>

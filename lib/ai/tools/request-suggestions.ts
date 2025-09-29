@@ -52,9 +52,17 @@ export const requestSuggestions = ({
           documentId,
           documentCreatedAt: document.createdAt,
         })) {
+          const suggestionForStream: Suggestion = {
+            ...suggestion,
+            createdAt: new Date(),
+            // Hermetic runs do not authenticate, so provide a descriptive
+            // placeholder identifier that keeps the UI payload shape intact.
+            userId: session.user?.id ?? "playwright-offline-user",
+          };
+
           dataStream.write({
             type: "data-suggestion",
-            data: suggestion,
+            data: suggestionForStream,
             transient: true,
           });
 
@@ -103,23 +111,29 @@ export const requestSuggestions = ({
       });
 
       for await (const element of elementStream) {
-        // @ts-expect-error todo: fix type
-        const suggestion: Suggestion = {
+        const baseSuggestion = {
+          id: generateUUID(),
+          documentId,
           originalText: element.originalSentence,
           suggestedText: element.suggestedSentence,
           description: element.description,
-          id: generateUUID(),
-          documentId,
           isResolved: false,
+        };
+
+        const suggestionForStream: Suggestion = {
+          ...baseSuggestion,
+          createdAt: new Date(),
+          documentCreatedAt: document.createdAt,
+          userId: session.user?.id ?? "ai-suggestion",
         };
 
         dataStream.write({
           type: "data-suggestion",
-          data: suggestion,
+          data: suggestionForStream,
           transient: true,
         });
 
-        suggestions.push(suggestion);
+        suggestions.push(baseSuggestion);
       }
 
       if (session.user?.id) {

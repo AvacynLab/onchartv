@@ -36,7 +36,7 @@ async function main() {
 
   const closeLogStream = () =>
     new Promise<void>((resolve, reject) => {
-      logStream.end((error) => {
+      logStream.end((error: NodeJS.ErrnoException | null | undefined) => {
         if (error) {
           reject(error);
         } else {
