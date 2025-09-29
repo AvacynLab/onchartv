@@ -19,6 +19,7 @@ import { getUsage } from "tokenlens/helpers";
 import { auth, type UserType } from "@/app/(auth)/auth";
 import type { VisibilityType } from "@/components/visibility-selector";
 import { entitlementsByUserType } from "@/lib/ai/entitlements";
+import { shouldFetchTokenlensCatalog } from "@/lib/ai/tokenlens";
 import type { ChatModel } from "@/lib/ai/models";
 import { type RequestHints, systemPrompt } from "@/lib/ai/prompts";
 import { myProvider } from "@/lib/ai/providers";
@@ -48,21 +49,57 @@ export const maxDuration = 60;
 
 let globalStreamContext: ResumableStreamContext | null = null;
 
-const getTokenlensCatalog = cache(
-  async (): Promise<ModelCatalog | undefined> => {
-    try {
-      return await fetchModels();
-    } catch (err) {
-      console.warn(
-        "TokenLens: catalog fetch failed, using default catalog",
-        err
-      );
-      return; // tokenlens helpers will fall back to defaultCatalog
-    }
-  },
-  ["tokenlens-catalog"],
-  { revalidate: 24 * 60 * 60 } // 24 hours
-);
+// Playwright runs without network access. Skipping the TokenLens catalog
+// download avoids repeated `ENETUNREACH` warnings during the e2e suite while
+// leaving production behaviour untouched.
+const tokenlensFetchEnabled = shouldFetchTokenlensCatalog(process.env);
+
+const getTokenlensCatalog = tokenlensFetchEnabled
+  ? cache(
+      async (): Promise<ModelCatalog | undefined> => {
+        try {
+          return await fetchModels();
+        } catch (err) {
+          console.warn(
+            "TokenLens: catalog fetch failed, using default catalog",
+            err
+          );
+          return; // tokenlens helpers will fall back to defaultCatalog
+        }
+      },
+      ["tokenlens-catalog"],
+      { revalidate: 24 * 60 * 60 } // 24 hours
+    )
+  : async (): Promise<ModelCatalog | undefined> => undefined;
+
+type FilePart = Extract<ChatMessage["parts"][number], { type: "file" }>;
+
+const extractAttachments = (parts: ChatMessage["parts"]) => {
+  return parts
+    .filter((part): part is FilePart => part.type === "file")
+    .map((filePart) => {
+      /**
+       * `streamText` reuses the same shape for both end-user uploads and tool
+       * responses. Attachments coming from the UI provide a `name` attribute
+       * while tool-generated ones emit `filename`. Preserve whichever label is
+       * available so saved history reflects what the user saw on screen.
+       */
+      const attachmentName =
+        ("name" in filePart && typeof filePart.name === "string"
+          ? filePart.name
+          : undefined) ??
+        ("filename" in filePart && typeof filePart.filename === "string"
+          ? filePart.filename
+          : undefined) ??
+        "file";
+
+      return {
+        name: attachmentName,
+        url: filePart.url,
+        contentType: filePart.mediaType ?? "application/octet-stream",
+      };
+    });
+};
 
 export function getStreamContext() {
   if (!globalStreamContext) {
@@ -166,7 +203,7 @@ export async function POST(request: Request) {
           id: message.id,
           role: "user",
           parts: message.parts,
-          attachments: [],
+          attachments: extractAttachments(message.parts),
           createdAt: new Date(),
         },
       ],
@@ -257,7 +294,7 @@ export async function POST(request: Request) {
             role: currentMessage.role,
             parts: currentMessage.parts,
             createdAt: new Date(),
-            attachments: [],
+            attachments: extractAttachments(currentMessage.parts),
             chatId: id,
           })),
         });

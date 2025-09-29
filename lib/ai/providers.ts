@@ -1,11 +1,13 @@
-import { createOpenAI } from "@ai-sdk/openai";
 import { customProvider, extractReasoningMiddleware, wrapLanguageModel } from "ai";
 import { isTestEnvironment } from "../constants";
+import { isPlaywrightLikeEnvironment } from "./playwright-env";
+
+type CreateOpenAI = typeof import("@ai-sdk/openai").createOpenAI;
 
 const OPENAI_MODEL_ID = "gpt-5-nano";
 const isClient = typeof window !== "undefined";
 const openaiApiKey = process.env.OPENAI_API_KEY;
-const isPlaywrightEnvironment = Boolean(process.env.PLAYWRIGHT && process.env.PLAYWRIGHT.toLowerCase() !== "false");
+const isPlaywrightEnvironment = isPlaywrightLikeEnvironment(process.env);
 
 function createMockProvider() {
   const models = isTestEnvironment
@@ -30,15 +32,37 @@ function createMockProvider() {
 const shouldUseMocks =
   isClient || isTestEnvironment || isPlaywrightEnvironment;
 
-if (!isClient) {
-  console.log('[providers] env', {
-    PLAYWRIGHT: process.env.PLAYWRIGHT,
-    PLAYWRIGHT_TEST_BASE_URL: process.env.PLAYWRIGHT_TEST_BASE_URL,
-    shouldUseMocks,
-    isTestEnvironment,
-    isPlaywrightEnvironment,
-    openaiApiKey: Boolean(openaiApiKey),
-  });
+let createOpenAI: CreateOpenAI | null = null;
+
+if (!shouldUseMocks) {
+  try {
+    /**
+     * Webpack statically analyzes `require` calls. Wrapping the invocation in
+     * `eval` prevents the bundler from eagerly resolving `@ai-sdk/openai` when
+     * the dependency is intentionally absent (e.g. Playwright runs). At
+     * runtime the expression evaluates to Node's native `require`, keeping the
+     * production build fully synchronous.
+     */
+    const nodeRequire = eval("require") as NodeJS.Require;
+    const openAiModuleId = "@ai-sdk/openai";
+
+    ({ createOpenAI } = nodeRequire(openAiModuleId));
+  } catch (error) {
+    /**
+     * In production we expect the official OpenAI provider to be available. If
+     * the dependency is missing we fail early with a detailed error so the
+     * deployment does not silently fall back to the mocked Playwright
+     * responses.
+     */
+    const message =
+      "Missing @ai-sdk/openai dependency. Run `pnpm install` to install the official provider.";
+
+    if (process.env.NODE_ENV !== "production") {
+      console.warn(message, error);
+    }
+
+    throw new Error(message);
+  }
 }
 
 if (!shouldUseMocks && !openaiApiKey) {
@@ -46,7 +70,7 @@ if (!shouldUseMocks && !openaiApiKey) {
 }
 
 const openaiProvider = !shouldUseMocks
-  ? createOpenAI({ apiKey: openaiApiKey! })
+  ? createOpenAI!({ apiKey: openaiApiKey! })
   : null;
 
 export const myProvider = shouldUseMocks

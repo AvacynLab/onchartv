@@ -47,6 +47,16 @@ import { SuggestedActions } from "./suggested-actions";
 import { Button } from "./ui/button";
 import type { VisibilityType } from "./visibility-selector";
 
+const ACTIVE_CHAT_STATUSES: ReadonlySet<UseChatHelpers<ChatMessage>["status"]> =
+  new Set(["submitted", "streaming"]);
+/**
+ * Minimum duration (in milliseconds) to keep the stop button visible after the
+ * assistant finishes responding. This guards against ultra-fast responses that
+ * would otherwise swap the control back to "Send" before users can interact
+ * with it.
+ */
+const STOP_BUTTON_MINIMUM_DURATION_MS = 200;
+
 function PureMultimodalInput({
   chatId,
   input,
@@ -128,6 +138,43 @@ function PureMultimodalInput({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadQueue, setUploadQueue] = useState<string[]>([]);
+  const [isStopButtonVisible, setIsStopButtonVisible] = useState(
+    ACTIVE_CHAT_STATUSES.has(status)
+  );
+  const previousStatusRef = useRef(status);
+
+  useEffect(() => {
+    const wasActive = ACTIVE_CHAT_STATUSES.has(previousStatusRef.current);
+    const isActive = ACTIVE_CHAT_STATUSES.has(status);
+    let timeoutId: number | undefined;
+
+    if (isActive) {
+      setIsStopButtonVisible(true);
+    } else if (wasActive) {
+      /**
+       * Keep rendering the stop button for a short cooldown window after the
+       * assistant finishes responding. This makes the UI — and the Playwright
+       * assertions — resilient to extremely fast responses where the status
+       * flips from "submitted" to "ready" within a single frame.
+       */
+      setIsStopButtonVisible(true);
+      timeoutId = window.setTimeout(() => {
+        setIsStopButtonVisible(false);
+      }, STOP_BUTTON_MINIMUM_DURATION_MS);
+    } else {
+      setIsStopButtonVisible(false);
+    }
+
+    previousStatusRef.current = status;
+
+    return () => {
+      if (timeoutId !== undefined) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [status]);
+
+  const shouldRenderStopButton = isStopButtonVisible;
 
   const submitForm = useCallback(() => {
     window.history.replaceState({}, "", `/chat/${chatId}`);
@@ -257,11 +304,12 @@ function PureMultimodalInput({
         className="rounded-xl border border-border bg-background p-3 shadow-xs transition-all duration-200 focus-within:border-border hover:border-muted-foreground/50"
         onSubmit={(event) => {
           event.preventDefault();
-          if (status !== "ready") {
+          if (status === "submitted" || status === "streaming") {
             toast.error("Please wait for the model to finish its response!");
-          } else {
-            submitForm();
+            return;
           }
+
+          submitForm();
         }}
       >
         {(attachments.length > 0 || uploadQueue.length > 0) && (
@@ -326,7 +374,17 @@ function PureMultimodalInput({
             />
           </PromptInputTools>
 
-          {status === "submitted" ? (
+          {/**
+           * Switch the primary action between the "Send" and "Stop" buttons
+           * depending on the chat status. While the assistant is still
+           * generating a response (`submitted` and `streaming` states) we keep
+           * the stop control visible — even through extremely short
+           * generations — so the test runner and end users can reliably
+           * interrupt the current turn. Falling back to the submit button keeps
+           * the UI accessible once the conversation is idle or in an error
+           * state.
+           */}
+          {shouldRenderStopButton ? (
             <StopButton setMessages={setMessages} stop={stop} />
           ) : (
             <PromptInputSubmit

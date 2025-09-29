@@ -38,11 +38,24 @@ export default function Page() {
       toast({ type: "success", description: "Account created successfully!" });
 
       setIsSuccessful(true);
-      updateSession();
-      router.refresh();
+      void (async () => {
+        /**
+         * Refresh the credentials session before redirecting to the dashboard
+         * so authenticated routes stay accessible during the subsequent
+         * Playwright steps.
+         */
+        const destination = state.redirectTo ?? "/";
+
+        try {
+          await updateSession();
+        } catch (error) {
+          console.error("Failed to refresh session before redirecting", error);
+        }
+
+        router.replace(destination);
+      })();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.status, router.refresh, updateSession]);
+  }, [state.redirectTo, state.status, router, updateSession]);
 
   const handleSubmit = (formData: FormData) => {
     setEmail(formData.get("email") as string);

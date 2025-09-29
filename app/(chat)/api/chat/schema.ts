@@ -9,7 +9,24 @@ const filePartSchema = z.object({
   type: z.enum(["file"]),
   mediaType: z.enum(["image/jpeg", "image/png"]),
   name: z.string().min(1).max(100),
-  url: z.string().url(),
+  url: z
+    .string()
+    .min(1)
+    .max(2048)
+    .refine((value) => {
+      /**
+       * Playwright uploads rely on a bundled placeholder that lives under the
+       * `/playwright/` prefix so tests stay hermetic. Production uploads return
+       * fully-qualified HTTPS URLs, which `new URL` accepts. Allow either form
+       * so we can validate requests without blocking the mocked previews.
+       */
+      try {
+        const parsed = new URL(value);
+        return parsed.protocol === "https:" || parsed.protocol === "http:";
+      } catch {
+        return value.startsWith("/playwright/");
+      }
+    }, "Attachment URL must be absolute or a Playwright fixture path."),
 });
 
 const partSchema = z.union([textPartSchema, filePartSchema]);

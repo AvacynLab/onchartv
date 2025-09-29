@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import type { CSSProperties } from "react";
+
 import { Geist, Geist_Mono } from "next/font/google";
 import { Toaster } from "sonner";
 import { ThemeProvider } from "@/components/theme-provider";
@@ -16,6 +18,16 @@ export const viewport = {
   maximumScale: 1, // Disable auto-zoom on mobile Safari
 };
 
+/**
+ * When running the Playwright end-to-end suite we prevent Next.js from
+ * attempting to download the Geist fonts from Google. The sandboxed CI
+ * environment does not have internet access which would otherwise cause the
+ * server to throw ENETUNREACH errors and stall the test runner. The mocked
+ * font responses are configured in `playwright.config.ts`, and the inline
+ * CSS variables below ensure we still fall back to the system fonts.
+ */
+const disableRemoteFonts = process.env.PLAYWRIGHT === "true";
+
 const geist = Geist({
   subsets: ["latin"],
   display: "swap",
@@ -27,6 +39,19 @@ const geistMono = Geist_Mono({
   display: "swap",
   variable: "--font-geist-mono",
 });
+
+const fontClassName = disableRemoteFonts
+  ? ""
+  : `${geist.variable} ${geistMono.variable}`;
+
+const fallbackFontVariables: CSSProperties | undefined = disableRemoteFonts
+  ? {
+      "--font-geist":
+        "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+      "--font-geist-mono":
+        "ui-monospace, 'SFMono-Regular', Menlo, Monaco, Consolas, monospace",
+    }
+  : undefined;
 
 const LIGHT_THEME_COLOR = "hsl(0 0% 100%)";
 const DARK_THEME_COLOR = "hsl(240deg 10% 3.92%)";
@@ -55,7 +80,8 @@ export default function RootLayout({
 }>) {
   return (
     <html
-      className={`${geist.variable} ${geistMono.variable}`}
+      className={fontClassName}
+      style={fallbackFontVariables}
       // `next-themes` injects an extra classname to the body element to avoid
       // visual flicker before hydration. Hence the `suppressHydrationWarning`
       // prop is necessary to avoid the React hydration mismatch warning.

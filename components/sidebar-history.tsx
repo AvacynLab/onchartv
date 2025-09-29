@@ -4,7 +4,7 @@ import { isToday, isYesterday, subMonths, subWeeks } from "date-fns";
 import { motion } from "framer-motion";
 import { useParams, useRouter } from "next/navigation";
 import type { User } from "next-auth";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import useSWRInfinite from "swr/infinite";
 import {
@@ -24,6 +24,12 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import type { Chat } from "@/lib/db/schema";
+import {
+  HISTORY_PAGE_SIZE,
+  createHistorySWRConfig,
+  isPlaywrightFeatureEnabled,
+  type ChatHistoryPage,
+} from "@/lib/history/config";
 import { fetcher } from "@/lib/utils";
 import { LoaderIcon } from "./icons";
 import { ChatItem } from "./sidebar-history-item";
@@ -36,12 +42,7 @@ type GroupedChats = {
   older: Chat[];
 };
 
-export type ChatHistory = {
-  chats: Chat[];
-  hasMore: boolean;
-};
-
-const PAGE_SIZE = 20;
+export type ChatHistory = ChatHistoryPage;
 
 const groupChatsByDate = (chats: Chat[]): GroupedChats => {
   const now = new Date();
@@ -85,7 +86,7 @@ export function getChatHistoryPaginationKey(
   }
 
   if (pageIndex === 0) {
-    return `/api/history?limit=${PAGE_SIZE}`;
+    return `/api/history?limit=${HISTORY_PAGE_SIZE}`;
   }
 
   const firstChatFromPage = previousPageData.chats.at(-1);
@@ -94,12 +95,31 @@ export function getChatHistoryPaginationKey(
     return null;
   }
 
-  return `/api/history?ending_before=${firstChatFromPage.id}&limit=${PAGE_SIZE}`;
+  return `/api/history?ending_before=${firstChatFromPage.id}&limit=${HISTORY_PAGE_SIZE}`;
 }
 
-export function SidebarHistory({ user }: { user: User | undefined }) {
+type SidebarHistoryProps = {
+  /**
+   * Initial history payload rendered on the server. When provided we can skip
+   * the first `/api/history` fetch and keep Playwright's offline runs hermetic.
+   */
+  initialHistory?: ChatHistory | null;
+  user: User | undefined;
+};
+
+export function SidebarHistory({ initialHistory, user }: SidebarHistoryProps) {
   const { setOpenMobile } = useSidebar();
   const { id } = useParams();
+
+  const shouldPauseFetches = isPlaywrightFeatureEnabled();
+  const historyConfig = useMemo(
+    () =>
+      createHistorySWRConfig({
+        initialPage: initialHistory ?? undefined,
+        pause: shouldPauseFetches,
+      }),
+    [initialHistory, shouldPauseFetches]
+  );
 
   const {
     data: paginatedChatHistories,
@@ -107,9 +127,11 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
     isValidating,
     isLoading,
     mutate,
-  } = useSWRInfinite<ChatHistory>(getChatHistoryPaginationKey, fetcher, {
-    fallbackData: [],
-  });
+  } = useSWRInfinite<ChatHistory>(
+    getChatHistoryPaginationKey,
+    fetcher,
+    historyConfig
+  );
 
   const router = useRouter();
   const [deleteId, setDeleteId] = useState<string | null>(null);

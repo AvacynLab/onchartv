@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { auth } from "@/app/(auth)/auth";
+import { isTestEnvironment } from "@/lib/constants";
 
 // Use Blob instead of File since File is not available in Node.js environment
 const FileSchema = z.object({
@@ -17,6 +18,14 @@ const FileSchema = z.object({
     }),
 });
 
+/**
+ * Handle uploads coming from the chat composer.
+ *
+ * In the Playwright test environment we bypass the actual Vercel Blob upload
+ * to keep the suite deterministic and avoid hitting external services. The
+ * mocked response mirrors the structure returned by `put` so the UI can behave
+ * exactly as it would in production.
+ */
 export async function POST(request: Request) {
   const session = await auth();
 
@@ -52,6 +61,19 @@ export async function POST(request: Request) {
 
     // Get filename from formData since Blob doesn't have name property
     const filename = (formData.get("file") as File).name;
+
+    if (isTestEnvironment) {
+      // Provide a deterministic mocked response when running end-to-end tests.
+      // Returning a bundled placeholder asset keeps the chat preview hermetic
+      // and avoids network fetches that would fail under Playwright's offline
+      // configuration.
+      return NextResponse.json({
+        url: "/playwright/avatar-placeholder.svg",
+        pathname: filename,
+        contentType: file.type,
+      });
+    }
+
     const fileBuffer = await file.arrayBuffer();
 
     try {

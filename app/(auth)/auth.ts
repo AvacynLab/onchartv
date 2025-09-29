@@ -1,10 +1,29 @@
-import { compare } from "bcrypt-ts";
+import { compare, compareSync } from "bcrypt-ts";
 import NextAuth, { type DefaultSession } from "next-auth";
 import type { DefaultJWT } from "next-auth/jwt";
 import Credentials from "next-auth/providers/credentials";
-import { DUMMY_PASSWORD } from "@/lib/constants";
+import { resolveAuthSecret } from "@/lib/auth/secret";
+import { DUMMY_PASSWORD, isTestEnvironment } from "@/lib/constants";
 import { createGuestUser, getUser } from "@/lib/db/queries";
 import { authConfig } from "./auth.config";
+
+async function verifyPassword(
+  password: string,
+  hashedPassword: string
+): Promise<boolean> {
+  /**
+   * Playwright runs operate against the hermetic in-memory database on a
+   * single Node.js worker. Using the synchronous bcrypt comparison keeps the
+   * credentials provider deterministic while the production environment still
+   * relies on the asynchronous implementation to avoid blocking the event
+   * loop.
+   */
+  if (isTestEnvironment) {
+    return compareSync(password, hashedPassword);
+  }
+
+  return compare(password, hashedPassword);
+}
 
 export type UserType = "guest" | "regular";
 
@@ -31,6 +50,8 @@ declare module "next-auth/jwt" {
   }
 }
 
+const authSecret = resolveAuthSecret();
+
 export const {
   handlers: { GET, POST },
   auth,
@@ -38,6 +59,11 @@ export const {
   signOut,
 } = NextAuth({
   ...authConfig,
+  /**
+   * Inject the resolved authentication secret so credentials-based sessions
+   * stay stable across development, Playwright, and production deployments.
+   */
+  secret: authSecret,
   providers: [
     Credentials({
       credentials: {},
@@ -52,11 +78,11 @@ export const {
         const [user] = users;
 
         if (!user.password) {
-          await compare(password, DUMMY_PASSWORD);
+          await verifyPassword(password, DUMMY_PASSWORD);
           return null;
         }
 
-        const passwordsMatch = await compare(password, user.password);
+        const passwordsMatch = await verifyPassword(password, user.password);
 
         if (!passwordsMatch) {
           return null;
