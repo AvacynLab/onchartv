@@ -44,6 +44,8 @@ const PurePreviewMessage = ({
   isReadonly: boolean;
   requiresScrollPadding: boolean;
 }) => {
+  // `mode` toggles between rendering the standard chat bubble and the inline
+  // editor when a user chooses to revise their prompt via the edit button.
   const [mode, setMode] = useState<"view" | "edit">("view");
 
   const attachmentsFromMessage = message.parts.filter(

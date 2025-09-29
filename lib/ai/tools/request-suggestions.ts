@@ -6,6 +6,10 @@ import type { Suggestion } from "@/lib/db/schema";
 import type { ChatMessage } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
 import { myProvider } from "../providers";
+import {
+  createHermeticSuggestions,
+  shouldUseHermeticSuggestions,
+} from "./request-suggestions-hermetic";
 
 type RequestSuggestionsProps = {
   session: Session;
@@ -36,6 +40,54 @@ export const requestSuggestions = ({
         Suggestion,
         "userId" | "createdAt" | "documentCreatedAt"
       >[] = [];
+
+      if (shouldUseHermeticSuggestions()) {
+        /**
+         * Hermetic Playwright runs replay static suggestions so the suite stays
+         * offline while still exercising the UI state machine. The generated
+         * entries mimic the production payload and are also persisted so the
+         * history view renders the same metadata on reload.
+         */
+        for (const suggestion of createHermeticSuggestions({
+          documentId,
+          documentCreatedAt: document.createdAt,
+        })) {
+          dataStream.write({
+            type: "data-suggestion",
+            data: suggestion,
+            transient: true,
+          });
+
+          suggestions.push({
+            id: suggestion.id,
+            documentId: suggestion.documentId,
+            originalText: suggestion.originalText,
+            suggestedText: suggestion.suggestedText,
+            description: suggestion.description,
+            isResolved: suggestion.isResolved,
+          });
+        }
+
+        if (session.user?.id) {
+          const userId = session.user.id;
+
+          await saveSuggestions({
+            suggestions: suggestions.map((suggestion) => ({
+              ...suggestion,
+              userId,
+              createdAt: new Date(),
+              documentCreatedAt: document.createdAt,
+            })),
+          });
+        }
+
+        return {
+          id: documentId,
+          title: document.title,
+          kind: document.kind,
+          message: "Suggestions have been added to the document",
+        };
+      }
 
       const { elementStream } = streamObject({
         model: myProvider.languageModel("artifact-model"),

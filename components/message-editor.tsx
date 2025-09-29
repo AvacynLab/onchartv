@@ -11,9 +11,10 @@ import {
 } from "react";
 import { deleteTrailingMessages } from "@/app/(chat)/actions";
 import type { ChatMessage } from "@/lib/types";
-import { getTextFromMessage } from "@/lib/utils";
+import { cn, getTextFromMessage } from "@/lib/utils";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
+import { toast } from "./toast";
 
 export type MessageEditorProps = {
   message: ChatMessage;
@@ -74,33 +75,75 @@ export function MessageEditor({
           Cancel
         </Button>
         <Button
-          className="h-fit px-3 py-2"
+          className={cn("h-fit px-3 py-2", { invisible: isSubmitting })}
           data-testid="message-editor-send-button"
           disabled={isSubmitting}
           onClick={async () => {
+            // Guard against accidental submissions when the user clears the
+            // textarea entirely while editing. Sending an empty prompt would
+            // lead to confusing assistant responses.
+            if (!draftContent.trim()) {
+              toast({
+                type: "error",
+                description: "Please enter a message before resubmitting.",
+              });
+              return;
+            }
+
             setIsSubmitting(true);
+            let switchedToViewMode = false;
+            let regenerationPromise: Promise<unknown> | undefined;
 
-            await deleteTrailingMessages({
-              id: message.id,
-            });
+            try {
+              await deleteTrailingMessages({
+                id: message.id,
+              });
 
-            setMessages((messages) => {
-              const index = messages.findIndex((m) => m.id === message.id);
+              setMessages((messages) => {
+                const index = messages.findIndex((m) => m.id === message.id);
 
-              if (index !== -1) {
-                const updatedMessage: ChatMessage = {
-                  ...message,
-                  parts: [{ type: "text", text: draftContent }],
-                };
+                if (index !== -1) {
+                  const updatedMessage: ChatMessage = {
+                    ...message,
+                    parts: [{ type: "text", text: draftContent }],
+                  };
 
-                return [...messages.slice(0, index), updatedMessage];
+                  return [...messages.slice(0, index), updatedMessage];
+                }
+
+                return messages;
+              });
+
+              /**
+               * Start the regeneration before collapsing the editor so the
+               * chat helpers capture the freshly edited prompt. Once the
+               * request is inflight we immediately swap back to the standard
+               * view mode so the inline controls disappear without waiting for
+               * the network roundtrip, matching the behaviour Playwright
+               * expects during the edit flow.
+               */
+              regenerationPromise = regenerate();
+
+              setMode("view");
+              switchedToViewMode = true;
+
+              await regenerationPromise;
+            } catch (error) {
+              console.error("Failed to resubmit edited message", error);
+
+              toast({
+                type: "error",
+                description: "We couldn't resend your edit. Please try again.",
+              });
+
+              // Restore edit mode so the user can make further adjustments if
+              // the server rejects the request.
+              if (switchedToViewMode) {
+                setMode("edit");
               }
-
-              return messages;
-            });
-
-            setMode("view");
-            regenerate();
+            } finally {
+              setIsSubmitting(false);
+            }
           }}
           variant="default"
         >

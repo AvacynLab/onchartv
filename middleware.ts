@@ -1,6 +1,9 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
+import { resolveAuthSecret } from "@/lib/auth/secret";
 import { isDevelopmentEnvironment } from "./lib/constants";
+
+const middlewareAuthSecret = resolveAuthSecret();
 
 const AUTH_PAGES = new Set(["/login", "/register"]);
 
@@ -23,7 +26,12 @@ export async function middleware(request: NextRequest) {
 
   const token = await getToken({
     req: request,
-    secret: process.env.AUTH_SECRET,
+    /**
+     * Reuse the resolved authentication secret so JWT verification keeps
+     * working even when the environment relies on the deterministic fallback
+     * during Playwright runs.
+     */
+    secret: middlewareAuthSecret,
     secureCookie: !isDevelopmentEnvironment,
   });
 

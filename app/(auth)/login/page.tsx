@@ -38,11 +38,25 @@ export default function Page() {
       });
     } else if (state.status === "success") {
       setIsSuccessful(true);
-      updateSession();
-      router.refresh();
+      void (async () => {
+        /**
+         * Refresh the credentials session before triggering the client-side
+         * navigation. When the redirect happens first, the middleware can
+         * observe the stale cookie and bounce the user back to `/login`
+         * (something Playwright regularly hit after slow auth setups).
+         */
+        const destination = state.redirectTo ?? "/";
+
+        try {
+          await updateSession();
+        } catch (error) {
+          console.error("Failed to refresh session before redirecting", error);
+        }
+
+        router.replace(destination);
+      })();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.status, router.refresh, updateSession]);
+  }, [state.redirectTo, state.status, router, updateSession]);
 
   const handleSubmit = (formData: FormData) => {
     setEmail(formData.get("email") as string);

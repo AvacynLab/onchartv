@@ -10,10 +10,20 @@ const iconsByType: Record<"success" | "error", ReactNode> = {
   error: <WarningIcon />,
 };
 
+const SINGLETON_TOAST_ID = "app-toast";
+
 export function toast(props: Omit<ToastProps, "id">) {
-  return sonnerToast.custom((id) => (
-    <Toast description={props.description} id={id} type={props.type} />
-  ));
+  /**
+   * Playwright assertions expect a single toast to appear after each auth
+   * action. Clear the previous notification before rendering the new one so we
+   * avoid strict-mode locator conflicts when multiple toasts are queued.
+   */
+  sonnerToast.dismiss(SINGLETON_TOAST_ID);
+
+  return sonnerToast.custom(
+    (id) => <Toast description={props.description} id={id} type={props.type} />,
+    { id: SINGLETON_TOAST_ID }
+  );
 }
 
 function Toast(props: ToastProps) {

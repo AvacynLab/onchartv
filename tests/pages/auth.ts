@@ -40,7 +40,8 @@ export class AuthPage {
 
   async logout(email: string, password: string) {
     await this.login(email, password);
-    await this.page.waitForURL("/");
+    // The dashboard navigation is a client-side transition.
+    await this.page.waitForURL("/", { waitUntil: "commit" });
 
     await this.openSidebar();
 

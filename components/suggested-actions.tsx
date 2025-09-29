@@ -26,29 +26,41 @@ function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
       className="grid w-full gap-2 sm:grid-cols-2"
       data-testid="suggested-actions"
     >
-      {suggestedActions.map((suggestedAction, index) => (
-        <motion.div
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: 20 }}
-          initial={{ opacity: 0, y: 20 }}
-          key={suggestedAction}
-          transition={{ delay: 0.05 * index }}
-        >
-          <Suggestion
-            className="h-auto w-full whitespace-normal p-3 text-left"
-            onClick={(suggestion) => {
-              window.history.replaceState({}, "", `/chat/${chatId}`);
-              sendMessage({
-                role: "user",
-                parts: [{ type: "text", text: suggestion }],
-              });
-            }}
-            suggestion={suggestedAction}
+      {suggestedActions.map((suggestedAction, index) => {
+        /**
+         * Surface deterministic test identifiers for each suggestion so the
+         * Playwright helpers can reliably locate the button regardless of text
+         * layout differences (for example when fonts fall back to system
+         * variants during offline runs). Indexing keeps the IDs simple while
+         * remaining stable because the suggestion order is hard-coded.
+         */
+        const suggestionTestId = `suggested-action-${index}`;
+
+        return (
+          <motion.div
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            initial={{ opacity: 0, y: 20 }}
+            key={suggestedAction}
+            transition={{ delay: 0.05 * index }}
           >
-            {suggestedAction}
-          </Suggestion>
-        </motion.div>
-      ))}
+            <Suggestion
+              className="h-auto w-full whitespace-normal p-3 text-left"
+              data-testid={suggestionTestId}
+              onClick={(suggestion) => {
+                window.history.replaceState({}, "", `/chat/${chatId}`);
+                sendMessage({
+                  role: "user",
+                  parts: [{ type: "text", text: suggestion }],
+                });
+              }}
+              suggestion={suggestedAction}
+            >
+              {suggestedAction}
+            </Suggestion>
+          </motion.div>
+        );
+      })}
     </div>
   );
 }

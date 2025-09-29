@@ -42,3 +42,4 @@ yarn-error.log*
 /blob-report/
 /playwright/*
 tests/.auth/
+tests/.logs/

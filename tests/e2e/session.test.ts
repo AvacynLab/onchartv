@@ -40,6 +40,13 @@ test.describe.serial("Login and Registration", () => {
     await authPage.expectToastToContain("Account created successfully!");
   });
 
+  test("Reject login attempts with invalid credentials", async () => {
+    // Use an obviously incorrect password to confirm the UI surfaces the
+    // authentication error toast returned by the server action.
+    await authPage.login(testUser.email, "incorrect-password");
+    await authPage.expectToastToContain("Invalid credentials!");
+  });
+
   test("Register new account with existing email", async () => {
     await authPage.register(testUser.email, testUser.password);
     await authPage.expectToastToContain("Account already exists!");
@@ -48,14 +55,16 @@ test.describe.serial("Login and Registration", () => {
   test("Log into account that exists", async ({ page }) => {
     await authPage.login(testUser.email, testUser.password);
 
-    await page.waitForURL("/");
+    // Client-side navigation does not trigger a full reload, so wait for the
+    // router to commit the SPA transition instead of the default load event.
+    await page.waitForURL("/", { waitUntil: "commit" });
     await expect(page.getByPlaceholder("Send a message...")).toBeVisible();
   });
 
   test("Display user email in user menu", async ({ page }) => {
     await authPage.login(testUser.email, testUser.password);
 
-    await page.waitForURL("/");
+    await page.waitForURL("/", { waitUntil: "commit" });
     await expect(page.getByPlaceholder("Send a message...")).toBeVisible();
 
     const userEmail = await page.getByTestId("user-email");
@@ -70,7 +79,7 @@ test.describe.serial("Login and Registration", () => {
     page,
   }) => {
     await authPage.login(testUser.email, testUser.password);
-    await page.waitForURL("/");
+    await page.waitForURL("/", { waitUntil: "commit" });
 
     await page.goto("/register");
     await expect(page).toHaveURL("/");
@@ -78,7 +87,7 @@ test.describe.serial("Login and Registration", () => {
 
   test("Do not navigate to /login for authenticated users", async ({ page }) => {
     await authPage.login(testUser.email, testUser.password);
-    await page.waitForURL("/");
+    await page.waitForURL("/", { waitUntil: "commit" });
 
     await page.goto("/login");
     await expect(page).toHaveURL("/");
