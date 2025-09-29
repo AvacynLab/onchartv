@@ -25,7 +25,7 @@ if (process.env.PLAYWRIGHT === "true") {
   process.env.NEXT_PUBLIC_PLAYWRIGHT = "true";
 }
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3100;
 const baseURL = `http://localhost:${PORT}`;
 const shouldStartWebServer = process.env.PLAYWRIGHT_MANUAL_SERVER !== "true";
 
@@ -77,6 +77,16 @@ export default defineConfig({
         url: `${baseURL}/ping`,
         timeout: 120 * 1000,
         reuseExistingServer: !process.env.CI,
+        env: {
+          /**
+           * Force the spawned Next.js dev server to activate the Playwright
+           * feature flag so our hermetic database and asset mocks kick in.
+           * Without this override the server attempts to reach Postgres and
+           * Google Fonts, both of which are unavailable in CI.
+           */
+          PLAYWRIGHT: "true",
+          PORT: String(PORT),
+        },
       }
     : undefined,
 });
