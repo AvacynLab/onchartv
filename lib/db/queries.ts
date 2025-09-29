@@ -59,8 +59,23 @@ type InMemoryStore = {
   streams: Map<string, Array<{ id: string; chatId: string; createdAt: Date }>>;
 };
 
-const inMemoryStore: InMemoryStore | null = isTestEnvironment
-  ? {
+declare global {
+  // eslint-disable-next-line no-var -- Explicitly extend the Node.js global scope.
+  var __ONCHARTV_IN_MEMORY_STORE__: InMemoryStore | undefined;
+}
+
+function getOrCreateInMemoryStore(): InMemoryStore {
+  if (!globalThis.__ONCHARTV_IN_MEMORY_STORE__) {
+    /**
+     * Persist the Playwright-specific data structures on the Node.js global
+     * object. Next.js spawns isolated module graphs for server actions and
+     * route handlers in development, so relying on module-level state causes
+     * the in-memory database to reset between the registration action and the
+     * credentials provider. Storing the maps globally ensures the auth flow
+     * sees a consistent view of the fake database while keeping production
+     * paths untouched.
+     */
+    globalThis.__ONCHARTV_IN_MEMORY_STORE__ = {
       users: new Map(),
       chats: new Map(),
       messages: new Map(),
@@ -68,7 +83,14 @@ const inMemoryStore: InMemoryStore | null = isTestEnvironment
       documents: new Map(),
       suggestions: new Map(),
       streams: new Map(),
-    }
+    } as InMemoryStore;
+  }
+
+  return globalThis.__ONCHARTV_IN_MEMORY_STORE__;
+}
+
+const inMemoryStore: InMemoryStore | null = isTestEnvironment
+  ? getOrCreateInMemoryStore()
   : null;
 
 /**

@@ -3,7 +3,7 @@
 - [x] Ensure registration and login flows create/return proper sessions
 - [x] Ensure middleware protects authenticated routes while allowing guest share access
 - [ ] Add chat UI affordances (edit button with `data-testid`) for user messages *(edit control wired; full chat suite still pending to confirm selectors behave under Playwright)*
-- [ ] Run end-to-end tests (`pnpm exec playwright test`) *(artifacts + auth setup run cleanly with the manual server; broader suites still long-running—start `PORT=3100 PLAYWRIGHT=true pnpm dev` before invoking Playwright. Latest run covered access-control + redirect flows individually while the full chat suite remains very slow.)*
+- [ ] Run end-to-end tests (`pnpm exec playwright test`) *(targeted Access Control checks keep passing; the serial login suite still takes several minutes even with the hermetic mocks—manual runs confirmed the flows exercise registration/login repeatedly but we still need a full green run to mark this complete.)*
 - [x] Install Playwright browsers and system dependencies *(`pnpm exec playwright install chromium` + `pnpm exec playwright install-deps chromium` ensure `@ai-sdk/openai` can load during Next.js boot)*
 - [x] Guard TokenLens catalog fetches when Playwright disables network access *(unit coverage added in `tests/unit/tokenlens-offline.test.ts`)*
 - [x] Verify sidebar avatar placeholder renders under Playwright *(see `tests/e2e/sidebar-avatar.test.ts`)*
@@ -23,3 +23,4 @@
 - Added Playwright offline guards for fonts, avatars, and TokenLens catalog. Created unit + e2e coverage for the new toggles and confirmed the avatar placeholder via targeted Playwright run (`d11c1a`). Unable to grab an authenticated screenshot through `browser_container` because NextAuth rejects the cross-origin login attempts (see server log chunk `9f5482`).
 - Switched Playwright's test server to port 3100 with explicit env wiring, updated the helper to respect `PLAYWRIGHT_TEST_BASE_URL`, and confirmed `auth.setup` + `artifacts` flows succeed against the manual server (`9c28a1`, `8e359a`).
 - Installed Chromium browsers/system deps for Playwright, refreshed `pnpm-lock.yaml` so `@ai-sdk/openai` resolves, tightened the chat URL assertion to accept any base URL, and ran targeted e2e flows (artifacts, access-control, chat redirect) against the manual dev server while noting the full chat suite still requires significant runtime.
+- Persisted the Playwright in-memory database on `globalThis` so registration + login share state across server actions, installed the updated Chromium runtime/deps, and reran the Access Control suite plus serial login block (long-running; see chunks 4fc460, 715f5f) to confirm the flows execute even though a complete green run still takes several minutes.
