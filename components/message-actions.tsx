@@ -44,13 +44,17 @@ export function PureMessageActions({
     toast.success("Copied to clipboard!");
   };
 
-  // User messages get edit (on hover) and copy actions
+  // User messages expose edit and copy controls. The edit action is hidden until
+  // the parent message row is hovered, mirroring the existing visual design.
+  // We still attach a deterministic `data-testid` so the Playwright suite can
+  // reveal and click the control when exercising the edit flow.
   if (message.role === "user") {
     return (
       <Actions className="-mr-0.5 justify-end">
         <div className="relative">
           {setMode && (
             <Action
+              data-testid="message-edit-button"
               className="-left-10 absolute top-0 opacity-0 transition-opacity group-hover/message:opacity-100"
               onClick={() => setMode("edit")}
               tooltip="Edit"

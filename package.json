@@ -15,7 +15,7 @@
     "db:pull": "drizzle-kit pull",
     "db:check": "drizzle-kit check",
     "db:up": "drizzle-kit up",
-    "test": "cross-env PLAYWRIGHT=true pnpm exec playwright test"
+    "test": "PLAYWRIGHT=true pnpm exec playwright test"
   },
   "dependencies": {
     "@ai-sdk/gateway": "^1.0.15",

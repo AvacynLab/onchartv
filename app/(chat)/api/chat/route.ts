@@ -19,6 +19,7 @@ import { getUsage } from "tokenlens/helpers";
 import { auth, type UserType } from "@/app/(auth)/auth";
 import type { VisibilityType } from "@/components/visibility-selector";
 import { entitlementsByUserType } from "@/lib/ai/entitlements";
+import { shouldFetchTokenlensCatalog } from "@/lib/ai/tokenlens";
 import type { ChatModel } from "@/lib/ai/models";
 import { type RequestHints, systemPrompt } from "@/lib/ai/prompts";
 import { myProvider } from "@/lib/ai/providers";
@@ -48,21 +49,28 @@ export const maxDuration = 60;
 
 let globalStreamContext: ResumableStreamContext | null = null;
 
-const getTokenlensCatalog = cache(
-  async (): Promise<ModelCatalog | undefined> => {
-    try {
-      return await fetchModels();
-    } catch (err) {
-      console.warn(
-        "TokenLens: catalog fetch failed, using default catalog",
-        err
-      );
-      return; // tokenlens helpers will fall back to defaultCatalog
-    }
-  },
-  ["tokenlens-catalog"],
-  { revalidate: 24 * 60 * 60 } // 24 hours
-);
+// Playwright runs without network access. Skipping the TokenLens catalog
+// download avoids repeated `ENETUNREACH` warnings during the e2e suite while
+// leaving production behaviour untouched.
+const tokenlensFetchEnabled = shouldFetchTokenlensCatalog(process.env);
+
+const getTokenlensCatalog = tokenlensFetchEnabled
+  ? cache(
+      async (): Promise<ModelCatalog | undefined> => {
+        try {
+          return await fetchModels();
+        } catch (err) {
+          console.warn(
+            "TokenLens: catalog fetch failed, using default catalog",
+            err
+          );
+          return; // tokenlens helpers will fall back to defaultCatalog
+        }
+      },
+      ["tokenlens-catalog"],
+      { revalidate: 24 * 60 * 60 } // 24 hours
+    )
+  : async (): Promise<ModelCatalog | undefined> => undefined;
 
 export function getStreamContext() {
   if (!globalStreamContext) {

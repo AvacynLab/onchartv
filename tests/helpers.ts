@@ -38,7 +38,14 @@ export async function createAuthenticatedContext({
   const email = `test-${name}@playwright.com`;
   const password = generateId();
 
-  await page.goto("http://localhost:3000/register");
+  const baseURL =
+    process.env.PLAYWRIGHT_TEST_BASE_URL ??
+    `http://localhost:${process.env.PORT ?? 3100}`;
+
+  // Point the registration flow at the same origin Playwright uses for the
+  // rest of the suite. The test web server now defaults to port 3100 so we
+  // avoid hard-coding 3000 and breaking manual runs.
+  await page.goto(`${baseURL}/register`);
   await page.getByPlaceholder("user@acme.com").click();
   await page.getByPlaceholder("user@acme.com").fill(email);
   await page.getByLabel("Password").click();
