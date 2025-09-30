@@ -7,7 +7,8 @@ import type {
 import { type ClassValue, clsx } from 'clsx';
 import { formatISO } from 'date-fns';
 import { twMerge } from 'tailwind-merge';
-import type { DBMessage, Document } from '@/lib/db/schema';
+import type { DBMessage, Document, MessageArtifact } from '@/lib/db/schema';
+import type { FinanceArtifact } from '@/lib/finance/types';
 import { ChatSDKError, type ErrorCode } from './errors';
 import type { ChatMessage, ChatTools, CustomUIDataTypes } from './types';
 
@@ -97,15 +98,51 @@ export function sanitizeText(text: string) {
   return text.replace('<has_function_call>', '');
 }
 
+/**
+ * Translate persisted finance artefacts into the transient data parts consumed
+ * by the chat UI. Persisting the raw payloads in `Message_v2.artifacts` keeps
+ * the database storage agnostic while the UI receives rich JSON again when
+ * rehydrating past conversations.
+ */
+const artifactToDataPart = (
+  artifact: MessageArtifact
+): UIMessagePart<CustomUIDataTypes, ChatTools> | null => {
+  const payload = artifact.payload as FinanceArtifact;
+
+  switch (artifact.type) {
+    case 'finance.chart':
+      return { type: 'data-financeChart', data: payload };
+    case 'finance.chart.annotations':
+      return { type: 'data-financeChartAnnotations', data: payload };
+    case 'finance.fundamentals':
+      return { type: 'data-financeFundamentals', data: payload };
+    case 'finance.news':
+      return { type: 'data-financeNews', data: payload };
+    case 'finance.backtest':
+      return { type: 'data-financeBacktest', data: payload };
+    case 'finance.screen':
+      return { type: 'data-financeScreen', data: payload };
+    default:
+      return null;
+  }
+};
+
 export function convertToUIMessages(messages: DBMessage[]): ChatMessage[] {
-  return messages.map((message) => ({
-    id: message.id,
-    role: message.role as 'user' | 'assistant' | 'system',
-    parts: message.parts as UIMessagePart<CustomUIDataTypes, ChatTools>[],
-    metadata: {
-      createdAt: formatISO(message.createdAt),
-    },
-  }));
+  return messages.map((message) => {
+    const baseParts = message.parts as UIMessagePart<CustomUIDataTypes, ChatTools>[];
+    const artifactParts = (message.artifacts ?? [])
+      .map(artifactToDataPart)
+      .filter((part): part is UIMessagePart<CustomUIDataTypes, ChatTools> => part !== null);
+
+    return {
+      id: message.id,
+      role: message.role as 'user' | 'assistant' | 'system',
+      parts: [...baseParts, ...artifactParts],
+      metadata: {
+        createdAt: formatISO(message.createdAt),
+      },
+    };
+  });
 }
 
 export function getTextFromMessage(message: ChatMessage): string {

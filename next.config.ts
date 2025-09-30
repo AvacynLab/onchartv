@@ -15,6 +15,18 @@ const nextConfig: NextConfig = {
         // permission to render the mocked previews during tests.
         hostname: "example.com",
       },
+      {
+        // Finance news artefacts rely on Clearbit logos in development to help
+        // users quickly recognise sources. Allowlisting the domain avoids
+        // runtime image optimisation errors.
+        hostname: "logo.clearbit.com",
+      },
+      {
+        // Reuters provides reliable sample headlines within the hermetic data
+        // set and exposes thumbnails from a static CDN. Next.js requires the
+        // host to be explicitly declared before optimisation kicks in.
+        hostname: "static.reuters.com",
+      },
     ],
   },
 };

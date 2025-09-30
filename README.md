@@ -10,6 +10,7 @@
 <p align="center">
   <a href="https://chat-sdk.dev"><strong>Read Docs</strong></a> ·
   <a href="#features"><strong>Features</strong></a> ·
+  <a href="#finance-tooling"><strong>Finance Tooling</strong></a> ·
   <a href="#model-providers"><strong>Model Providers</strong></a> ·
   <a href="#deploy-your-own"><strong>Deploy Your Own</strong></a> ·
   <a href="#running-locally"><strong>Running locally</strong></a>
@@ -68,3 +69,34 @@ pnpm dev
 ```
 
 Your app template should now be running on [localhost:3000](http://localhost:3000).
+
+## Finance Tooling
+
+The project ships with an offline-friendly finance assistant that can stream interactive artefacts for charts, backtests, fundamentals, and news. Key points:
+
+- **Enable the feature** by setting `FEATURE_FINANCE=true` in your environment. The assistant also requires `OPENAI_API_KEY` and a valid `OPENAI_MODEL_ID` (see `.env.example`).
+- **No live market calls** occur during development or CI. Mock datasets under `lib/finance/mock-data.ts` and deterministic seeds populate the catalogue. When you want to plug in a real provider, set `FEATURE_USE_REAL_DATA=true` alongside `MARKET_DATA_API_BASE_URL` and `MARKET_DATA_API_KEY`; the server automatically falls back to mocks if either value is missing.
+- **Artefact renderers** live in `components/finance/*` and consume the JSON payloads documented in [`docs/finance/artifacts.md`](docs/finance/artifacts.md).
+- **API endpoints** exposed under `/api/finance/*` are validated with Zod, rate-limited, and described in [`docs/finance/api.md`](docs/finance/api.md).
+- **Backtesting assumptions** (slippage, commission, metrics) are explained in [`docs/finance/backtest.md`](docs/finance/backtest.md).
+- **Risk disclaimer**: the assistant provides educational analysis only—it does **not** constitute personalised financial advice. Always verify outputs against authoritative sources before taking action.
+
+### Finance slash commands
+
+To speed up exploration, the chat input recognises a couple of finance-specific shortcuts:
+
+- `/chart BTCUSD 1D` rewrites into an explicit request for a `finance.chart` artefact covering the BTCUSD pair on daily candles. Append any indicator hints (for example `SMA(50/200)`) after the timeframe to have them echoed in the assistant instructions.
+- `/backtest AAPL 2018-01-01 2020-12-31 50 200` expands to a request for an SMA crossover backtest between the supplied dates. If you omit the moving-average windows the helper falls back to the default 50/200 configuration.
+
+Each shortcut still runs through the offline datasets and carries the same non-advisory language enforced across the finance toolkit.
+
+## Production & Vercel configuration
+
+Deployments on Vercel (or any long-lived environment) must provide the same hermetic guarantees as local development. Before pushing a new build, double-check the following configuration:
+
+- **Environment variables**: define `AUTH_SECRET`, `OPENAI_API_KEY`, `OPENAI_MODEL_ID`, `POSTGRES_URL`, and `BLOB_READ_WRITE_TOKEN`. The finance artefacts also rely on optional mocks that can source external providers if you later enable them—set `MARKET_DATA_API_KEY`, `MARKET_DATA_API_BASE_URL`, and `NEWS_API_KEY` if you connect to live feeds. Flip `FEATURE_USE_REAL_DATA=true` to activate the HTTP adapter.
+- **Feature flags**: keep `FEATURE_FINANCE=true` to enable charting, fundamentals, and backtesting endpoints alongside the system prompt updates documented above.
+- **Database readiness**: the build pipeline (and the provided GitHub Actions workflow) runs `pnpm db:migrate` followed by `pnpm db:seed` before executing `pnpm build`. Reproduce that order locally when preparing environment snapshots.
+- **Health check**: expose a lightweight probe by hitting [`/api/finance/quote?symbol=BTCUSD`](app/api/finance/quote/route.ts). The endpoint serves deterministic offline data when external APIs are unavailable, making it safe for uptime monitors.
+
+These steps ensure every deployment respects the offline-friendly finance mocks and migration ordering required by the CI pipeline.

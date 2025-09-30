@@ -136,6 +136,126 @@ export const getResponseChunksByPrompt = (
     ];
   }
 
+  if (compareMessages(recentMessage, TEST_PROMPTS.FINANCE_CHART_REQUEST)) {
+    return [
+      {
+        type: "tool-call",
+        toolCallId: "call_finance_chart",
+        toolName: "tool.finance.chart.fetch",
+        input: JSON.stringify({
+          symbol: "BTCUSD",
+          timeframe: "1D",
+          limit: 300,
+          overlays: [
+            { type: "sma", length: 50 },
+            { type: "sma", length: 200 },
+          ],
+        }),
+      },
+      {
+        type: "finish",
+        finishReason: "tool-calls",
+        usage: { inputTokens: 12, outputTokens: 4, totalTokens: 16 },
+      },
+    ];
+  }
+
+  if (compareMessages(recentMessage, TEST_PROMPTS.FINANCE_CHART_RESULT)) {
+    return [
+      ...textToDeltas(
+        "Graphique BTCUSD quotidien généré avec les moyennes 50 et 200 périodes."
+      ),
+      {
+        type: "finish",
+        finishReason: "stop",
+        usage: { inputTokens: 12, outputTokens: 18, totalTokens: 30 },
+      },
+    ];
+  }
+
+  if (compareMessages(recentMessage, TEST_PROMPTS.FINANCE_BACKTEST_REQUEST)) {
+    return [
+      {
+        type: "tool-call",
+        toolCallId: "call_finance_backtest",
+        toolName: "tool.finance.strategy.backtest",
+        input: JSON.stringify({
+          symbol: "AAPL",
+          timeframe: "1D",
+          range: { from: "2018-01-01T00:00:00Z", to: "2020-12-31T00:00:00Z" },
+          strategy: {
+            type: "sma-crossover",
+            params: { fastPeriod: 50, slowPeriod: 200 },
+          },
+          risk: { initialCapital: 100000, commissionPerTrade: 1, slippageBps: 10 },
+        }),
+      },
+      {
+        type: "finish",
+        finishReason: "tool-calls",
+        usage: { inputTokens: 15, outputTokens: 6, totalTokens: 21 },
+      },
+    ];
+  }
+
+  if (compareMessages(recentMessage, TEST_PROMPTS.FINANCE_BACKTEST_RESULT)) {
+    return [
+      ...textToDeltas(
+        "Backtest SMA 50/200 sur AAPL terminé : performance positive et drawdown contenu."
+      ),
+      {
+        type: "finish",
+        finishReason: "stop",
+        usage: { inputTokens: 15, outputTokens: 22, totalTokens: 37 },
+      },
+    ];
+  }
+
+  if (compareMessages(recentMessage, TEST_PROMPTS.FINANCE_FUNDAMENTALS_REQUEST)) {
+    return [
+      {
+        type: "tool-call",
+        toolCallId: "call_finance_fundamentals",
+        toolName: "tool.finance.fundamentals.fetch",
+        input: JSON.stringify({ symbol: "NVDA" }),
+      },
+      {
+        type: "finish",
+        finishReason: "tool-calls",
+        usage: { inputTokens: 10, outputTokens: 4, totalTokens: 14 },
+      },
+    ];
+  }
+
+  if (compareMessages(recentMessage, TEST_PROMPTS.FINANCE_FUNDAMENTALS_RESULT)) {
+    return [
+      {
+        type: "tool-call",
+        toolCallId: "call_finance_news",
+        toolName: "tool.finance.news.fetch",
+        input: JSON.stringify({ symbol: "NVDA", limit: 3 }),
+      },
+      {
+        type: "finish",
+        finishReason: "tool-calls",
+        usage: { inputTokens: 10, outputTokens: 4, totalTokens: 14 },
+      },
+    ];
+  }
+
+  if (compareMessages(recentMessage, TEST_PROMPTS.FINANCE_NEWS_RESULT)) {
+    return [
+      ...textToDeltas(
+        "Synthèse NVDA : fondamentaux clés et trois actualités fournies dans les artefacts."
+      ),
+      {
+        type: "finish",
+        finishReason: "stop",
+        usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
+      },
+    ];
+  }
+
   if (compareMessages(recentMessage, TEST_PROMPTS.USER_SKY)) {
     return [
       ...textToDeltas("It's just blue duh!"),

@@ -1,6 +1,5 @@
 import { geolocation } from "@vercel/functions";
 import {
-  convertToModelMessages,
   createUIMessageStream,
   JsonToSseTransformStream,
   smoothStream,
@@ -24,12 +23,15 @@ import type { ChatModel } from "@/lib/ai/models";
 import { type RequestHints, systemPrompt } from "@/lib/ai/prompts";
 import { myProvider } from "@/lib/ai/providers";
 import { createDocument } from "@/lib/ai/tools/create-document";
+import { createFinanceTools } from "@/lib/ai/tools/finance";
 import { getWeather } from "@/lib/ai/tools/get-weather";
 import { requestSuggestions } from "@/lib/ai/tools/request-suggestions";
 import { updateDocument } from "@/lib/ai/tools/update-document";
+import { convertToModelMessages } from "@/lib/ai/messages/convert-to-model-messages";
 import { isProductionEnvironment } from "@/lib/constants";
 import {
   createStreamId,
+  getFinancePreferencesByUserId,
   deleteChatById,
   getChatById,
   getMessageCountByUserId,
@@ -38,6 +40,12 @@ import {
   saveMessages,
   updateChatLastContextById,
 } from "@/lib/db/queries";
+import type { MessageArtifact } from "@/lib/db/schema";
+import type { FinanceArtifact } from "@/lib/finance/types";
+import {
+  DEFAULT_FINANCE_PREFERENCES,
+  type FinancePreferences,
+} from "@/lib/finance/preferences";
 import { ChatSDKError } from "@/lib/errors";
 import type { ChatMessage } from "@/lib/types";
 import type { AppUsage } from "@/lib/usage";
@@ -110,6 +118,7 @@ const extractAttachments = (parts: ReadonlyArray<AttachmentCandidate>) => {
       };
     });
 };
+
 
 export function getStreamContext() {
   if (!globalStreamContext) {
@@ -194,6 +203,21 @@ export async function POST(request: Request) {
       });
     }
 
+    const preferenceRecord = await getFinancePreferencesByUserId({
+      userId: session.user.id,
+    });
+
+    const financePreferences: FinancePreferences = preferenceRecord
+      ? {
+          markets: [...preferenceRecord.markets],
+          defaultIndicators: preferenceRecord.indicators.map((indicator) => ({
+            ...indicator,
+          })),
+          explanationLevel: preferenceRecord.explanationLevel,
+          showNews: preferenceRecord.showNews,
+        }
+      : DEFAULT_FINANCE_PREFERENCES;
+
     const messagesFromDb = await getMessagesByChatId({ id });
     const uiMessages = [...convertToUIMessages(messagesFromDb), message];
 
@@ -214,6 +238,7 @@ export async function POST(request: Request) {
           role: "user",
           parts: message.parts,
           attachments: extractAttachments(message.parts),
+          artifacts: [],
           createdAt: new Date(),
         },
       ],
@@ -223,9 +248,66 @@ export async function POST(request: Request) {
     await createStreamId({ streamId, chatId: id });
 
     let finalMergedUsage: AppUsage | undefined;
+    // Collect finance artefacts emitted during streaming so they can be saved
+    // atomically with the assistant response at the end of the request.
+    const capturedArtifacts: MessageArtifact[] = [];
 
     const stream = createUIMessageStream({
       execute: ({ writer: dataStream }) => {
+        const financeTools = createFinanceTools({
+          preferences: financePreferences,
+          onArtifact: (artifact: FinanceArtifact) => {
+            capturedArtifacts.push({ type: artifact.type, payload: artifact });
+
+            switch (artifact.type) {
+              case "finance.chart":
+                dataStream.write({
+                  type: "data-financeChart",
+                  data: artifact,
+                  transient: true,
+                });
+                break;
+              case "finance.chart.annotations":
+                dataStream.write({
+                  type: "data-financeChartAnnotations",
+                  data: artifact,
+                  transient: true,
+                });
+                break;
+              case "finance.fundamentals":
+                dataStream.write({
+                  type: "data-financeFundamentals",
+                  data: artifact,
+                  transient: true,
+                });
+                break;
+              case "finance.news":
+                dataStream.write({
+                  type: "data-financeNews",
+                  data: artifact,
+                  transient: true,
+                });
+                break;
+              case "finance.backtest":
+                dataStream.write({
+                  type: "data-financeBacktest",
+                  data: artifact,
+                  transient: true,
+                });
+                break;
+              case "finance.screen":
+                dataStream.write({
+                  type: "data-financeScreen",
+                  data: artifact,
+                  transient: true,
+                });
+                break;
+              default:
+                break;
+            }
+          },
+        });
+
         const result = streamText({
           model: myProvider.languageModel(selectedChatModel),
           system: systemPrompt({ selectedChatModel, requestHints }),
@@ -239,6 +321,12 @@ export async function POST(request: Request) {
                   "createDocument",
                   "updateDocument",
                   "requestSuggestions",
+                  "tool.finance.chart.fetch",
+                  "tool.finance.chart.annotate",
+                  "tool.finance.fundamentals.fetch",
+                  "tool.finance.news.fetch",
+                  "tool.finance.strategy.backtest",
+                  "tool.finance.screen",
                 ],
           experimental_transform: smoothStream({ chunking: "word" }),
           tools: {
@@ -249,6 +337,13 @@ export async function POST(request: Request) {
               session,
               dataStream,
             }),
+            "tool.finance.chart.fetch": financeTools.chartFetch,
+            "tool.finance.chart.annotate": financeTools.chartAnnotate,
+            "tool.finance.fundamentals.fetch":
+              financeTools.fundamentalsFetch,
+            "tool.finance.news.fetch": financeTools.newsFetch,
+            "tool.finance.strategy.backtest": financeTools.strategyBacktest,
+            "tool.finance.screen": financeTools.screenAssets,
           },
           experimental_telemetry: {
             isEnabled: isProductionEnvironment,
@@ -298,6 +393,10 @@ export async function POST(request: Request) {
       },
       generateId: generateUUID,
       onFinish: async ({ messages }) => {
+        const assistantWithArtifacts = [...messages]
+          .reverse()
+          .find((currentMessage) => currentMessage.role === "assistant");
+
         await saveMessages({
           messages: messages.map((currentMessage) => ({
             id: currentMessage.id,
@@ -306,6 +405,11 @@ export async function POST(request: Request) {
             createdAt: new Date(),
             attachments: extractAttachments(currentMessage.parts),
             chatId: id,
+            artifacts:
+              assistantWithArtifacts &&
+              currentMessage.id === assistantWithArtifacts.id
+                ? capturedArtifacts
+                : [],
           })),
         });
 

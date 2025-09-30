@@ -3,6 +3,7 @@ import type { CSSProperties } from "react";
 
 import { Geist, Geist_Mono } from "next/font/google";
 import { Toaster } from "sonner";
+import { AppQueryClientProvider } from "@/components/providers/query-client-provider";
 import { ThemeProvider } from "@/components/theme-provider";
 
 import "./globals.css";
@@ -108,7 +109,14 @@ export default function RootLayout({
           enableSystem
         >
           <Toaster position="top-center" />
-          <SessionProvider>{children}</SessionProvider>
+          <SessionProvider>
+            {/**
+             * Hydrate TanStack Query once at the application root so all client
+             * routes (chat, finance settings…) can reuse cached responses and
+             * stay in sync after preference updates.
+             */}
+            <AppQueryClientProvider>{children}</AppQueryClientProvider>
+          </SessionProvider>
         </ThemeProvider>
       </body>
     </html>

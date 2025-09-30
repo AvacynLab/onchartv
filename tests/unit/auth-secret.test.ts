@@ -9,6 +9,7 @@ import test from "node:test";
 
 import {
   NON_PRODUCTION_AUTH_SECRET,
+  hasAuthSecret,
   resolveAuthSecret,
 } from "../../lib/auth/secret";
 
@@ -59,5 +60,19 @@ test("throws when production instances are missing a configured secret", () => {
     () => resolveAuthSecret(env),
     /Missing AUTH_SECRET/,
     "Production environments should require a configured authentication secret",
+  );
+});
+
+test("reports whether a usable authentication secret is configured", () => {
+  assert.equal(
+    hasAuthSecret({ AUTH_SECRET: "configured" } as NodeJS.ProcessEnv),
+    true,
+    "Helpers should acknowledge explicitly configured secrets",
+  );
+
+  assert.equal(
+    hasAuthSecret({ NODE_ENV: "production" } as NodeJS.ProcessEnv),
+    false,
+    "Production deployments without secrets should be reported as misconfigured",
   );
 });

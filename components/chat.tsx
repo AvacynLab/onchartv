@@ -3,7 +3,7 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { unstable_serialize } from "swr/infinite";
 import { ChatHeader } from "@/components/chat-header";
@@ -25,6 +25,10 @@ import { ChatSDKError } from "@/lib/errors";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import type { AppUsage } from "@/lib/usage";
 import { fetcher, fetchWithErrorHandlers, generateUUID } from "@/lib/utils";
+import {
+  ChatComposerPrefillOptions,
+  ChatComposerProvider,
+} from "./chat-composer-context";
 import { Artifact } from "./artifact";
 import { useDataStream } from "./data-stream-provider";
 import { Messages } from "./messages";
@@ -65,6 +69,7 @@ export function Chat({
   const [showCreditCardAlert, setShowCreditCardAlert] = useState(false);
   const [currentModelId, setCurrentModelId] = useState(initialChatModel);
   const currentModelIdRef = useRef(currentModelId);
+  const [composerFocusSignal, setComposerFocusSignal] = useState(0);
 
   useEffect(() => {
     currentModelIdRef.current = currentModelId;
@@ -156,8 +161,44 @@ export function Chat({
     setMessages,
   });
 
+  const prefillPrompt = useCallback(
+    (prompt: string, options?: ChatComposerPrefillOptions) => {
+      setInput((previous) => {
+        if (options?.append) {
+          const trimmed = previous.trimEnd();
+          const separator = trimmed.length > 0 && !trimmed.endsWith(" ") ? " " : "";
+          return `${trimmed}${separator}${prompt}`;
+        }
+
+        return prompt;
+      });
+
+      if (options?.focus ?? true) {
+        setComposerFocusSignal((signal) => signal + 1);
+      }
+    },
+    [setInput, setComposerFocusSignal]
+  );
+
+  const sendPrompt = useCallback(
+    (prompt: string) => {
+      window.history.replaceState({}, "", `/chat/${id}`);
+
+      sendMessage({
+        role: "user" as const,
+        parts: [{ type: "text" as const, text: prompt }],
+      });
+    },
+    [id, sendMessage]
+  );
+
+  const composerContextValue = useMemo(
+    () => ({ chatId: id, prefillPrompt, sendPrompt }),
+    [id, prefillPrompt, sendPrompt]
+  );
+
   return (
-    <>
+    <ChatComposerProvider value={composerContextValue}>
       <div className="overscroll-behavior-contain flex h-dvh min-w-0 touch-pan-y flex-col bg-background">
         <ChatHeader
           chatId={id}
@@ -192,6 +233,7 @@ export function Chat({
               setAttachments={setAttachments}
               setInput={setInput}
               setMessages={setMessages}
+              focusSignal={composerFocusSignal}
               status={status}
               stop={stop}
               usage={usage}
@@ -247,7 +289,7 @@ export function Chat({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </>
+    </ChatComposerProvider>
   );
 }
 

@@ -5,6 +5,20 @@ import { z } from "zod";
 import { auth } from "@/app/(auth)/auth";
 import { isTestEnvironment } from "@/lib/constants";
 
+/**
+ * Whitelisted MIME types accepted by the upload endpoint. Backtest scenarios
+ * often rely on CSV files while the existing chat experience already supports
+ * image previews, so both image and comma-separated values formats stay
+ * enabled. Keeping the list explicit prevents arbitrary binary uploads.
+ */
+const ALLOWED_UPLOAD_MIME_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "text/csv",
+  "application/csv",
+  "application/vnd.ms-excel",
+]);
+
 // Use Blob instead of File since File is not available in Node.js environment
 const FileSchema = z.object({
   file: z
@@ -12,9 +26,8 @@ const FileSchema = z.object({
     .refine((file) => file.size <= 5 * 1024 * 1024, {
       message: "File size should be less than 5MB",
     })
-    // Update the file type based on the kind of files you want to accept
-    .refine((file) => ["image/jpeg", "image/png"].includes(file.type), {
-      message: "File type should be JPEG or PNG",
+    .refine((file) => ALLOWED_UPLOAD_MIME_TYPES.has(file.type), {
+      message: "File type should be JPEG, PNG, or CSV",
     }),
 });
 

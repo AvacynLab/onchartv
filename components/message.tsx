@@ -19,11 +19,35 @@ import {
   ToolOutput,
 } from "./elements/tool";
 import { SparklesIcon } from "./icons";
+import {
+  ArtifactRenderer,
+  type ArtifactRendererProps,
+} from "./ArtifactRenderer";
 import { MessageActions } from "./message-actions";
 import { MessageEditor } from "./message-editor";
 import { MessageReasoning } from "./message-reasoning";
 import { PreviewAttachment } from "./preview-attachment";
 import { Weather } from "./weather";
+import {
+  buildBacktestSlashCommand,
+  buildExplainCandlePrompt,
+} from "@/lib/finance/artifact-commands";
+import type {
+  FinanceArtifact,
+  FinanceBacktestArtifact,
+  FinanceChartArtifact,
+} from "@/lib/finance/types";
+import { useChatComposer } from "./chat-composer-context";
+
+const isFinanceArtifact = (value: unknown): value is FinanceArtifact => {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "type" in value &&
+    typeof (value as { type: unknown }).type === "string" &&
+    (value as { type: string }).type.startsWith("finance.")
+  );
+};
 
 const PurePreviewMessage = ({
   chatId,
@@ -53,6 +77,7 @@ const PurePreviewMessage = ({
   );
 
   useDataStream();
+  const chatComposer = useChatComposer();
 
   return (
     <motion.div
@@ -208,6 +233,69 @@ const PurePreviewMessage = ({
                   key={toolCallId}
                   result={part.output}
                 />
+              );
+            }
+
+            if (type.startsWith("tool-tool.finance.")) {
+              const { toolCallId, state } = part;
+              const label = type.replace(/^tool-/, "");
+              const output =
+                state === "output-available" &&
+                isFinanceArtifact(part.output)
+                  ? part.output
+                  : undefined;
+
+              let onExplainCandle: ArtifactRendererProps["onExplainCandle"];
+              let onRetest: ArtifactRendererProps["onRetest"];
+
+              if (chatComposer && output?.type === "finance.chart") {
+                const chartArtifact = output as FinanceChartArtifact;
+                onExplainCandle = ({ timestamp }) => {
+                  const prompt = buildExplainCandlePrompt(
+                    chartArtifact,
+                    timestamp
+                  );
+                  chatComposer.prefillPrompt(prompt, { focus: true });
+                };
+              }
+
+              if (chatComposer && output?.type === "finance.backtest") {
+                onRetest = (artifact: FinanceBacktestArtifact) => {
+                  const command = buildBacktestSlashCommand(artifact);
+
+                  if (!command) {
+                    console.warn(
+                      "[finance] unsupported backtest strategy for retest",
+                      artifact.strategy
+                    );
+                    return;
+                  }
+
+                  chatComposer.prefillPrompt(command, { focus: true });
+                };
+              }
+
+              return (
+                <Tool defaultOpen key={toolCallId}>
+                  <ToolHeader state={state} type={label} />
+                  <ToolContent>
+                    {state === "input-available" && part.input ? (
+                      <ToolInput input={part.input} />
+                    ) : null}
+                    <ToolOutput
+                      errorText={part.errorText}
+                      output={
+                        output ? (
+                          <ArtifactRenderer
+                            artifact={output}
+                            onExplainCandle={onExplainCandle}
+                            onRetest={onRetest}
+                          />
+                        ) : null
+                      }
+                    />
+                  </ToolContent>
+                </Tool>
               );
             }
 
