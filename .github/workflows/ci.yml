@@ -1,0 +1,77 @@
+name: CI
+
+# Central integration pipeline verifying migrations, build, unit tests, and Playwright journeys.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  build-test:
+    name: Build, migrate, test
+    runs-on: ubuntu-latest
+    env:
+      # Connection string consumed by Drizzle migrations and application database utilities.
+      POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/vercel_ai_chatbot
+      # Provide deterministic secrets so the test suites and Playwright runs can authenticate.
+      AUTH_SECRET: test-auth-secret
+      # Finance tooling toggles remain enabled in CI to exercise the offline dataset flows.
+      FEATURE_FINANCE: "true"
+      # Placeholder API keys required by provider factories – all flows use offline mocks in CI.
+      OPENAI_API_KEY: test-openai-key
+      OPENAI_MODEL_ID: gpt-4o-mini
+      BLOB_READ_WRITE_TOKEN: test-blob-token
+      MARKET_DATA_API_KEY: test-market-key
+      NEWS_API_KEY: test-news-key
+      PLAYWRIGHT: "true"
+      CI_PLAYWRIGHT: "true"
+    services:
+      postgres:
+        image: postgres:16
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_DB: vercel_ai_chatbot
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run database migrations
+        run: pnpm db:migrate
+
+      - name: Seed database
+        run: pnpm db:seed
+
+      - name: Build application
+        run: pnpm build
+
+      - name: Install Playwright browsers
+        run: pnpm e2e:install
+
+      - name: Run unit tests
+        run: pnpm test
+
+      - name: Run Playwright suite
+        run: pnpm e2e
+        env:
+          # Ensure the Playwright server binding matches the GitHub Actions environment.
+          PLAYWRIGHT_TEST_BASE_URL: http://127.0.0.1:3100

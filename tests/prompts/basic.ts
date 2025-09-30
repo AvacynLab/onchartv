@@ -145,4 +145,69 @@ export const TEST_PROMPTS: Record<string, ModelMessage> = {
       },
     ],
   },
+  FINANCE_CHART_REQUEST: {
+    role: "user",
+    content: [
+      { type: "text", text: "Montre BTCUSD 1D avec SMA(50/200)" },
+    ],
+  },
+  FINANCE_CHART_RESULT: {
+    role: "tool",
+    content: [
+      {
+        type: "tool-result",
+        toolCallId: "call_finance_chart",
+        toolName: "tool.finance.chart.fetch",
+        output: { type: "json", value: {} },
+      },
+    ],
+  },
+  FINANCE_BACKTEST_REQUEST: {
+    role: "user",
+    content: [
+      { type: "text", text: "Backteste SMA 50/200 sur AAPL 2018-2020" },
+    ],
+  },
+  FINANCE_BACKTEST_RESULT: {
+    role: "tool",
+    content: [
+      {
+        type: "tool-result",
+        toolCallId: "call_finance_backtest",
+        toolName: "tool.finance.strategy.backtest",
+        output: { type: "json", value: {} },
+      },
+    ],
+  },
+  FINANCE_FUNDAMENTALS_REQUEST: {
+    role: "user",
+    content: [
+      {
+        type: "text",
+        text: "Montre fondamentaux + 3 dernières news de NVDA",
+      },
+    ],
+  },
+  FINANCE_FUNDAMENTALS_RESULT: {
+    role: "tool",
+    content: [
+      {
+        type: "tool-result",
+        toolCallId: "call_finance_fundamentals",
+        toolName: "tool.finance.fundamentals.fetch",
+        output: { type: "json", value: {} },
+      },
+    ],
+  },
+  FINANCE_NEWS_RESULT: {
+    role: "tool",
+    content: [
+      {
+        type: "tool-result",
+        toolCallId: "call_finance_news",
+        toolName: "tool.finance.news.fetch",
+        output: { type: "json", value: {} },
+      },
+    ],
+  },
 };

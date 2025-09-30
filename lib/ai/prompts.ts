@@ -1,4 +1,6 @@
 import type { Geo } from "@vercel/functions";
+
+import { getFinanceManualPrompt } from "./system-prompts";
 import type { ArtifactKind } from "@/components/artifact";
 
 export const artifactsPrompt = `
@@ -50,6 +52,24 @@ About the origin of user's request:
 - country: ${requestHints.country}
 `;
 
+const FINANCE_FLAG_KEYS = new Set(["true", "1", "on", "yes"]);
+
+/**
+ * Determines whether the finance manual should be appended to the base system
+ * prompt. The helper tolerates various truthy strings so deployments can use
+ * platform-specific env conventions.
+ */
+const isFinanceFeatureEnabled = () => {
+  const rawValue = process.env.FEATURE_FINANCE;
+
+  if (rawValue === undefined) {
+    // Finance is part of the product roadmap; default to on when unspecified.
+    return true;
+  }
+
+  return FINANCE_FLAG_KEYS.has(rawValue.toLowerCase());
+};
+
 export const systemPrompt = ({
   selectedChatModel,
   requestHints,
@@ -58,12 +78,21 @@ export const systemPrompt = ({
   requestHints: RequestHints;
 }) => {
   const requestPrompt = getRequestPromptFromHints(requestHints);
+  const sections = [regularPrompt, requestPrompt];
 
-  if (selectedChatModel === "chat-model-reasoning") {
-    return `${regularPrompt}\n\n${requestPrompt}`;
+  if (selectedChatModel !== "chat-model-reasoning") {
+    sections.push(artifactsPrompt);
   }
 
-  return `${regularPrompt}\n\n${requestPrompt}\n\n${artifactsPrompt}`;
+  if (isFinanceFeatureEnabled()) {
+    const financeManual = getFinanceManualPrompt();
+
+    if (financeManual.length > 0) {
+      sections.push(financeManual);
+    }
+  }
+
+  return sections.join("\n\n");
 };
 
 export const codePrompt = `

@@ -68,6 +68,7 @@ function PureArtifact({
   isReadonly,
   selectedVisibilityType,
   selectedModelId,
+  focusSignal,
 }: {
   chatId: string;
   input: string;
@@ -84,6 +85,8 @@ function PureArtifact({
   isReadonly: boolean;
   selectedVisibilityType: VisibilityType;
   selectedModelId: string;
+  /** Composer focus signal mirrored from the chat surface for keyboard support. */
+  focusSignal: number;
 }) {
   const { artifact, setArtifact, metadata, setMetadata } = useArtifact();
 
@@ -335,6 +338,7 @@ function PureArtifact({
                     attachments={attachments}
                     chatId={chatId}
                     className="bg-background dark:bg-muted"
+                    focusSignal={focusSignal}
                     input={input}
                     messages={messages}
                     selectedModelId={selectedModelId}
@@ -522,6 +526,9 @@ export const Artifact = memo(PureArtifact, (prevProps, nextProps) => {
     return false;
   }
   if (prevProps.selectedVisibilityType !== nextProps.selectedVisibilityType) {
+    return false;
+  }
+  if (prevProps.focusSignal !== nextProps.focusSignal) {
     return false;
   }
 

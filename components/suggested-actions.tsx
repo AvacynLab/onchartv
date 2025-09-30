@@ -15,10 +15,10 @@ type SuggestedActionsProps = {
 
 function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
   const suggestedActions = [
-    "What are the advantages of using Next.js?",
-    "Write code to demonstrate Dijkstra's algorithm",
-    "Help me write an essay about Silicon Valley",
-    "What is the weather in San Francisco?",
+    "/chart BTCUSD 1D",
+    "/backtest AAPL 2018-01-01 2020-12-31 50 200",
+    "Summarise NVDA fundamentals using the finance artefacts",
+    "Toggle the finance news preference and explain what changes",
   ];
 
   return (
@@ -33,6 +33,10 @@ function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
          * layout differences (for example when fonts fall back to system
          * variants during offline runs). Indexing keeps the IDs simple while
          * remaining stable because the suggestion order is hard-coded.
+         *
+         * The list now intentionally mixes raw slash commands with plain
+         * English prompts so newcomers discover the finance shortcuts without
+         * sacrificing more narrative-driven entry points.
          */
         const suggestionTestId = `suggested-action-${index}`;
 

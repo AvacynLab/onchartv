@@ -21,6 +21,7 @@ import { useLocalStorage, useWindowSize } from "usehooks-ts";
 import { saveChatModelAsCookie } from "@/app/(chat)/actions";
 import { SelectItem } from "@/components/ui/select";
 import { chatModels } from "@/lib/ai/models";
+import { resolveSlashCommand } from "@/lib/ai/chat-commands";
 import { myProvider } from "@/lib/ai/providers";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import type { AppUsage } from "@/lib/usage";
@@ -72,6 +73,7 @@ function PureMultimodalInput({
   selectedVisibilityType,
   selectedModelId,
   onModelChange,
+  focusSignal,
   usage,
 }: {
   chatId: string;
@@ -88,6 +90,7 @@ function PureMultimodalInput({
   selectedVisibilityType: VisibilityType;
   selectedModelId: string;
   onModelChange?: (modelId: string) => void;
+  focusSignal: number;
   usage?: AppUsage;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -131,6 +134,23 @@ function PureMultimodalInput({
   useEffect(() => {
     setLocalStorageInput(input);
   }, [input, setLocalStorageInput]);
+
+  useEffect(() => {
+    if (focusSignal === 0) {
+      return;
+    }
+
+    const textarea = textareaRef.current;
+
+    if (!textarea) {
+      return;
+    }
+
+    textarea.focus();
+    const length = textarea.value.length;
+    textarea.setSelectionRange(length, length);
+    adjustHeight();
+  }, [focusSignal, adjustHeight]);
 
   const handleInput = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(event.target.value);
@@ -179,6 +199,16 @@ function PureMultimodalInput({
   const submitForm = useCallback(() => {
     window.history.replaceState({}, "", `/chat/${chatId}`);
 
+    const resolvedCommand = resolveSlashCommand(input);
+    /**
+     * When the user relies on a finance-oriented slash command (for example
+     * `/chart BTCUSD 1D`), rewrite the outbound prompt so the assistant
+     * receives an explicit instruction to yield the relevant artefact. The
+     * helper keeps the feature testable in isolation and lets us expand the
+     * command surface without entangling the transport layer.
+     */
+    const finalText = resolvedCommand?.prompt ?? input;
+
     sendMessage({
       role: "user",
       parts: [
@@ -190,7 +220,7 @@ function PureMultimodalInput({
         })),
         {
           type: "text",
-          text: input,
+          text: finalText,
         },
       ],
     });
@@ -404,6 +434,9 @@ function PureMultimodalInput({
 export const MultimodalInput = memo(
   PureMultimodalInput,
   (prevProps, nextProps) => {
+    if (prevProps.focusSignal !== nextProps.focusSignal) {
+      return false;
+    }
     if (prevProps.input !== nextProps.input) {
       return false;
     }

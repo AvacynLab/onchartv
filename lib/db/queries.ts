@@ -25,15 +25,38 @@ import {
   chat,
   type DBMessage,
   document,
+  type Asset,
+  asset,
+  backtestRun,
   message,
   type Suggestion,
+  strategy,
+  type Strategy,
+  strategyVersion,
+  type StrategyVersion,
   stream,
   suggestion,
   type User,
   user,
+  type BacktestRun,
+  type FinancePreference,
+  financePreference,
+  type IndicatorConfig,
+  type NewsItemCache,
+  type Watchlist,
+  type WatchlistItem,
   vote,
 } from "./schema";
 import { generateHashedPassword } from "./utils";
+import type {
+  BacktestMetrics,
+  BacktestTrade,
+  EquityCurvePoint,
+} from "@/lib/finance/types";
+import {
+  FINANCE_MARKET_IDS,
+  type FinancePreferences,
+} from "../finance/preferences";
 
 // Optionally, if not using email/pass login, you can
 // use the Drizzle adapter for Auth.js / NextAuth
@@ -57,6 +80,16 @@ type InMemoryStore = {
   >;
   suggestions: Map<string, Suggestion[]>;
   streams: Map<string, Array<{ id: string; chatId: string; createdAt: Date }>>;
+  assets: Map<string, Asset>;
+  assetsBySymbolExchange: Map<string, string>;
+  watchlists: Map<string, Watchlist>;
+  watchlistItems: Map<string, WatchlistItem>;
+  strategies: Map<string, Strategy>;
+  strategyVersions: Map<string, StrategyVersion>;
+  backtestRuns: Map<string, BacktestRun>;
+  indicatorConfigs: Map<string, IndicatorConfig>;
+  newsItems: Map<string, NewsItemCache>;
+  financePreferences: Map<string, FinancePreference>;
 };
 
 declare global {
@@ -83,6 +116,16 @@ function getOrCreateInMemoryStore(): InMemoryStore {
       documents: new Map(),
       suggestions: new Map(),
       streams: new Map(),
+      assets: new Map(),
+      assetsBySymbolExchange: new Map(),
+      watchlists: new Map(),
+      watchlistItems: new Map(),
+      strategies: new Map(),
+      strategyVersions: new Map(),
+      backtestRuns: new Map(),
+      indicatorConfigs: new Map(),
+      newsItems: new Map(),
+      financePreferences: new Map(),
     } as InMemoryStore;
   }
 
@@ -108,7 +151,79 @@ function getInMemoryStore(): InMemoryStore {
   return inMemoryStore;
 }
 
+/**
+ * Utility available to unit tests for resetting the fake persistence layer.
+ *
+ * Playwright-driven scenarios toggle the `PLAYWRIGHT` environment variable,
+ * meaning the in-memory store persists for the duration of the worker. Exposing
+ * an explicit reset hook keeps the state deterministic across individual test
+ * cases.
+ */
+export function __resetInMemoryDbForTests(): void {
+  if (!isTestEnvironment) {
+    throw new Error(
+      "Attempted to reset the in-memory database outside the test environment"
+    );
+  }
+
+  const store = getInMemoryStore();
+
+  store.users.clear();
+  store.chats.clear();
+  store.messages.clear();
+  store.votes.clear();
+  store.documents.clear();
+  store.suggestions.clear();
+  store.streams.clear();
+  store.assets.clear();
+  store.assetsBySymbolExchange.clear();
+  store.watchlists.clear();
+  store.watchlistItems.clear();
+  store.strategies.clear();
+  store.strategyVersions.clear();
+  store.backtestRuns.clear();
+  store.indicatorConfigs.clear();
+  store.newsItems.clear();
+  store.financePreferences.clear();
+}
+
 const makeVoteKey = (chatId: string, messageId: string) => `${chatId}:${messageId}`;
+
+const normaliseSymbol = (value: string) => value.trim().toUpperCase();
+const normaliseExchange = (value: string) => value.trim().toUpperCase();
+const normaliseCurrency = (value: string) => value.trim().toUpperCase();
+
+const makeAssetKey = (symbol: string, exchange: string) =>
+  `${normaliseSymbol(symbol)}::${normaliseExchange(exchange)}`;
+
+const marketPosition = new Map(
+  FINANCE_MARKET_IDS.map((id, index) => [id, index] as const)
+);
+
+const normaliseMarkets = (
+  markets: FinancePreferences["markets"]
+): FinancePreferences["markets"] => {
+  const deduped = Array.from(new Set(markets));
+  deduped.sort((first, second) => {
+    const firstIndex = marketPosition.get(first) ?? Number.MAX_SAFE_INTEGER;
+    const secondIndex = marketPosition.get(second) ?? Number.MAX_SAFE_INTEGER;
+    return firstIndex - secondIndex;
+  });
+
+  return deduped as FinancePreferences["markets"];
+};
+
+const cloneFinancePreference = (
+  record: FinancePreference
+): FinancePreference => {
+  return {
+    ...record,
+    markets: [...record.markets] as FinancePreference["markets"],
+    indicators: record.indicators.map((indicator) => ({
+      ...indicator,
+    })) as FinancePreference["indicators"],
+  };
+};
 
 // biome-ignore lint: Forbidden non-null assertion.
 const client = isTestEnvironment ? null : postgres(process.env.POSTGRES_URL!);
@@ -951,6 +1066,463 @@ export async function getStreamIdsByChatId({ chatId }: { chatId: string }) {
     throw new ChatSDKError(
       "bad_request:database",
       "Failed to get stream ids by chat id"
+    );
+  }
+}
+
+/** Input accepted by the {@link upsertAsset} helper. */
+export interface UpsertAssetInput {
+  readonly symbol: string;
+  readonly exchange: string;
+  readonly type: Asset["type"];
+  readonly name: string;
+  readonly currency: string;
+}
+
+/**
+ * Inserts or updates an asset entry ensuring unique symbol/exchange pairs.
+ */
+export async function upsertAsset(input: UpsertAssetInput): Promise<Asset> {
+  const normalisedSymbol = normaliseSymbol(input.symbol);
+  const normalisedExchange = normaliseExchange(input.exchange);
+  const normalisedCurrency = normaliseCurrency(input.currency);
+
+  if (isTestEnvironment) {
+    const store = getInMemoryStore();
+    const key = makeAssetKey(normalisedSymbol, normalisedExchange);
+    const existingId = store.assetsBySymbolExchange.get(key);
+    const createdAt = existingId
+      ? store.assets.get(existingId)?.createdAt ?? new Date()
+      : new Date();
+    const id = existingId ?? generateUUID();
+    const record: Asset = {
+      id,
+      symbol: normalisedSymbol,
+      exchange: normalisedExchange,
+      type: input.type,
+      name: input.name,
+      currency: normalisedCurrency,
+      createdAt,
+    };
+
+    store.assets.set(id, record);
+    store.assetsBySymbolExchange.set(key, id);
+
+    return record;
+  }
+
+  try {
+    const [record] = await db
+      .insert(asset)
+      .values({
+        symbol: normalisedSymbol,
+        exchange: normalisedExchange,
+        type: input.type,
+        name: input.name,
+        currency: normalisedCurrency,
+      })
+      .onConflictDoUpdate({
+        target: [asset.symbol, asset.exchange],
+        set: {
+          type: input.type,
+          name: input.name,
+          currency: normalisedCurrency,
+        },
+      })
+      .returning();
+
+    if (!record) {
+      throw new ChatSDKError(
+        "bad_request:database",
+        "Asset upsert did not return a record"
+      );
+    }
+
+    return record;
+  } catch (_error) {
+    throw new ChatSDKError("bad_request:database", "Failed to upsert asset");
+  }
+}
+
+/** Fetches an asset by its symbol/exchange pair. */
+export async function getAssetBySymbol({
+  symbol,
+  exchange,
+}: {
+  symbol: string;
+  exchange: string;
+}): Promise<Asset | null> {
+  const normalisedSymbol = normaliseSymbol(symbol);
+  const normalisedExchange = normaliseExchange(exchange);
+
+  if (isTestEnvironment) {
+    const store = getInMemoryStore();
+    const key = makeAssetKey(normalisedSymbol, normalisedExchange);
+    const assetId = store.assetsBySymbolExchange.get(key);
+    return assetId ? store.assets.get(assetId) ?? null : null;
+  }
+
+  try {
+    const [record] = await db
+      .select()
+      .from(asset)
+      .where(
+        and(
+          eq(asset.symbol, normalisedSymbol),
+          eq(asset.exchange, normalisedExchange)
+        )
+      )
+      .limit(1)
+      .execute();
+
+    return record ?? null;
+  } catch (_error) {
+    throw new ChatSDKError(
+      "bad_request:database",
+      "Failed to retrieve asset by symbol"
+    );
+  }
+}
+
+/** Input accepted by {@link createStrategy}. */
+export interface CreateStrategyInput {
+  readonly userId: string;
+  readonly name: string;
+  readonly description?: string;
+}
+
+/** Persists a strategy shell for future parameter revisions. */
+export async function createStrategy(
+  input: CreateStrategyInput
+): Promise<Strategy> {
+  if (isTestEnvironment) {
+    const store = getInMemoryStore();
+    const id = generateUUID();
+    const record: Strategy = {
+      id,
+      userId: input.userId,
+      name: input.name,
+      description: input.description ?? null,
+      createdAt: new Date(),
+    };
+
+    store.strategies.set(id, record);
+
+    return record;
+  }
+
+  try {
+    const [record] = await db
+      .insert(strategy)
+      .values({
+        userId: input.userId,
+        name: input.name,
+        description: input.description ?? null,
+      })
+      .returning();
+
+    if (!record) {
+      throw new ChatSDKError(
+        "bad_request:database",
+        "Strategy creation did not return a record"
+      );
+    }
+
+    return record;
+  } catch (_error) {
+    throw new ChatSDKError(
+      "bad_request:database",
+      "Failed to create strategy"
+    );
+  }
+}
+
+/** Input accepted by {@link createStrategyVersion}. */
+export interface CreateStrategyVersionInput {
+  readonly strategyId: string;
+  readonly params: unknown;
+}
+
+/**
+ * Captures a snapshot of strategy parameters. Backtests reference the
+ * immutable version to guarantee reproducible results.
+ */
+export async function createStrategyVersion(
+  input: CreateStrategyVersionInput
+): Promise<StrategyVersion> {
+  if (isTestEnvironment) {
+    const store = getInMemoryStore();
+    const id = generateUUID();
+    const record: StrategyVersion = {
+      id,
+      strategyId: input.strategyId,
+      params: input.params,
+      createdAt: new Date(),
+    };
+
+    store.strategyVersions.set(id, record);
+
+    return record;
+  }
+
+  try {
+    const [record] = await db
+      .insert(strategyVersion)
+      .values({
+        strategyId: input.strategyId,
+        params: input.params,
+      })
+      .returning();
+
+    if (!record) {
+      throw new ChatSDKError(
+        "bad_request:database",
+        "Strategy version creation did not return a record"
+      );
+    }
+
+    return record;
+  } catch (_error) {
+    throw new ChatSDKError(
+      "bad_request:database",
+      "Failed to create strategy version"
+    );
+  }
+}
+
+/** Input accepted by {@link createBacktestRun}. */
+export interface CreateBacktestRunInput {
+  readonly strategyVersionId: string;
+  readonly assetId: string;
+  readonly timeframe: string;
+  readonly periodStart: Date;
+  readonly periodEnd: Date;
+  readonly metrics: BacktestMetrics;
+  readonly trades: BacktestTrade[];
+  readonly equityCurve: EquityCurvePoint[];
+}
+
+/** Persists the outcome of a backtest and returns the stored record. */
+export async function createBacktestRun(
+  input: CreateBacktestRunInput
+): Promise<BacktestRun> {
+  if (isTestEnvironment) {
+    const store = getInMemoryStore();
+    const id = generateUUID();
+    const record: BacktestRun = {
+      id,
+      strategyVersionId: input.strategyVersionId,
+      assetId: input.assetId,
+      timeframe: input.timeframe,
+      periodStart: input.periodStart,
+      periodEnd: input.periodEnd,
+      metrics: input.metrics,
+      trades: input.trades,
+      equityCurve: input.equityCurve,
+      createdAt: new Date(),
+    };
+
+    store.backtestRuns.set(id, record);
+
+    return record;
+  }
+
+  try {
+    const [record] = await db
+      .insert(backtestRun)
+      .values({
+        strategyVersionId: input.strategyVersionId,
+        assetId: input.assetId,
+        timeframe: input.timeframe,
+        periodStart: input.periodStart,
+        periodEnd: input.periodEnd,
+        metrics: input.metrics,
+        trades: input.trades,
+        equityCurve: input.equityCurve,
+      })
+      .returning();
+
+    if (!record) {
+      throw new ChatSDKError(
+        "bad_request:database",
+        "Backtest run creation did not return a record"
+      );
+    }
+
+    return record;
+  } catch (_error) {
+    throw new ChatSDKError(
+      "bad_request:database",
+      "Failed to create backtest run"
+    );
+  }
+}
+
+/** Lists backtests associated with a given strategy ordered by recency. */
+export async function listBacktestsByStrategy({
+  strategyId,
+  limit = 20,
+}: {
+  strategyId: string;
+  limit?: number;
+}): Promise<BacktestRun[]> {
+  if (isTestEnvironment) {
+    const store = getInMemoryStore();
+    const relevantVersionIds = new Set(
+      Array.from(store.strategyVersions.values())
+        .filter((version) => version.strategyId === strategyId)
+        .map((version) => version.id)
+    );
+
+    const runs = Array.from(store.backtestRuns.values()).filter((run) =>
+      relevantVersionIds.has(run.strategyVersionId)
+    );
+
+    runs.sort(
+      (first, second) =>
+        second.createdAt.getTime() - first.createdAt.getTime()
+    );
+
+    return runs.slice(0, limit);
+  }
+
+  try {
+    const rows = await db
+      .select({ run: backtestRun })
+      .from(backtestRun)
+      .innerJoin(
+        strategyVersion,
+        eq(backtestRun.strategyVersionId, strategyVersion.id)
+      )
+      .where(eq(strategyVersion.strategyId, strategyId))
+      .orderBy(desc(backtestRun.createdAt))
+      .limit(limit)
+      .execute();
+
+    return rows.map(({ run }) => run);
+  } catch (_error) {
+    throw new ChatSDKError(
+      "bad_request:database",
+      "Failed to list backtests by strategy"
+    );
+  }
+}
+
+/** Loads the finance preferences associated with a user if present. */
+export async function getFinancePreferencesByUserId({
+  userId,
+}: {
+  userId: string;
+}): Promise<FinancePreference | null> {
+  if (isTestEnvironment) {
+    const store = getInMemoryStore();
+    const record = store.financePreferences.get(userId) ?? null;
+    return record ? cloneFinancePreference(record) : null;
+  }
+
+  try {
+    const [record] = await db
+      .select()
+      .from(financePreference)
+      .where(eq(financePreference.userId, userId))
+      .limit(1);
+
+    return record ? cloneFinancePreference(record) : null;
+  } catch (_error) {
+    throw new ChatSDKError(
+      "bad_request:database",
+      "Failed to load finance preferences"
+    );
+  }
+}
+
+/** Input shape accepted by {@link upsertFinancePreferences}. */
+export interface UpsertFinancePreferencesInput extends FinancePreferences {
+  readonly userId: string;
+}
+
+/**
+ * Persists the finance preferences for a user, inserting or updating as
+ * required. Markets are deduplicated and ordered to keep the payload stable.
+ */
+export async function upsertFinancePreferences(
+  input: UpsertFinancePreferencesInput
+): Promise<FinancePreference> {
+  const markets = normaliseMarkets(input.markets);
+  const indicators = input.defaultIndicators.map((indicator) => ({
+    ...indicator,
+  })) as FinancePreference["indicators"];
+  const now = new Date();
+
+  if (isTestEnvironment) {
+    const store = getInMemoryStore();
+    const existing = store.financePreferences.get(input.userId);
+
+    if (existing) {
+      const updated: FinancePreference = {
+        ...existing,
+        markets,
+        indicators,
+        explanationLevel: input.explanationLevel,
+        showNews: input.showNews,
+        updatedAt: now,
+      };
+
+      store.financePreferences.set(input.userId, updated);
+      return cloneFinancePreference(updated);
+    }
+
+    const record: FinancePreference = {
+      id: generateUUID(),
+      userId: input.userId,
+      markets,
+      indicators,
+      explanationLevel: input.explanationLevel,
+      showNews: input.showNews,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    store.financePreferences.set(input.userId, record);
+    return cloneFinancePreference(record);
+  }
+
+  try {
+    const [record] = await db
+      .insert(financePreference)
+      .values({
+        userId: input.userId,
+        markets,
+        indicators,
+        explanationLevel: input.explanationLevel,
+        showNews: input.showNews,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: financePreference.userId,
+        set: {
+          markets,
+          indicators,
+          explanationLevel: input.explanationLevel,
+          showNews: input.showNews,
+          updatedAt: now,
+        },
+      })
+      .returning();
+
+    if (!record) {
+      throw new ChatSDKError(
+        "bad_request:database",
+        "Finance preference upsert did not return a record"
+      );
+    }
+
+    return cloneFinancePreference(record);
+  } catch (_error) {
+    throw new ChatSDKError(
+      "bad_request:database",
+      "Failed to upsert finance preferences"
     );
   }
 }
