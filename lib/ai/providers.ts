@@ -9,7 +9,7 @@ import {
   wrapLanguageModel,
 } from "ai";
 
-import { createRequire } from "module";
+type NodeModule = typeof import("module");
 
 import { isPlaywrightLikeEnvironment } from "./playwright-env";
 
@@ -98,6 +98,10 @@ function createMockProvider() {
    * the mock modules, leading to runtime `MODULE_NOT_FOUND` errors during e2e
    * runs.
    */
+  const rawRequire = eval("require") as NodeJS.Require & {
+    (id: string): unknown;
+  };
+  const { createRequire } = rawRequire("module") as NodeModule;
   const nodeRequire = createRequire(import.meta.url);
   /**
    * The mocked models live in `models.testing.ts` rather than `models.test.ts`
