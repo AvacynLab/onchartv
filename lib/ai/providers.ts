@@ -9,6 +9,8 @@ import {
   wrapLanguageModel,
 } from "ai";
 
+import { createRequire } from "module";
+
 import { isPlaywrightLikeEnvironment } from "./playwright-env";
 
 type CreateOpenAI = typeof import("@ai-sdk/openai").createOpenAI;
@@ -89,7 +91,14 @@ function createMockProvider() {
    * Using `eval` defers module resolution to runtime so the bundle skips our
    * test-only helpers while still letting local unit tests `require` them.
    */
-  const nodeRequire = eval("require") as NodeJS.Require;
+  /**
+   * Using `createRequire` keeps the resolution relative to this module so the
+   * Playwright fixtures remain bundled while still compiling under ESM. The
+   * previous `eval('require')` indirection prevented Turbopack from including
+   * the mock modules, leading to runtime `MODULE_NOT_FOUND` errors during e2e
+   * runs.
+   */
+  const nodeRequire = createRequire(import.meta.url);
   /**
    * The mocked models live in `models.testing.ts` rather than `models.test.ts`
    * because Next.js strips `.test` modules from the production bundle. Using a
