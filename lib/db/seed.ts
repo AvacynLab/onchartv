@@ -3,6 +3,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
 import { asset } from "./schema";
+import { runMigrate } from "./migrate";
 import {
   FINANCE_ASSET_CATALOG,
   type FinanceAssetMetadata,
@@ -32,6 +33,15 @@ export async function seedDatabase(): Promise<void> {
     );
     return;
   }
+
+  // Ensure the latest schema is present before attempting to seed finance
+  // fixtures. GitHub Actions (and other CI pipelines) execute `db:seed`
+  // immediately after provisioning a fresh Postgres instance; if migrations
+  // have not run yet this would previously fail with `relation "Asset" does
+  // not exist`. Running the migrator here is idempotent and guarantees the
+  // catalogue table exists even when engineers invoke `pnpm db:seed`
+  // directly.
+  await runMigrate(process.env);
 
   const client = postgres(process.env.POSTGRES_URL, { max: 1 });
   const db = drizzle(client);
