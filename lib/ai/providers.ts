@@ -96,15 +96,30 @@ function createMockProvider() {
    * distinct suffix keeps the fixtures available to Playwright without being
    * picked up by test runners.
    */
-  const models = isMockTestingEnvironment
-    ? nodeRequire("./models.testing")
-    : nodeRequire("./models.mock");
-  const {
-    artifactModel,
-    chatModel,
-    reasoningModel,
-    titleModel,
-  } = models;
+  const loadModule = <T>(moduleId: string) => nodeRequire(moduleId) as T;
+  /**
+   * Eagerly try to resolve the Playwright fixtures so the bundler keeps the
+   * module in the compiled output. If the file is absent (e.g. in production
+   * deployments where we do not ship the testing helpers) we silently fall
+   * back to the general-purpose mocks.
+   */
+  const testingModels = (() => {
+    try {
+      return loadModule<typeof import("./models.testing")>("./models.testing");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "MODULE_NOT_FOUND") {
+        throw error;
+      }
+
+      return null;
+    }
+  })();
+
+  const models =
+    isMockTestingEnvironment && testingModels
+      ? testingModels
+      : loadModule<typeof import("./models.mock")>("./models.mock");
+  const { artifactModel, chatModel, reasoningModel, titleModel } = models;
   return customProvider({
     languageModels: {
       "chat-model": chatModel,
