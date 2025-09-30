@@ -85,7 +85,15 @@ function createMockProvider() {
    * test-only helpers while still letting local unit tests `require` them.
    */
   const nodeRequire = eval("require") as NodeJS.Require;
-  const modelsModuleId = isTestEnvironment ? "./models.test" : "./models.mock";
+  /**
+   * The mocked models live in `models.testing.ts` rather than `models.test.ts`
+   * because Next.js strips `.test` modules from the production bundle. Using a
+   * distinct suffix keeps the fixtures available to Playwright without being
+   * picked up by test runners.
+   */
+  const modelsModuleId = isTestEnvironment
+    ? "./models.testing"
+    : "./models.mock";
   const models = nodeRequire(modelsModuleId);
   const {
     artifactModel,
