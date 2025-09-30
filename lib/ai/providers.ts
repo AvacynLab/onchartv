@@ -9,7 +9,6 @@ import {
   wrapLanguageModel,
 } from "ai";
 
-import { isTestEnvironment } from "../constants";
 import { isPlaywrightLikeEnvironment } from "./playwright-env";
 
 type CreateOpenAI = typeof import("@ai-sdk/openai").createOpenAI;
@@ -34,7 +33,13 @@ const titleModelId =
   process.env.OPENAI_TITLE_MODEL_ID?.trim() ?? baseChatModelId;
 const artifactModelId =
   process.env.OPENAI_ARTIFACT_MODEL_ID?.trim() ?? baseChatModelId;
-const isPlaywrightEnvironment = isPlaywrightLikeEnvironment(process.env);
+const env = globalThis.process?.env ?? {};
+const isPlaywrightEnvironment = isPlaywrightLikeEnvironment(env);
+const isMockTestingEnvironment = Boolean(
+  Reflect.get(env, "PLAYWRIGHT_TEST_BASE_URL") ??
+    Reflect.get(env, "PLAYWRIGHT") ??
+    Reflect.get(env, "CI_PLAYWRIGHT")
+);
 
 function createMockProvider() {
   if (isNextBuild) {
@@ -91,10 +96,9 @@ function createMockProvider() {
    * distinct suffix keeps the fixtures available to Playwright without being
    * picked up by test runners.
    */
-  const modelsModuleId = isTestEnvironment
-    ? "./models.testing"
-    : "./models.mock";
-  const models = nodeRequire(modelsModuleId);
+  const models = isMockTestingEnvironment
+    ? nodeRequire("./models.testing")
+    : nodeRequire("./models.mock");
   const {
     artifactModel,
     chatModel,
@@ -112,7 +116,10 @@ function createMockProvider() {
 }
 
 const shouldUseMocks =
-  isClient || isTestEnvironment || isPlaywrightEnvironment || isNextBuild;
+  isClient ||
+  isMockTestingEnvironment ||
+  isPlaywrightEnvironment ||
+  isNextBuild;
 
 let createOpenAI: CreateOpenAI | null = null;
 
