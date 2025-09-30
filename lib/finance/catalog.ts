@@ -1,4 +1,23 @@
-import "server-only";
+import { createRequire } from "module";
+
+/**
+ * Next's `server-only` helper ensures catalogue consumers are never bundled
+ * into Client Components. The module throws if it is evaluated in plain Node
+ * (for example when the seed script runs via `tsx`), so we only attempt to
+ * require it when the helper is available and silently ignore failures in
+ * non-Next runtimes.
+ */
+if (typeof window === "undefined") {
+  const require = createRequire(import.meta.url);
+
+  try {
+    require("server-only");
+  } catch {
+    // Running outside of Next.js (seed scripts, Vitest in Node) where the
+    // `server-only` shim is intentionally unavailable. In those environments
+    // the catalogue is still server-side, so we can safely proceed.
+  }
+}
 
 import type { FinanceSymbol } from "./mock-data";
 import type { Asset } from "@/lib/db/schema";
