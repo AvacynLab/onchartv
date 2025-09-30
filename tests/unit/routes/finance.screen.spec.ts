@@ -51,6 +51,23 @@ describe("/api/finance/screen", () => {
     }
   });
 
+  it("accepts filters referencing asset classes without catalog coverage", async () => {
+    // Commodity filters are valid even if the offline catalogue currently lacks entries.
+    const response = await POST(
+      new Request("http://localhost/api/finance/screen", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ filters: { assetTypes: ["commodity"] } }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+
+    const payload = await response.json();
+    expect(payload.results).toEqual([]);
+    expect(payload.appliedFilters.assetTypes).toEqual(["commodity"]);
+  });
+
   it("rejects invalid filter payloads", async () => {
     // Negative ratios are rejected by the schema validation layer.
     const response = await POST(

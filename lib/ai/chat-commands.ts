@@ -1,4 +1,5 @@
 import { FINANCE_SYMBOLS } from "@/lib/finance/mock-data";
+import type { FinanceSymbol } from "@/lib/finance/mock-data";
 
 /**
  * Supported finance chat timeframes. We expose a small whitelist even though the
@@ -14,6 +15,15 @@ const SUPPORTED_TIMEFRAMES = new Set([
 ]);
 
 const FINANCE_SYMBOL_SET = new Set(FINANCE_SYMBOLS);
+
+function isFinanceSymbol(candidate: string | undefined): candidate is FinanceSymbol {
+  if (!candidate) {
+    return false;
+  }
+
+  // The catalogue is tiny, so leveraging the Set keeps lookups constant time.
+  return FINANCE_SYMBOL_SET.has(candidate as FinanceSymbol);
+}
 
 export type SlashCommand =
   | {
@@ -62,7 +72,7 @@ function isTimeframe(candidate: string | undefined): candidate is string {
 function extractChartCommand(tokens: string[]): SlashCommand | null {
   const symbol = tokens.shift()?.toUpperCase();
 
-  if (!symbol || !FINANCE_SYMBOL_SET.has(symbol)) {
+  if (!isFinanceSymbol(symbol)) {
     return null;
   }
 
@@ -95,7 +105,7 @@ function parseNumberToken(token: string | undefined): number | undefined {
 function extractBacktestCommand(tokens: string[]): SlashCommand | null {
   const symbol = tokens.shift()?.toUpperCase();
 
-  if (!symbol || !FINANCE_SYMBOL_SET.has(symbol)) {
+  if (!isFinanceSymbol(symbol)) {
     return null;
   }
 

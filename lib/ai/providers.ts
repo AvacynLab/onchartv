@@ -20,6 +20,12 @@ const MAX_RETRIES = 2;
 const RETRY_BASE_DELAY_MS = 250;
 
 const isClient = typeof window !== "undefined";
+/**
+ * Next.js sets `NEXT_PHASE=phase-production-build` when statically analysing
+ * routes. Treating that phase as "mocked" keeps the build step from crashing
+ * when CI or local developers have not provided OpenAI credentials yet.
+ */
+const isNextBuild = process.env.NEXT_PHASE === "phase-production-build";
 const openaiApiKey = process.env.OPENAI_API_KEY?.trim();
 const baseChatModelId = process.env.OPENAI_MODEL_ID?.trim();
 const reasoningModelId =
@@ -31,6 +37,48 @@ const artifactModelId =
 const isPlaywrightEnvironment = isPlaywrightLikeEnvironment(process.env);
 
 function createMockProvider() {
+  if (isNextBuild) {
+    /**
+     * During the production build Next.js evaluates the provider even though no
+     * requests are executed. Returning a lightweight inline model avoids the
+     * `eval('require')` path and keeps the build hermetic when fixtures are not
+     * bundled alongside the compiled output.
+     */
+    const createBuildTimeModel = () =>
+      ({
+        specificationVersion: "v2",
+        provider: "mock",
+        modelId: "build-mock",
+        supportedUrls: {},
+        supportsImageUrls: false,
+        supportsStructuredOutputs: false,
+        doGenerate: async () => ({
+          rawCall: { rawPrompt: null, rawSettings: {} },
+          finishReason: "stop",
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          content: [{ type: "text", text: "" }],
+          warnings: [],
+        }),
+        doStream: async () => ({
+          stream: new ReadableStream({
+            start(controller) {
+              controller.close();
+            },
+          }),
+          rawCall: { rawPrompt: null, rawSettings: {} },
+        }),
+      } as const);
+
+    return customProvider({
+      languageModels: {
+        "chat-model": createBuildTimeModel(),
+        "chat-model-reasoning": createBuildTimeModel(),
+        "title-model": createBuildTimeModel(),
+        "artifact-model": createBuildTimeModel(),
+      } as unknown as Record<string, never>,
+    });
+  }
+
   /**
    * Next.js attempts to statically analyze `require` calls during the build.
    * Using `eval` defers module resolution to runtime so the bundle skips our
@@ -56,7 +104,7 @@ function createMockProvider() {
 }
 
 const shouldUseMocks =
-  isClient || isTestEnvironment || isPlaywrightEnvironment;
+  isClient || isTestEnvironment || isPlaywrightEnvironment || isNextBuild;
 
 let createOpenAI: CreateOpenAI | null = null;
 
@@ -135,13 +183,24 @@ const guardMiddleware: LanguageModelV2Middleware = {
   },
   wrapGenerate: ({ doGenerate, params }) =>
     callWithRetry({
-      execute: () => doGenerate(),
+      execute: () =>
+        /**
+         * `doGenerate` may return a bare thenable, so normalising it through
+         * `Promise.resolve` keeps the retry helper working with plain Promises.
+         */
+        Promise.resolve(doGenerate()),
       params,
       abortSignal: params.abortSignal,
     }),
   wrapStream: ({ doStream, params }) =>
     callWithRetry({
-      execute: () => doStream(),
+      execute: () =>
+        /**
+         * Likewise for streaming calls – wrapping the thenable ensures the
+         * retry helper can await and retry without tripping on non-Promise
+         * return types provided by the AI SDK internals.
+         */
+        Promise.resolve(doStream()),
       params,
       abortSignal: params.abortSignal,
     }),

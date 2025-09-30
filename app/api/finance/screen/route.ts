@@ -1,10 +1,11 @@
 import { z } from "zod";
 
 import { ChatSDKError } from "@/lib/errors";
-import { logRouteLatency, now, resolveClientKey } from "@/lib/finance/api-utils";
 import { FINANCE_ASSET_CATALOG } from "@/lib/finance/catalog";
 import { FUNDAMENTAL_SNAPSHOTS } from "@/lib/finance/mock-data";
 import { enforceRateLimit } from "@/lib/ratelimit";
+import { logRouteLatency, now, resolveClientKey } from "@/lib/finance/api-utils";
+import type { Asset } from "@/lib/db/schema";
 
 /**
  * Validates the payload accepted by the screen endpoint. Only a tiny subset of
@@ -24,7 +25,21 @@ const requestSchema = z
           .min(0, "filters.maxPeRatio must be zero or greater")
           .optional(),
         assetTypes: z
-          .array(z.enum(["equity", "crypto", "fx"]))
+          .array(
+            z.enum([
+              "equity",
+              "crypto",
+              "fx",
+              "etf",
+              "index",
+              "commodity",
+            ])
+            /**
+             * Keep the allowed asset classes aligned with the Asset.type enum so TypeScript
+             * stays aware of the full catalogue and the runtime validation accepts any
+             * metadata persisted through the migration.
+             */
+          )
           .max(3, "filters.assetTypes supports at most three entries")
           .optional(),
       })
@@ -77,7 +92,16 @@ export async function POST(request: Request): Promise<Response> {
       limit,
     } = parsed.data;
 
-    const requestedTypes = assetTypes ? new Set(assetTypes) : null;
+    const requestedTypes: ReadonlySet<Asset["type"]> | null = assetTypes
+      ?
+          /**
+           * Explicitly widen the Set so the compiler keeps accepting any future
+           * asset classes introduced by the relational schema. The run-time
+           * values are still validated by Zod above, so the assertion simply
+           * aligns both sides of the type comparison used below.
+           */
+          new Set<Asset["type"]>(assetTypes as Asset["type"][])
+      : null;
 
     const matches = Object.values(FUNDAMENTAL_SNAPSHOTS)
       .filter((snapshot) => {

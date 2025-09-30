@@ -255,6 +255,7 @@ export function Chat({
         setAttachments={setAttachments}
         setInput={setInput}
         setMessages={setMessages}
+        focusSignal={composerFocusSignal}
         status={status}
         stop={stop}
         votes={votes}

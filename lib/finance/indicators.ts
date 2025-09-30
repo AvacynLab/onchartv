@@ -90,9 +90,14 @@ export function calculateEMA(
       continue;
     }
 
-    const ema = (price - previousEma) * smoothing + previousEma;
-    previousEma = ema;
-    result[index] = ema;
+    const prev = previousEma as number;
+    /**
+     * Reusing the prior EMA value lets us update the series without recalculating
+     * the entire window, matching the canonical exponential smoothing formula.
+     */
+    const emaValue = (price - prev) * smoothing + prev;
+    previousEma = emaValue;
+    result[index] = emaValue;
   }
 
   return result;

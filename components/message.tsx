@@ -237,12 +237,21 @@ const PurePreviewMessage = ({
             }
 
             if (type.startsWith("tool-tool.finance.")) {
-              const { toolCallId, state } = part;
+              if (!("toolCallId" in part) || !("state" in part)) {
+                return null;
+              }
+
+              const toolPart = part as typeof part & {
+                toolCallId: string;
+                state: string;
+                output?: unknown;
+              };
+              const { toolCallId, state } = toolPart;
               const label = type.replace(/^tool-/, "");
               const output =
                 state === "output-available" &&
-                isFinanceArtifact(part.output)
-                  ? part.output
+                isFinanceArtifact(toolPart.output)
+                  ? toolPart.output
                   : undefined;
 
               let onExplainCandle: ArtifactRendererProps["onExplainCandle"];
@@ -277,7 +286,16 @@ const PurePreviewMessage = ({
 
               return (
                 <Tool defaultOpen key={toolCallId}>
-                  <ToolHeader state={state} type={label} />
+                  <ToolHeader
+                    displayLabel={label}
+                    state={state}
+                    /**
+                     * The OpenAI SDK guarantees tool parts always follow the
+                     * `tool-${name}` convention, so the assertion keeps the type
+                     * system satisfied while we render a friendlier label.
+                     */
+                    type={type as `tool-${string}`}
+                  />
                   <ToolContent>
                     {state === "input-available" && part.input ? (
                       <ToolInput input={part.input} />

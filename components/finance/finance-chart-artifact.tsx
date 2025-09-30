@@ -11,12 +11,11 @@ import {
 } from "react";
 import {
   type CandlestickData,
-  type CrosshairMoveEventParams,
   type IChartApi,
   type ISeriesApi,
-  type LogicalRange,
   type MouseEventParams,
   type Time,
+  type UTCTimestamp,
   createChart,
   CrosshairMode,
 } from "lightweight-charts";
@@ -24,7 +23,7 @@ import { InfoIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type {
   FinanceChartAnnotationsArtifact,
-  FinanceChartArtifact,
+  FinanceChartArtifact as FinanceChartArtifactPayload,
 } from "@/lib/finance/types";
 import { cn } from "@/lib/utils";
 import { ChartAnnotationsPanel } from "./chart-annotations-panel";
@@ -77,6 +76,9 @@ type ThemePalette = {
   readonly overlaySma: string;
   readonly overlayEma: string;
 };
+
+/** Internal helper describing the visible time window accepted by the scale. */
+type ChartTimeRange = { from: UTCTimestamp; to: UTCTimestamp };
 
 const FALLBACK_PALETTE: ThemePalette = {
   text: "hsl(240 3.8% 46.1%)",
@@ -175,7 +177,7 @@ const palettesEqual = (a: ThemePalette, b: ThemePalette) =>
  * output streamed by `tool.finance.chart.annotate`.
  */
 export interface FinanceChartArtifactProps {
-  readonly artifact: FinanceChartArtifact;
+  readonly artifact: FinanceChartArtifactPayload;
   readonly annotations?: FinanceChartAnnotationsArtifact | null;
   readonly onExplainCandle?: (params: {
     readonly timestamp: number;
@@ -189,7 +191,7 @@ const formatPrice = (value: number) =>
 const formatPercent = (value: number) =>
   `${(value * 100).toFixed(2)}%`;
 
-const overlayId = (overlay: FinanceChartArtifact["overlays"][number]) =>
+const overlayId = (overlay: FinanceChartArtifactPayload["overlays"][number]) =>
   `${overlay.type}-${overlay.length}`;
 
 const buildCandleLabel = (symbol: string, candle: CandlestickData) => {
@@ -220,7 +222,7 @@ export const FinanceChartArtifact = memo(
       new Map()
     );
     const crosshairHandlerRef =
-      useRef<((param: CrosshairMoveEventParams<Time>) => void) | null>(null);
+      useRef<((param: MouseEventParams<Time>) => void) | null>(null);
     const clickHandlerRef = useRef<((param: MouseEventParams<Time>) => void) | null>(
       null
     );
@@ -245,7 +247,7 @@ export const FinanceChartArtifact = memo(
         return null;
       }
       const candle: CandlestickData = {
-        time: last.t,
+        time: last.t as UTCTimestamp,
         open: last.o,
         high: last.h,
         low: last.l,
@@ -315,7 +317,7 @@ export const FinanceChartArtifact = memo(
         wickDownColor: paletteRef.current.candleDownWick,
       });
 
-      const crosshairHandler = (param: CrosshairMoveEventParams<Time>) => {
+      const crosshairHandler = (param: MouseEventParams<Time>) => {
         if (!param || !param.time || !param.seriesData) {
           setHovered(null);
           return;
@@ -383,7 +385,7 @@ export const FinanceChartArtifact = memo(
       }
 
       const candleData: CandlestickData[] = artifact.ohlcv.map((candle) => ({
-        time: candle.t,
+        time: candle.t as UTCTimestamp,
         open: candle.o,
         high: candle.h,
         low: candle.l,
@@ -424,7 +426,10 @@ export const FinanceChartArtifact = memo(
         });
         const lineData = overlay.values
           .filter((point) => point.v !== null)
-          .map((point) => ({ time: point.t, value: point.v as number }));
+          .map((point) => ({
+            time: point.t as UTCTimestamp,
+            value: point.v as number,
+          }));
         series.setData(lineData);
         overlaySeriesRef.current.set(overlayId(overlay), series);
       });
@@ -530,9 +535,9 @@ export const FinanceChartArtifact = memo(
         last.t - preset.lookbackDays * SECONDS_PER_DAY,
         first.t
       );
-      const visibleRange: LogicalRange = {
-        from,
-        to: last.t,
+      const visibleRange: ChartTimeRange = {
+        from: from as UTCTimestamp,
+        to: last.t as UTCTimestamp,
       };
       chart.timeScale().setVisibleRange(visibleRange);
     };

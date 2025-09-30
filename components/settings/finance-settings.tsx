@@ -99,7 +99,12 @@ const INDICATOR_PRESETS: ReadonlyArray<IndicatorPreset> = [
 interface MutablePreferences {
   readonly markets: Array<FinancePreferences["markets"][number]>;
   readonly indicators: Record<string, FinancePreferences["defaultIndicators"][number]>;
-  readonly extraIndicators: FinancePreferences["defaultIndicators"];
+  /**
+   * Mutable bag of indicators the presets do not recognise. Using a plain array
+   * (instead of the readonly type exposed by the API) makes it easier to append
+   * and remove entries while editing the form.
+   */
+  readonly extraIndicators: Array<FinancePreferences["defaultIndicators"][number]>;
   readonly explanationLevel: FinancePreferences["explanationLevel"];
   readonly showNews: boolean;
 }
@@ -108,7 +113,7 @@ const toMutablePreferences = (
   preferences: FinancePreferences
 ): MutablePreferences => {
   const indicators: MutablePreferences["indicators"] = {};
-  const leftovers: FinancePreferences["defaultIndicators"] = [];
+  const leftovers: Array<FinancePreferences["defaultIndicators"][number]> = [];
 
   for (const indicator of preferences.defaultIndicators) {
     const preset = INDICATOR_PRESETS.find((candidate) => {

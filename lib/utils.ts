@@ -8,7 +8,15 @@ import { type ClassValue, clsx } from 'clsx';
 import { formatISO } from 'date-fns';
 import { twMerge } from 'tailwind-merge';
 import type { DBMessage, Document, MessageArtifact } from '@/lib/db/schema';
-import type { FinanceArtifact } from '@/lib/finance/types';
+import type {
+  FinanceArtifact,
+  FinanceBacktestArtifact,
+  FinanceChartAnnotationsArtifact,
+  FinanceChartArtifact,
+  FinanceFundamentalsArtifact,
+  FinanceNewsArtifact,
+  FinanceScreenArtifact,
+} from '@/lib/finance/types';
 import { ChatSDKError, type ErrorCode } from './errors';
 import type { ChatMessage, ChatTools, CustomUIDataTypes } from './types';
 
@@ -111,17 +119,35 @@ const artifactToDataPart = (
 
   switch (artifact.type) {
     case 'finance.chart':
-      return { type: 'data-financeChart', data: payload };
+      return {
+        type: 'data-financeChart',
+        data: payload as FinanceChartArtifact,
+      };
     case 'finance.chart.annotations':
-      return { type: 'data-financeChartAnnotations', data: payload };
+      return {
+        type: 'data-financeChartAnnotations',
+        data: payload as FinanceChartAnnotationsArtifact,
+      };
     case 'finance.fundamentals':
-      return { type: 'data-financeFundamentals', data: payload };
+      return {
+        type: 'data-financeFundamentals',
+        data: payload as FinanceFundamentalsArtifact,
+      };
     case 'finance.news':
-      return { type: 'data-financeNews', data: payload };
+      return {
+        type: 'data-financeNews',
+        data: payload as FinanceNewsArtifact,
+      };
     case 'finance.backtest':
-      return { type: 'data-financeBacktest', data: payload };
+      return {
+        type: 'data-financeBacktest',
+        data: payload as FinanceBacktestArtifact,
+      };
     case 'finance.screen':
-      return { type: 'data-financeScreen', data: payload };
+      return {
+        type: 'data-financeScreen',
+        data: payload as FinanceScreenArtifact,
+      };
     default:
       return null;
   }

@@ -29,8 +29,12 @@ export const Tool = ({ className, ...props }: ToolProps) => (
 );
 
 export type ToolHeaderProps = {
+  /** Identifier of the tool call (kept with the `tool-` prefix for tracing). */
   type: ToolUIPart["type"];
+  /** Current execution state used to render the status badge. */
   state: ToolUIPart["state"];
+  /** Optional human readable label to display instead of the raw identifier. */
+  displayLabel?: string;
   className?: string;
 };
 
@@ -64,6 +68,7 @@ export const ToolHeader = ({
   className,
   type,
   state,
+  displayLabel,
   ...props
 }: ToolHeaderProps) => (
   <CollapsibleTrigger
@@ -75,7 +80,7 @@ export const ToolHeader = ({
   >
     <div className="flex min-w-0 flex-1 items-center gap-2">
       <WrenchIcon className="size-4 shrink-0 text-muted-foreground" />
-      <span className="truncate font-medium text-sm">{type}</span>
+      <span className="truncate font-medium text-sm">{displayLabel ?? type}</span>
     </div>
     <div className="flex shrink-0 items-center gap-2">
       {getStatusBadge(state)}
