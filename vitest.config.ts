@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { defineConfig } from "vitest/config";
+import { JUnitReporter } from "vitest/reporters";
 
 /**
  * Resolve the project root so Vitest matches the Next.js path aliases ("@/").
@@ -16,22 +17,7 @@ const projectRoot = fileURLToPath(new URL(".", import.meta.url));
  */
 const coverageDirectory = resolve(projectRoot, "coverage");
 
-/**
- * Lazily import the JUnit reporter to keep the configuration compatible with
- * Node's CommonJS loader that Vitest uses when bundling the config file.
- */
-async function loadReporters() {
-  const { JUnitReporter } = await import("vitest/reporters");
-
-  return [
-    "default",
-    new JUnitReporter({
-      outputFile: resolve(coverageDirectory, "junit.xml"),
-    }),
-  ] as const;
-}
-
-export default defineConfig(async () => ({
+export default defineConfig({
   resolve: {
     alias: {
       "@": resolve(projectRoot, "."),
@@ -51,6 +37,15 @@ export default defineConfig(async () => ({
       reportsDirectory: coverageDirectory,
       reporter: ["text", "lcov"],
     },
-    reporters: await loadReporters(),
+    /**
+     * Emit human-readable output alongside a deterministic JUnit report so the
+     * CI workflow can publish coverage and test telemetry without reruns.
+     */
+    reporters: [
+      "default",
+      new JUnitReporter({
+        outputFile: resolve(coverageDirectory, "junit.xml"),
+      }),
+    ],
   },
-}));
+});
