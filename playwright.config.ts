@@ -39,7 +39,6 @@ const isHermeticPlaywrightRun =
  */
 const htmlReportDir = path.join(__dirname, "playwright-report");
 const blobReportPath = path.join(htmlReportDir, "blob-report.zip");
-const traceStorageDir = path.join(__dirname, "playwright-traces");
 const artifactOutputDir = path.join(__dirname, "playwright-results");
 
 /**
@@ -126,12 +125,6 @@ export default defineConfig({
   use: {
     baseURL,
     trace: "retain-on-failure",
-    /**
-     * Stashing traces under a dedicated directory prevents Playwright from
-     * scattering `trace.zip` bundles across multiple nested folders, which in
-     * turn simplifies the artifact upload glob in CI.
-     */
-    traceDir: traceStorageDir,
   },
   outputDir: artifactOutputDir,
   timeout: 240 * 1000,
