@@ -109,6 +109,19 @@ const computeEquityPolyline = (artifact: FinanceBacktestArtifact) => {
 };
 
 /**
+ * Local retest form state kept as strings to simplify input bindings and avoid
+ * constantly coercing user edits (e.g. partially typed tickers or dates).
+ */
+type RetestFormValues = {
+  symbol: string;
+  timeframe: string;
+  from: string;
+  to: string;
+  fastPeriod: string;
+  slowPeriod: string;
+};
+
+/**
  * Render the hermetic backtest artefact with metric cards, an inline equity
  * curve, and a paginated trade ledger. The component stays framework-agnostic
  * so it can be reused in tests and future dashboards.
@@ -120,7 +133,7 @@ export function BacktestReportArtifact({
   const [pageIndex, setPageIndex] = useState(0);
   const [isRetestOpen, setIsRetestOpen] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const [formValues, setFormValues] = useState(() => ({
+  const [formValues, setFormValues] = useState<RetestFormValues>(() => ({
     symbol: artifact.symbol,
     timeframe: artifact.timeframe,
     from: artifact.period.from,
