@@ -2,7 +2,6 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { defineConfig } from "vitest/config";
-import { JUnitReporter } from "vitest/reporters";
 
 /**
  * Resolve the project root so Vitest matches the Next.js path aliases ("@/").
@@ -43,9 +42,7 @@ export default defineConfig({
      */
     reporters: [
       "default",
-      new JUnitReporter({
-        outputFile: resolve(coverageDirectory, "junit.xml"),
-      }),
+      ["junit", { outputFile: resolve(coverageDirectory, "junit.xml") }],
     ],
   },
 });
