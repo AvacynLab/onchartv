@@ -92,3 +92,14 @@ jobs:
         env:
           # Ensure the Playwright server binding matches the GitHub Actions environment.
           PLAYWRIGHT_TEST_BASE_URL: http://127.0.0.1:3100
+
+      - name: Upload Playwright traces and reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts
+          path: |
+            playwright-report
+            playwright-results
+            playwright-traces
+          if-no-files-found: warn

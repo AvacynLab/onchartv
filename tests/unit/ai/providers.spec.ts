@@ -135,3 +135,77 @@ describe("ai provider configuration", () => {
     expect(chatModel.specificationVersion).toBe("v2");
   });
 });
+
+describe("loadMockLanguageModels", () => {
+  const importTestHelpers = async () => {
+    const module = await import("@/lib/ai/providers");
+    return module.__test;
+  };
+
+  beforeEach(() => {
+    vi.resetModules();
+    resetEnv();
+    process.env.PLAYWRIGHT = "true";
+  });
+
+  afterEach(() => {
+    resetEnv();
+  });
+
+  it("falls back to inline mocks when the bundled fixtures are missing", async () => {
+    const moduleNotFound = Object.assign(new Error("missing"), {
+      code: "MODULE_NOT_FOUND",
+    });
+
+    const __test = await importTestHelpers();
+
+    const result = __test.loadMockLanguageModels({
+      loadModule: <T,>(moduleId: string): T => {
+        if (moduleId === "./models.mock") {
+          throw moduleNotFound;
+        }
+
+        return require(moduleId) as T;
+      },
+      testingModels: null,
+      isMockTestingEnvironment: false,
+    });
+
+    const { MockLanguageModelV2 } = require("ai/test") as typeof import("ai/test");
+
+    expect(result.chatModel).toBeInstanceOf(MockLanguageModelV2);
+    expect(result.reasoningModel).toBeInstanceOf(MockLanguageModelV2);
+    expect(result.artifactModel).toBeInstanceOf(MockLanguageModelV2);
+    expect(result.titleModel).toBeInstanceOf(MockLanguageModelV2);
+
+    const generation = await result.titleModel.doGenerate?.({} as never);
+
+    expect(generation?.content[0]).toMatchObject({
+      type: "text",
+      text: "This is a test title",
+    });
+  });
+
+  it("reuses dedicated Playwright fixtures when they are available", async () => {
+    const sentinel = Symbol("mock-model");
+
+    const testingModels = {
+      chatModel: { sentinel },
+      reasoningModel: { sentinel },
+      titleModel: { sentinel },
+      artifactModel: { sentinel },
+    } as unknown as typeof import("@/lib/ai/models.mock");
+
+    const __test = await importTestHelpers();
+
+    const result = __test.loadMockLanguageModels({
+      loadModule: () => {
+        throw new Error("loadModule should not be invoked when mocks already exist");
+      },
+      testingModels,
+      isMockTestingEnvironment: true,
+    });
+
+    expect(result).toBe(testingModels);
+  });
+});

@@ -43,6 +43,8 @@ const isMockTestingEnvironment = Boolean(
     Reflect.get(env, "CI_PLAYWRIGHT")
 );
 
+type MockLanguageModelModule = typeof import("./models.mock");
+
 function createMockProvider() {
   if (isNextBuild) {
     /**
@@ -128,10 +130,11 @@ function createMockProvider() {
     }
   })();
 
-  const models =
-    isMockTestingEnvironment && testingModels
-      ? testingModels
-      : loadModule<typeof import("./models.mock")>("./models.mock");
+  const models = loadMockLanguageModels({
+    loadModule,
+    testingModels,
+    isMockTestingEnvironment,
+  });
   const { artifactModel, chatModel, reasoningModel, titleModel } = models;
   return customProvider({
     languageModels: {
@@ -142,6 +145,87 @@ function createMockProvider() {
     },
   });
 }
+
+function loadMockLanguageModels({
+  loadModule,
+  testingModels,
+  isMockTestingEnvironment,
+}: {
+  readonly loadModule: <T>(moduleId: string) => T;
+  readonly testingModels: MockLanguageModelModule | null;
+  readonly isMockTestingEnvironment: boolean;
+}): MockLanguageModelModule {
+  if (isMockTestingEnvironment && testingModels) {
+    return testingModels;
+  }
+
+  try {
+    return loadModule<MockLanguageModelModule>("./models.mock");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "MODULE_NOT_FOUND") {
+      throw error;
+    }
+
+    return createInlineMockLanguageModels(loadModule);
+  }
+}
+
+function createInlineMockLanguageModels(
+  loadModule: <T>(moduleId: string) => T
+): MockLanguageModelModule {
+  const { simulateReadableStream } = loadModule<typeof import("ai")>("ai");
+  const { MockLanguageModelV2 } = loadModule<typeof import("ai/test")>(
+    "ai/test"
+  );
+
+  const createModel = (responseText: string = "Hello, world!") =>
+    new MockLanguageModelV2({
+      doGenerate: async () => ({
+        rawCall: { rawPrompt: null, rawSettings: {} },
+        finishReason: "stop",
+        usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
+        content: [{ type: "text", text: responseText }],
+        warnings: [],
+      }),
+      doStream: async () => ({
+        stream: simulateReadableStream({
+          /**
+           * The inline fallback mirrors the behaviour from `models.mock.ts` so
+           * Playwright and Vitest continue to observe the same deterministic
+           * events even when the bundler accidentally tree-shakes the original
+           * module. Keeping the mocked chunks identical avoids accidental
+           * expectation drift between local runs and CI.
+           */
+          initialDelayInMs: 0,
+          chunkDelayInMs: 0,
+          chunks: [
+            { id: "mock-1", type: "text-start" },
+            { id: "mock-1", type: "text-delta", delta: responseText },
+            { id: "mock-1", type: "text-end" },
+            {
+              type: "finish",
+              finishReason: "stop",
+              usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
+            },
+          ],
+        }),
+        rawCall: { rawPrompt: null, rawSettings: {} },
+      }),
+    });
+
+  const inlineModels: MockLanguageModelModule = {
+    chatModel: createModel(),
+    reasoningModel: createModel(),
+    titleModel: createModel("This is a test title"),
+    artifactModel: createModel(),
+  };
+
+  return inlineModels;
+}
+
+export const __test = {
+  loadMockLanguageModels,
+};
 
 const shouldUseMocks =
   isClient ||
