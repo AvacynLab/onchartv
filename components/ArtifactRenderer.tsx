@@ -52,6 +52,13 @@ export function ArtifactRenderer({
     );
   }
 
+  /**
+   * Preserve the artefact label upfront so the default branch can surface a
+   * human-readable message without trying to access `type` on a `never`
+   * discriminant (which causes the build failure observed in CI).
+   */
+  const fallbackTypeLabel = artifact.type;
+
   switch (artifact.type) {
     case "finance.chart":
       return (
@@ -81,7 +88,7 @@ export function ArtifactRenderer({
           data-testid="artifact-renderer-error"
           role="alert"
         >
-          Contenu indisponible : l’artefact « {"type" in artifact ? artifact.type : "inconnu"} » n’est pas pris en charge.
+          Contenu indisponible : l’artefact « {fallbackTypeLabel} » n’est pas pris en charge.
         </div>
       );
   }
