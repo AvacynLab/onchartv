@@ -1,5 +1,6 @@
 import {
   APICallError,
+  type LanguageModelV2,
   type LanguageModelV2CallOptions,
   type LanguageModelV2Middleware,
   type LanguageModelV2StreamPart,
@@ -8,12 +9,10 @@ import {
   customProvider,
   extractReasoningMiddleware,
   wrapLanguageModel,
+  simulateReadableStream,
 } from "ai";
 
 type NodeModule = typeof import("module");
-
-import { simulateReadableStream } from "ai";
-import { MockLanguageModelV2 } from "ai/test";
 import type { ModelMessage } from "ai";
 
 import { isPlaywrightLikeEnvironment } from "./playwright-env";
@@ -48,7 +47,12 @@ const isMockTestingEnvironment = Boolean(
     Reflect.get(env, "CI_PLAYWRIGHT")
 );
 
-type MockLanguageModelModule = typeof import("./models.mock");
+type MockLanguageModelModule = {
+  readonly chatModel: LanguageModelV2;
+  readonly reasoningModel: LanguageModelV2;
+  readonly titleModel: LanguageModelV2;
+  readonly artifactModel: LanguageModelV2;
+};
 
 type InlineMockProfile = "basic" | "playwright";
 
@@ -159,27 +163,10 @@ function createInlineMockLanguageModels(
   }
 
   const createModel = (responseText: string = "Hello, world!") =>
-    new MockLanguageModelV2({
-      doGenerate: async () => ({
-        rawCall: { rawPrompt: null, rawSettings: {} },
-        finishReason: "stop",
-        usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
-        content: [{ type: "text", text: responseText }],
-        warnings: [],
-      }),
-      doStream: async () => ({
-        stream: simulateReadableStream({
-          /**
-           * The inline fallback mirrors the behaviour from `models.mock.ts` so
-           * unit tests continue to observe the same deterministic events even
-           * when the bundler tree-shakes the original module.
-           */
-          initialDelayInMs: 0,
-          chunkDelayInMs: 0,
-          chunks: buildBasicChunks(responseText),
-        }),
-        rawCall: { rawPrompt: null, rawSettings: {} },
-      }),
+    createInlineLanguageModel({
+      modelId: "inline-basic",
+      responseText,
+      chunkBuilder: (_options) => buildBasicChunks(responseText),
     });
 
   return {
@@ -198,32 +185,17 @@ function createPlaywrightInlineMocks(): MockLanguageModelModule {
     readonly responseText?: string;
     readonly includeReasoning?: boolean;
   }) =>
-    new MockLanguageModelV2({
-      doGenerate: async () => ({
-        rawCall: { rawPrompt: null, rawSettings: {} },
-        finishReason: "stop",
-        usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
-        content: [{ type: "text", text: responseText }],
-        warnings: [],
-      }),
-      doStream: async ({ prompt }) => ({
-        stream: simulateReadableStream({
-          /**
-           * The hermetic Playwright fixtures mimic the streaming cadence of
-           * the original `models.testing` helpers (25 ms cadence) so the
-           * browser tests continue to observe realistic token arrivals while
-           * remaining fast.
-           */
-          initialDelayInMs: 25,
-          chunkDelayInMs: 25,
-          chunks: buildPlaywrightChunks({
-            prompt,
-            includeReasoning,
-            fallbackText: responseText,
-          }),
+    createInlineLanguageModel({
+      modelId: "inline-playwright",
+      responseText,
+      initialDelayInMs: 25,
+      chunkDelayInMs: 25,
+      chunkBuilder: ({ prompt }) =>
+        buildPlaywrightChunks({
+          prompt,
+          includeReasoning,
+          fallbackText: responseText,
         }),
-        rawCall: { rawPrompt: null, rawSettings: {} },
-      }),
     });
 
   return {
@@ -231,6 +203,46 @@ function createPlaywrightInlineMocks(): MockLanguageModelModule {
     reasoningModel: createModel({ includeReasoning: true }),
     titleModel: createModel({ responseText: "This is a test title" }),
     artifactModel: createModel({}),
+  };
+}
+
+function createInlineLanguageModel({
+  modelId,
+  responseText,
+  chunkBuilder,
+  initialDelayInMs = 0,
+  chunkDelayInMs = 0,
+}: {
+  readonly modelId: string;
+  readonly responseText: string;
+  readonly chunkBuilder: (
+    options: LanguageModelV2CallOptions
+  ) => LanguageModelV2StreamPart[];
+  readonly initialDelayInMs?: number;
+  readonly chunkDelayInMs?: number;
+}): LanguageModelV2 {
+  return {
+    specificationVersion: "v2",
+    provider: "mock-provider",
+    modelId,
+    supportedUrls: {},
+    async doGenerate() {
+      return {
+        content: [{ type: "text", text: responseText }],
+        finishReason: "stop",
+        usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
+        warnings: [],
+      };
+    },
+    async doStream(options) {
+      return {
+        stream: simulateReadableStream({
+          initialDelayInMs,
+          chunkDelayInMs,
+          chunks: chunkBuilder(options),
+        }),
+      };
+    },
   };
 }
 
