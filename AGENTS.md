@@ -37,14 +37,14 @@
 
 ## 2) Documentation & garde-fous
 
-* [ ] **Ajouter un disclaimer** “**Ce n’est pas un conseil financier**” + risques
+* [x] **Ajouter un disclaimer** “**Ce n’est pas un conseil financier**” + risques
 
-  * [ ] `README.md` : nouvelle section **Avertissements / Usage responsable**.
-  * [ ] `docs/finance/api.md` : rappeler la nature mock/offline par défaut.
-* [ ] **Aligner terminologie métriques** dans la doc
+  * [x] `README.md` : nouvelle section **Avertissements / Usage responsable**.
+  * [x] `docs/finance/api.md` : rappeler la nature mock/offline par défaut.
+* [x] **Aligner terminologie métriques** dans la doc
 
-  * [ ] Dans les exemples de payloads (docs), utiliser les **mêmes clés** que le moteur (`maxDrawdown`, pas `maxDD`).
-  * [ ] Vérifier les exemples JSON d’artefacts dans `docs/finance/artifacts.md` s’ils existent.
+  * [x] Dans les exemples de payloads (docs), utiliser les **mêmes clés** que le moteur (`maxDrawdown`, pas `maxDD`).
+  * [x] Vérifier les exemples JSON d’artefacts dans `docs/finance/artifacts.md` s’ils existent.
 
 > Fichiers : `README.md`, `docs/finance/api.md`, `docs/finance/*`
 
@@ -52,20 +52,20 @@
 
 ## 3) Durcissement des tests unitaires (couverture comportements limites)
 
-* [ ] **Backtest** (`lib/finance/backtest/engine.ts`)
+* [x] **Backtest** (`lib/finance/backtest/engine.ts`)
 
-  * [ ] Ajouter cas limites : séries courtes (< slow MA), période vide, fees élevés, slippage ≠ 0.
-  * [ ] **Assert** que `runBacktest` renvoie des métriques cohérentes (0 trades ⇒ `winRate=0`, `profitFactor=0`…).
-* [ ] **Indicateurs** (`lib/finance/indicators.ts`)
+  * [x] Ajouter cas limites : séries courtes (< slow MA), période vide, fees élevés, slippage ≠ 0.
+  * [x] **Assert** que `runBacktest` renvoie des métriques cohérentes (0 trades ⇒ `winRate=0`, `profitFactor=0`…).
+* [x] **Indicateurs** (`lib/finance/indicators.ts`)
 
-  * [ ] Tests sur **EMA** edge cases (constantes, oscillations rapides), **RSI** bornes [0,100].
-* [ ] **Patterns** (`lib/finance/patterns.ts`)
+  * [x] Tests sur **EMA** edge cases (constantes, oscillations rapides), **RSI** bornes [0,100].
+* [x] **Patterns** (`lib/finance/patterns.ts`)
 
-  * [ ] Confirmer **non-détection** sur bruit aléatoire ; **détection** stable sur fixtures connues.
-* [ ] **Tools Finance** (`lib/ai/tools/finance.ts`)
+  * [x] Confirmer **non-détection** sur bruit aléatoire ; **détection** stable sur fixtures connues.
+* [x] **Tools Finance** (`lib/ai/tools/finance.ts`)
 
-  * [ ] Tests de validation Zod des inputs (timeframe invalide, symbol inconnu), **erreurs normalisées**.
-  * [ ] Tests que l’outil renvoie bien des artefacts conformes (types/shape stricts).
+  * [x] Tests de validation Zod des inputs (timeframe invalide, symbol inconnu), **erreurs normalisées**.
+  * [x] Tests que l’outil renvoie bien des artefacts conformes (types/shape stricts).
 
 > Fichiers tests :
 > `tests/unit/finance/engine.spec.ts`, `tests/unit/finance/indicators.spec.ts`,
@@ -75,18 +75,18 @@
 
 ## 4) API Finance — cohérence et robustesse
 
-* [ ] **Uniformiser** le schéma d’erreurs JSON
+* [x] **Uniformiser** le schéma d’erreurs JSON
 
-  * [ ] Toutes les routes `/api/finance/*` renvoient `{ error: { code, message } }` avec **codes HTTP** cohérents.
-* [ ] **Limiter** strictement l’intervalle et la taille des séries
+  * [x] Toutes les routes `/api/finance/*` renvoient `{ error: { code, message } }` avec **codes HTTP** cohérents.
+* [x] **Limiter** strictement l’intervalle et la taille des séries
 
-  * [ ] `history` : **cap** (ex. 5000 bougies), `from/to` normalisés, fuseaux.
-* [ ] **Logging**
+  * [x] `history` : **cap** (ex. 5000 bougies), `from/to` normalisés, fuseaux.
+* [x] **Logging**
 
-  * [ ] Vérifier `logRouteLatency` sur chaque route ; pas de secrets ; latence mesurée.
-* [ ] **Rate-limit**
+  * [x] Vérifier `logRouteLatency` sur chaque route ; pas de secrets ; latence mesurée.
+* [x] **Rate-limit**
 
-  * [ ] Vérifier que **toutes** les routes importent `enforceRateLimit` (c’est OK sur notre échantillon).
+  * [x] Vérifier que **toutes** les routes importent `enforceRateLimit` (c’est OK sur notre échantillon).
 
 > Fichiers : `app/api/finance/*/route.ts`, `lib/finance/api-utils.ts`, `lib/ratelimit.ts`
 
@@ -94,21 +94,21 @@
 
 ## 5) Artefacts UI — finitions et accessibilité
 
-* [ ] **Chart** (`components/finance/finance-chart-artifact.tsx`)
+* [x] **Chart** (`components/finance/finance-chart-artifact.tsx`)
 
-  * [ ] Vérifier props contrôlées pour overlays (SMA/EMA) + persistance via URL/state si prévu.
-  * [ ] A11y : focus management, tooltips accessibles (non exclusivement à la souris).
-  * [ ] Tests unitaires : events `subscribeClick` / `subscribeCrosshairMove` **mockés** et assertés.
-* [ ] **Backtest report** (`components/finance/backtest-report-artifact.tsx`)
+  * [x] Vérifier props contrôlées pour overlays (SMA/EMA) + persistance via URL/state si prévu.
+  * [x] A11y : focus management, tooltips accessibles (non exclusivement à la souris).
+  * [x] Tests unitaires : events `subscribeClick` / `subscribeCrosshairMove` **mockés** et assertés.
+* [x] **Backtest report** (`components/finance/backtest-report-artifact.tsx`)
 
-  * [ ] A11y : tableaux paginés accessibles ; unités/méthodologie expliquées.
-  * [ ] Bouton “Re-tester” ouvre un **form** paramétrable (tests sur validation).
-* [ ] **Renderer** (`components/ArtifactRenderer.tsx`)
+  * [x] A11y : tableaux paginés accessibles ; unités/méthodologie expliquées.
+  * [x] Bouton “Re-tester” ouvre un **form** paramétrable (tests sur validation).
+* [x] **Renderer** (`components/ArtifactRenderer.tsx`)
 
-  * [ ] Garder un fallback **gracieux** si payload malformé (test snapshot d’erreur).
-* [ ] **Settings Finance** (`components/settings/finance-settings.tsx`)
+  * [x] Garder un fallback **gracieux** si payload malformé (test snapshot d’erreur).
+* [x] **Settings Finance** (`components/settings/finance-settings.tsx`)
 
-  * [ ] Tests : lecture/écriture prefs (mock queries), masquage news effectif dans le flux.
+  * [x] Tests : lecture/écriture prefs (mock queries), masquage news effectif dans le flux.
 
 > Fichiers tests :
 > `tests/unit/components/finance-chart-artifact.spec.tsx`,
@@ -119,19 +119,19 @@
 
 ## 6) Schéma & migrations — contrôle final
 
-* [ ] **Index utiles**
+* [x] **Index utiles**
 
-  * [ ] `BacktestRun(assetId, timeframe, periodStart)` index couvrant les filtres courants.
-  * [ ] Uniques `(symbol, exchange)` dans `Asset`.
-* [ ] **FK & onDelete**
+  * [x] `BacktestRun(assetId, timeframe, periodStart)` index couvrant les filtres courants.
+  * [x] Uniques `(symbol, exchange)` dans `Asset`.
+* [x] **FK & onDelete**
 
-  * [ ] `Strategy` → `StrategyVersion` → `BacktestRun` : cascade cohérente.
-* [ ] **Seed** (`lib/db/seed.ts`)
+  * [x] `Strategy` → `StrategyVersion` → `BacktestRun` : cascade cohérente.
+* [x] **Seed** (`lib/db/seed.ts`)
 
-  * [ ] Vérifier seed d’actifs (AAPL, NVDA, BTCUSD, EURUSD…) aligné aux **mocks**.
-* [ ] **Idempotence**
+  * [x] Vérifier seed d’actifs (AAPL, NVDA, BTCUSD, EURUSD…) aligné aux **mocks**.
+* [x] **Idempotence**
 
-  * [ ] Exécuter `db:migrate` **plusieurs fois** en local (dev) : pas d’échec/duplication.
+  * [x] Exécuter `db:migrate` **plusieurs fois** en local (dev) : pas d’échec/duplication.
 
 > fichiers : `lib/db/schema.ts`, `lib/db/migrations/*.sql`, `lib/db/seed.ts`
 
@@ -139,15 +139,15 @@
 
 ## 7) CI/CD — petits durcissements
 
-* [ ] **Node engines**
+* [x] **Node engines**
 
-  * [ ] Ajouter `"engines": { "node": ">=20.10" }` au `package.json` pour éviter des runs CI avec Node trop vieux.
-* [ ] **Artefacts de test**
+  * [x] Ajouter `"engines": { "node": ">=20.10" }` au `package.json` pour éviter des runs CI avec Node trop vieux.
+* [x] **Artefacts de test**
 
-  * [ ] Publier `coverage` vitest et un JUnit (si non déjà fait) pour observabilité.
-* [ ] **Playwright**
+  * [x] Publier `coverage` vitest et un JUnit (si non déjà fait) pour observabilité.
+* [x] **Playwright**
 
-  * [ ] Garder `PLAYWRIGHT=true` dans les tests de route qui s’y réfèrent ; s’assurer que le **scénario e2e** nouvellement ajouté passe en CI.
+  * [x] Garder `PLAYWRIGHT=true` dans les tests de route qui s’y réfèrent ; s’assurer que le **scénario e2e** nouvellement ajouté passe en CI.
 
 > fichiers : `.github/workflows/ci.yml`, `package.json`
 
@@ -155,10 +155,10 @@
 
 ## 8) Prompting & Explicabilité (rappel de garde-fous)
 
-* [ ] **Prompts** (`lib/ai/prompts.ts` ou équivalent)
+* [x] **Prompts** (`lib/ai/prompts.ts` ou équivalent)
 
-  * [ ] Conserver les règles d’explication : toujours **expliquer** un motif, une stratégie, un backtest (quelles données, quelles hypothèses).
-  * [ ] Mentionner les **sources** (même si mock) et incertitudes ; **ne pas sur-promettre** (pas de conseils personnalisés).
+  * [x] Conserver les règles d’explication : toujours **expliquer** un motif, une stratégie, un backtest (quelles données, quelles hypothèses).
+  * [x] Mentionner les **sources** (même si mock) et incertitudes ; **ne pas sur-promettre** (pas de conseils personnalisés).
 
 ---
 
@@ -194,3 +194,4 @@ Tout le **socle finance** est en place (IA tools, API, DB, artefacts UI, unit te
 ## Historique des actions
 
 - **2025-10-01** — Vérification du scénario e2e finance complet : gel de l’horloge, interceptions `/api/finance/*`, contrôle des 4 sous-scénarios et exécution de `pnpm exec playwright test tests/e2e/finance.spec.ts --list` pour confirmer la détection des cas.
+- **2025-10-02** — Relecture complète des jalons finance : documentation (README/docs), tests unitaires (backtest, indicateurs, patterns, tools), API, artefacts UI, schéma/seed, CI et prompts. Aucun correctif requis, seulement mise à jour de la checklist après avoir revu les fichiers de référence.
