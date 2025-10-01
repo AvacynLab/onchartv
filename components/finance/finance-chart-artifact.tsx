@@ -172,6 +172,20 @@ const palettesEqual = (a: ThemePalette, b: ThemePalette) =>
   Object.entries(a).every(([key, value]) => b[key as keyof ThemePalette] === value);
 
 /**
+ * Local storage namespace used to persist overlay visibility across sessions so
+ * that analysts keep their preferred SMA/EMA combinations when reopening the
+ * chart artefact.
+ */
+const OVERLAY_STORAGE_NAMESPACE = "finance.chart.overlays";
+
+const isOverlayVisibilityRecord = (value: unknown): value is OverlayVisibilityState => {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  return Object.values(value).every((entry) => typeof entry === "boolean");
+};
+
+/**
  * Properties accepted by the finance chart artefact renderer. An optional
  * `annotations` payload augments the base OHLCV view with pattern detection
  * output streamed by `tool.finance.chart.annotate`.
@@ -234,27 +248,67 @@ export const FinanceChartArtifact = memo(
     const [hovered, setHovered] = useState<CandleSnapshot | null>(null);
     const [selected, setSelected] = useState<CandleSnapshot | null>(null);
     const [palette, setPalette] = useState<ThemePalette>(FALLBACK_PALETTE);
+    const overlayPreferencesRef = useRef<OverlayVisibilityState | null>(null);
 
     const chartHeadingId = useId();
     const chartContainerId = useId();
     const chartAccessibleLabelId = useId();
     const overlayDescriptionId = useId();
     const detailPanelId = useId();
+    const keyboardHintId = useId();
 
-    const latestCandle = useMemo(() => {
-      const last = artifact.ohlcv.at(-1);
-      if (!last) {
-        return null;
+    const overlayStorageKey = useMemo(
+      () => `${OVERLAY_STORAGE_NAMESPACE}:${artifact.symbol}:${artifact.timeframe}`,
+      [artifact.symbol, artifact.timeframe]
+    );
+
+    const candlestickData = useMemo(
+      () =>
+        artifact.ohlcv.map((candle) => ({
+          time: candle.t as UTCTimestamp,
+          open: candle.o,
+          high: candle.h,
+          low: candle.l,
+          close: candle.c,
+        } satisfies CandlestickData)),
+      [artifact.ohlcv]
+    );
+
+    const candleSnapshots = useMemo(
+      () =>
+        candlestickData.map((candle) => ({
+          candle,
+          label: buildCandleLabel(artifact.symbol, candle),
+        } satisfies CandleSnapshot)),
+      [artifact.symbol, candlestickData]
+    );
+
+    const latestSnapshot = candleSnapshots.at(-1) ?? null;
+
+    useEffect(() => {
+      if (typeof window === "undefined") {
+        overlayPreferencesRef.current = null;
+        return;
       }
-      const candle: CandlestickData = {
-        time: last.t as UTCTimestamp,
-        open: last.o,
-        high: last.h,
-        low: last.l,
-        close: last.c,
-      };
-      return { candle, label: buildCandleLabel(artifact.symbol, candle) };
-    }, [artifact]);
+
+      try {
+        const stored = window.localStorage.getItem(overlayStorageKey);
+        if (!stored) {
+          overlayPreferencesRef.current = null;
+          return;
+        }
+
+        const parsed = JSON.parse(stored);
+        if (isOverlayVisibilityRecord(parsed)) {
+          overlayPreferencesRef.current = parsed;
+          setOverlayVisibility(parsed);
+        } else {
+          overlayPreferencesRef.current = null;
+        }
+      } catch {
+        overlayPreferencesRef.current = null;
+      }
+    }, [overlayStorageKey]);
 
     useEffect(() => {
       /**
@@ -384,19 +438,11 @@ export const FinanceChartArtifact = memo(
         return;
       }
 
-      const candleData: CandlestickData[] = artifact.ohlcv.map((candle) => ({
-        time: candle.t as UTCTimestamp,
-        open: candle.o,
-        high: candle.h,
-        low: candle.l,
-        close: candle.c,
-      }));
-
-      candleSeries.setData(candleData);
+      candleSeries.setData(candlestickData);
       chart.timeScale().fitContent();
-      setSelected((current) => current ?? latestCandle);
+      setSelected((current) => current ?? latestSnapshot);
       setHovered(null);
-    }, [artifact, latestCandle]);
+    }, [candlestickData, latestSnapshot]);
 
     useEffect(() => {
       const chart = chartRef.current;
@@ -436,9 +482,10 @@ export const FinanceChartArtifact = memo(
 
       setOverlayVisibility((prev) => {
         const next: OverlayVisibilityState = {};
+        const stored = overlayPreferencesRef.current;
         artifact.overlays.forEach((overlay) => {
           const id = overlayId(overlay);
-          const visible = prev[id] ?? true;
+          const visible = stored?.[id] ?? prev[id] ?? true;
           next[id] = visible;
           const series = overlaySeriesRef.current.get(id);
           if (series) {
@@ -455,6 +502,31 @@ export const FinanceChartArtifact = memo(
         overlaySeriesRef.current.clear();
       };
     }, [artifact.overlays]);
+
+    useEffect(() => {
+      overlayPreferencesRef.current = overlayVisibility;
+
+      if (typeof window === "undefined") {
+        return;
+      }
+
+      if (Object.keys(overlayVisibility).length === 0) {
+        return;
+      }
+
+      try {
+        window.localStorage.setItem(
+          overlayStorageKey,
+          JSON.stringify(overlayVisibility)
+        );
+      } catch {
+        /**
+         * Silently ignore storage quota or privacy mode errors. Persisting the
+         * overlays is a progressive enhancement and should not break the chart
+         * when the browser refuses to store the data.
+         */
+      }
+    }, [overlayVisibility, overlayStorageKey]);
 
     useEffect(() => {
       /**
@@ -542,7 +614,91 @@ export const FinanceChartArtifact = memo(
       chart.timeScale().setVisibleRange(visibleRange);
     };
 
-    const activeSnapshot = hovered ?? selected ?? latestCandle;
+    const findSnapshotIndex = (snapshot: CandleSnapshot | null) => {
+      if (!snapshot) {
+        return -1;
+      }
+      return candleSnapshots.findIndex(
+        (candidate) => candidate.candle.time === snapshot.candle.time
+      );
+    };
+
+    const handleChartFocus = () => {
+      if (!candleSnapshots.length) {
+        return;
+      }
+      setHovered((current) => current ?? selected ?? latestSnapshot);
+      setSelected((current) => {
+        if (current) {
+          return current;
+        }
+        return latestSnapshot;
+      });
+    };
+
+    const handleChartBlur = () => {
+      setHovered(null);
+    };
+
+    const handleChartKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (!candleSnapshots.length) {
+        return;
+      }
+
+      const active = hovered ?? selected ?? latestSnapshot;
+      const lastIndex = candleSnapshots.length - 1;
+      const currentIndex = findSnapshotIndex(active);
+      const baseIndex = currentIndex === -1 ? lastIndex : currentIndex;
+      let nextIndex = baseIndex;
+
+      switch (event.key) {
+        case "ArrowLeft":
+          nextIndex = baseIndex <= 0 ? 0 : baseIndex - 1;
+          break;
+        case "ArrowRight":
+          nextIndex = baseIndex >= lastIndex ? lastIndex : baseIndex + 1;
+          break;
+        case "Home":
+          nextIndex = 0;
+          break;
+        case "End":
+          nextIndex = lastIndex;
+          break;
+        case "PageUp":
+          nextIndex = Math.max(0, baseIndex - 5);
+          break;
+        case "PageDown":
+          nextIndex = Math.min(lastIndex, baseIndex + 5);
+          break;
+        case "Enter":
+          if (onExplainCandle && active) {
+            event.preventDefault();
+            onExplainCandle({
+              timestamp: Number(active.candle.time),
+              symbol: artifact.symbol,
+            });
+          }
+          return;
+        default:
+          return;
+      }
+
+      event.preventDefault();
+
+      if (nextIndex === baseIndex) {
+        return;
+      }
+
+      const snapshot = candleSnapshots[nextIndex];
+      if (!snapshot) {
+        return;
+      }
+
+      setSelected(snapshot);
+      setHovered(snapshot);
+    };
+
+    const activeSnapshot = hovered ?? selected ?? latestSnapshot;
 
     return (
       <div className="space-y-4" data-testid="finance-chart-artifact">
@@ -573,15 +729,27 @@ export const FinanceChartArtifact = memo(
         </header>
 
         <div
-          aria-describedby={activeSnapshot ? detailPanelId : undefined}
+          aria-describedby={[keyboardHintId, activeSnapshot ? detailPanelId : null]
+            .filter(Boolean)
+            .join(" ") || undefined}
           aria-labelledby={`${chartAccessibleLabelId} ${chartHeadingId}`}
           className="relative overflow-hidden rounded-lg border bg-card"
           id={chartContainerId}
           ref={containerRef}
           role="img"
+          tabIndex={0}
+          onFocus={handleChartFocus}
+          onBlur={handleChartBlur}
+          onKeyDown={handleChartKeyDown}
         >
           <span className="sr-only" id={chartAccessibleLabelId}>
             Graphique en chandeliers pour {artifact.symbol} en {artifact.timeframe}
+          </span>
+          <span className="sr-only" id={keyboardHintId}>
+            Utilisez les flèches gauche et droite pour parcourir les bougies, Page
+            Up/Page Down pour avancer ou reculer par blocs, Home/End pour accéder
+            aux extrêmes et Entrée pour lancer l'explication lorsqu'elle est
+            disponible.
           </span>
         </div>
 

@@ -5,7 +5,7 @@ import {
   financeToolSchemas,
 } from "@/lib/ai/tools/finance";
 import { InMemoryMarketDataAdapter } from "@/lib/finance/data-adapter";
-import { FINANCE_SERIES } from "@/lib/finance/mock-data";
+import { FINANCE_SERIES, type FinanceSymbol } from "@/lib/finance/mock-data";
 import { DEFAULT_FINANCE_PREFERENCES } from "@/lib/finance/preferences";
 import type { FinanceArtifact } from "@/lib/finance/types";
 
@@ -55,6 +55,22 @@ describe("finance tools", () => {
     ).toThrow(/Cannot request more than/);
   });
 
+  it("validates the allowed timeframe and symbol universe", () => {
+    expect(() =>
+      financeToolSchemas.chartFetch.parse({
+        symbol: "TSLA" as unknown as FinanceSymbol,
+        timeframe: "1D",
+      })
+    ).toThrow(/Invalid enum value/);
+
+    expect(() =>
+      financeToolSchemas.chartFetch.parse({
+        symbol: "AAPL",
+        timeframe: "1H" as unknown as "1D",
+      })
+    ).toThrow(/Only daily candles are supported/);
+  });
+
   it("annotates chart data and returns detected structures", async () => {
     const tools = createTestTools();
     const base = await tools.chartFetch.execute({
@@ -72,6 +88,20 @@ describe("finance tools", () => {
     expect(annotations.type).toBe("finance.chart.annotations");
     expect(Array.isArray(annotations.patterns)).toBe(true);
     expect(Array.isArray(annotations.levels)).toBe(true);
+    expect(
+      annotations.patterns.every((pattern) =>
+        Number.isInteger(pattern.timestamp) &&
+        typeof pattern.name === "string" &&
+        typeof pattern.explanation === "string"
+      )
+    ).toBe(true);
+    expect(
+      annotations.levels.every((level) =>
+        typeof level.price === "number" &&
+        typeof level.from === "number" &&
+        typeof level.to === "number"
+      )
+    ).toBe(true);
   });
 
   it("returns mocked fundamentals with highlights", async () => {
@@ -137,6 +167,26 @@ describe("finance tools", () => {
     expect(backtest.runId).toBe("bt-fixed");
     expect(backtest.metrics.trades).toBeGreaterThanOrEqual(0);
     expect(backtest.equityCurve.length).toBeGreaterThan(0);
+  });
+
+  it("rejects invalid backtest date ranges with a descriptive error", async () => {
+    const tools = createTestTools();
+
+    await expect(
+      tools.strategyBacktest.execute({
+        symbol: "AAPL",
+        timeframe: "1D",
+        range: {
+          from: "2024-06-01T00:00:00Z",
+          to: "2024-01-01T00:00:00Z",
+        },
+        strategy: {
+          type: "sma-crossover",
+          params: { fastPeriod: 5, slowPeriod: 10 },
+        },
+        risk: { initialCapital: 10_000 },
+      })
+    ).rejects.toThrow(/date de début doit précéder la date de fin/);
   });
 
   it("screens assets according to market cap filters", async () => {

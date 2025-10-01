@@ -70,6 +70,17 @@ pnpm dev
 
 Your app template should now be running on [localhost:3000](http://localhost:3000).
 
+## Avertissements / Usage responsable
+
+Les fonctionnalités finance intégrées à Chat SDK sont fournies à titre éducatif uniquement. Elles reposent sur des données **mockées hors ligne** conçues pour garantir la reproductibilité des tests et des exemples.
+
+- **Ce n’est pas un conseil financier** : aucune sortie ne doit être interprétée comme une recommandation d’investissement, d’achat ou de vente.
+- **Vérifiez toujours auprès de sources officielles** avant de prendre une décision ; les données simulées peuvent être incomplètes, obsolètes ou ne pas refléter les conditions de marché réelles.
+- **Comprenez les risques** associés au trading et à l’investissement (perte en capital, volatilité, liquidité). Adaptez les paramètres de stratégie à votre tolérance au risque et n’engagez que des fonds que vous pouvez vous permettre de perdre.
+- **Respectez le cadre réglementaire** applicable dans votre juridiction, notamment en matière de conseil personnalisé et d’utilisation de données financières.
+
+Le mode hors ligne est activé par défaut. Pour connecter un fournisseur réel, suivez la procédure décrite dans la section [Finance Tooling](#finance-tooling) tout en conservant l’obligation d’afficher un avertissement clair aux utilisateurs finaux.
+
 ## Finance Tooling
 
 The project ships with an offline-friendly finance assistant that can stream interactive artefacts for charts, backtests, fundamentals, and news. Key points:

@@ -9,7 +9,29 @@ import { defineConfig } from "vitest/config";
  */
 const projectRoot = fileURLToPath(new URL(".", import.meta.url));
 
-export default defineConfig({
+/**
+ * Deterministic output location for machine-readable Vitest telemetry.
+ * The CI workflow uploads the folder so dashboards can surface coverage
+ * and test regressions without rerunning the suite locally.
+ */
+const coverageDirectory = resolve(projectRoot, "coverage");
+
+/**
+ * Lazily import the JUnit reporter to keep the configuration compatible with
+ * Node's CommonJS loader that Vitest uses when bundling the config file.
+ */
+async function loadReporters() {
+  const { JUnitReporter } = await import("vitest/reporters");
+
+  return [
+    "default",
+    new JUnitReporter({
+      outputFile: resolve(coverageDirectory, "junit.xml"),
+    }),
+  ] as const;
+}
+
+export default defineConfig(async () => ({
   resolve: {
     alias: {
       "@": resolve(projectRoot, "."),
@@ -26,7 +48,9 @@ export default defineConfig({
     exclude: ["tests/unit/**/*.test.ts"],
     coverage: {
       provider: "v8",
+      reportsDirectory: coverageDirectory,
       reporter: ["text", "lcov"],
     },
+    reporters: await loadReporters(),
   },
-});
+}));

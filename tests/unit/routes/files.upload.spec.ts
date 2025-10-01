@@ -1,7 +1,9 @@
 // Force the route into its hermetic branch so uploads are mocked rather than
 // calling Vercel Blob during unit tests.
 const originalPlaywright = process.env.PLAYWRIGHT;
-process.env.PLAYWRIGHT = "1";
+// Mirror the real Playwright environment marker so the upload route selects
+// its hermetic branch without relying on legacy truthy values.
+process.env.PLAYWRIGHT = "true";
 
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

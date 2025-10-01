@@ -61,7 +61,12 @@ export async function GET(request: Request): Promise<Response> {
 
     console.error("[api:finance.fundamentals] unexpected error", error);
     return Response.json(
-      { code: "internal_error:api", message: "Unexpected error while fetching fundamentals." },
+      {
+        error: {
+          code: "internal_error:api",
+          message: "Unexpected error while fetching fundamentals.",
+        },
+      },
       { status: 500 }
     );
   } finally {

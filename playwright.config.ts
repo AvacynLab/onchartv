@@ -128,7 +128,7 @@ export default defineConfig({
     },
     {
       name: "e2e",
-      testMatch: /e2e\/.*\.test\.ts/,
+      testMatch: /e2e\/.*\.(spec|test)\.ts/,
       use: {
         ...devices["Desktop Chrome"],
         storageState: "tests/.auth/state.json",

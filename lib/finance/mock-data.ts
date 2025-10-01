@@ -180,6 +180,34 @@ export const NEWS_ITEMS: readonly MockNewsItem[] = [
     sentiment: "positive",
   },
   {
+    /**
+     * Additional NVDA entries keep the offline mocks aligned with the E2E
+     * journey that requests "3 news" items. Their timestamps intentionally span
+     * multiple weeks so the chronological sorting exercised by the tests can
+     * detect regressions.
+     */
+    id: "news-nvda-2",
+    symbol: "NVDA",
+    source: "MockWire",
+    title: "La division gaming de NVIDIA franchit un nouveau palier",
+    url: "https://news.example.com/nvda-gaming",
+    summary:
+      "Les revenus gaming progressent de 18 % grâce aux cartes spécialisées IA et au ray tracing génératif.",
+    publishedAt: "2025-02-10T14:05:00Z",
+    sentiment: "neutral",
+  },
+  {
+    id: "news-nvda-3",
+    symbol: "NVDA",
+    source: "Les Échos",
+    title: "NVIDIA investit dans une chaîne d'approvisionnement européenne",
+    url: "https://news.example.com/nvda-europe",
+    summary:
+      "Un plan d'investissement conjoint avec plusieurs fondeurs vise à sécuriser la production de puces haut de gamme.",
+    publishedAt: "2025-02-24T07:45:00Z",
+    sentiment: "positive",
+  },
+  {
     id: "news-btc-1",
     symbol: "BTCUSD",
     source: "CoinDesk",

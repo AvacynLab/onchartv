@@ -698,6 +698,18 @@ export function FinanceSettings(): JSX.Element {
               <span>Afficher les news par défaut</span>
             </label>
           </div>
+          {!state.showNews ? (
+            <p
+              aria-live="polite"
+              className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900/40 dark:bg-amber-950/40 dark:text-amber-100"
+              data-testid="finance-settings-news-disabled"
+              role="status"
+            >
+              Les actualités seront masquées dans les prochains échanges. L’agent
+              proposera un lien ou un rappel lorsque des news pertinentes sont
+              disponibles.
+            </p>
+          ) : null}
         </section>
 
         <div className="flex items-center justify-end gap-2">

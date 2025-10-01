@@ -1,9 +1,12 @@
 const originalPlaywright = process.env.PLAYWRIGHT;
-process.env.PLAYWRIGHT = "1";
+// Align the mocked environment with `PLAYWRIGHT=true` so hermetic code paths
+// mirror the behaviour exercised by Playwright.
+process.env.PLAYWRIGHT = "true";
 
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GET } from "@/app/api/finance/history/route";
+import { getMarketDataAdapter } from "@/lib/finance/server-adapter";
 import { __resetRateLimitStateForTests } from "@/lib/ratelimit";
 
 vi.mock("server-only", () => ({}));
@@ -49,6 +52,36 @@ describe("/api/finance/history", () => {
 
     expect(response.status).toBe(400);
     const error = await response.json();
-    expect(error.code).toBe("bad_request:api");
+    expect(error.error.code).toBe("bad_request:api");
+  });
+
+  it("caps the default candle count to the maximum when the adapter returns more", async () => {
+    const adapter = getMarketDataAdapter();
+    const largeSeries = Array.from({ length: 6_000 }, (_, index) => ({
+      timestamp: 1_600_000_000 + index * 86_400,
+      open: 100 + index,
+      high: 105 + index,
+      low: 95 + index,
+      close: 102 + index,
+      volume: 1_000 + index,
+    }));
+    const historySpy = vi
+      .spyOn(adapter, "history")
+      .mockResolvedValueOnce(largeSeries);
+
+    const response = await GET(
+      new Request("http://localhost/api/finance/history?symbol=AAPL")
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+
+    expect(payload.count).toBe(5_000);
+    expect(payload.ohlcv).toHaveLength(5_000);
+    expect(historySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 5_000 })
+    );
+
+    historySpy.mockRestore();
   });
 });

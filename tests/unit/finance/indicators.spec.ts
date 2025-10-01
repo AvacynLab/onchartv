@@ -47,6 +47,27 @@ describe("calculateEMA", () => {
     expect(ema[5]).toBeCloseTo(44.346, 3);
     expect(ema[6]).toBeCloseTo(44.597, 3);
   });
+
+  it("returns a flat series when prices are constant", () => {
+    const closes = new Array(20).fill(150);
+    const ema = calculateEMA(closes, { period: 5 });
+
+    // First defined value should equal the underlying SMA and remain constant afterwards.
+    expect(ema[4]).toBe(150);
+    expect(ema.slice(4).every((value) => value === 150)).toBe(true);
+  });
+
+  it("dampens oscillations compared to the underlying price series", () => {
+    const zigZag = [100, 110, 90, 112, 88, 115, 85, 118, 82, 120];
+    const ema = calculateEMA(zigZag, { period: 3 });
+
+    const priceRange = Math.max(...zigZag) - Math.min(...zigZag);
+    const emaRange =
+      Math.max(...ema.filter((value): value is number => value !== null)) -
+      Math.min(...ema.filter((value): value is number => value !== null));
+
+    expect(emaRange).toBeLessThan(priceRange);
+  });
 });
 
 describe("calculateRSI", () => {
@@ -57,6 +78,22 @@ describe("calculateRSI", () => {
     expect(rsi[14]).toBeCloseTo(70.464, 3);
     expect(rsi[15]).toBeCloseTo(66.250, 3);
     expect(rsi[20]).toBeCloseTo(62.881, 3);
+  });
+
+  it("clips values to the [0, 100] interval on extreme moves", () => {
+    const relentlessRally = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+    const waterfall = [15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1];
+
+    const bullish = calculateRSI(relentlessRally, { period: 5 });
+    const bearish = calculateRSI(waterfall, { period: 5 });
+
+    const bullishValues = bullish.filter((value): value is number => value !== null);
+    const bearishValues = bearish.filter((value): value is number => value !== null);
+
+    expect(bullishValues.every((value) => value <= 100 && value >= 0)).toBe(true);
+    expect(bearishValues.every((value) => value <= 100 && value >= 0)).toBe(true);
+    expect(Math.max(...bullishValues)).toBe(100);
+    expect(Math.min(...bearishValues)).toBe(0);
   });
 });
 

@@ -2,7 +2,9 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-process.env.PLAYWRIGHT = "1";
+// Ensure the in-memory database exercises the same Playwright branch as the
+// production hermetic tests by setting the canonical "true" flag.
+process.env.PLAYWRIGHT = "true";
 
 import type {
   CreateBacktestRunInput,
