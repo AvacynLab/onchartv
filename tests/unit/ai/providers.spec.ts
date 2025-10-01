@@ -131,7 +131,7 @@ describe("ai provider configuration", () => {
 
     const chatModel = myProvider.languageModel("chat-model");
 
-    expect(chatModel.provider).toBe("mock");
+    expect(chatModel.provider).toBe("mock-provider");
     expect(chatModel.specificationVersion).toBe("v2");
   });
 });
@@ -168,15 +168,13 @@ describe("loadMockLanguageModels", () => {
         return require(moduleId) as T;
       },
       testingModels: null,
-      isMockTestingEnvironment: false,
+      profile: "basic",
     });
 
-    const { MockLanguageModelV2 } = require("ai/test") as typeof import("ai/test");
-
-    expect(result.chatModel).toBeInstanceOf(MockLanguageModelV2);
-    expect(result.reasoningModel).toBeInstanceOf(MockLanguageModelV2);
-    expect(result.artifactModel).toBeInstanceOf(MockLanguageModelV2);
-    expect(result.titleModel).toBeInstanceOf(MockLanguageModelV2);
+    expect(typeof result.chatModel.doGenerate).toBe("function");
+    expect(typeof result.reasoningModel.doGenerate).toBe("function");
+    expect(typeof result.artifactModel.doGenerate).toBe("function");
+    expect(typeof result.titleModel.doGenerate).toBe("function");
 
     const generation = await result.titleModel.doGenerate?.({} as never);
 
@@ -203,9 +201,58 @@ describe("loadMockLanguageModels", () => {
         throw new Error("loadModule should not be invoked when mocks already exist");
       },
       testingModels,
-      isMockTestingEnvironment: true,
+      profile: "playwright",
     });
 
     expect(result).toBe(testingModels);
+  });
+
+  it("emits Playwright-specific deltas when testing fixtures are unavailable", async () => {
+    const moduleNotFound = Object.assign(new Error("missing"), {
+      code: "MODULE_NOT_FOUND",
+    });
+
+    const __test = await importTestHelpers();
+
+    const models = __test.loadMockLanguageModels({
+      loadModule: <T,>(moduleId: string): T => {
+        if (moduleId === "./models.mock") {
+          throw moduleNotFound;
+        }
+
+        return require(moduleId) as T;
+      },
+      testingModels: null,
+      profile: "playwright",
+    });
+
+    const streamResult = await models.chatModel.doStream?.({
+      prompt: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Why is grass green?" }],
+        },
+      ],
+    } as never);
+
+    if (!streamResult) {
+      throw new Error("Expected a streaming response from the inline Playwright mock");
+    }
+
+    const reader = streamResult.stream.getReader();
+    const deltas: string[] = [];
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      if (value.type === "text-delta") {
+        deltas.push(value.delta);
+      }
+    }
+
+    expect(deltas.join("").trim()).toContain("It's just green duh!");
   });
 });

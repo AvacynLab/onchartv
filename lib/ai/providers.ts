@@ -2,6 +2,7 @@ import {
   APICallError,
   type LanguageModelV2CallOptions,
   type LanguageModelV2Middleware,
+  type LanguageModelV2StreamPart,
 } from "@ai-sdk/provider";
 import {
   customProvider,
@@ -10,6 +11,10 @@ import {
 } from "ai";
 
 type NodeModule = typeof import("module");
+
+import { simulateReadableStream } from "ai";
+import { MockLanguageModelV2 } from "ai/test";
+import type { ModelMessage } from "ai";
 
 import { isPlaywrightLikeEnvironment } from "./playwright-env";
 
@@ -45,47 +50,31 @@ const isMockTestingEnvironment = Boolean(
 
 type MockLanguageModelModule = typeof import("./models.mock");
 
+type InlineMockProfile = "basic" | "playwright";
+
 function createMockProvider() {
-  if (isNextBuild) {
-    /**
-     * During the production build Next.js evaluates the provider even though no
-     * requests are executed. Returning a lightweight inline model avoids the
-     * `eval('require')` path and keeps the build hermetic when fixtures are not
-     * bundled alongside the compiled output.
-     */
-    const createBuildTimeModel = () =>
-      ({
-        specificationVersion: "v2",
-        provider: "mock",
-        modelId: "build-mock",
-        supportedUrls: {},
-        supportsImageUrls: false,
-        supportsStructuredOutputs: false,
-        doGenerate: async () => ({
-          rawCall: { rawPrompt: null, rawSettings: {} },
-          finishReason: "stop",
-          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-          content: [{ type: "text", text: "" }],
-          warnings: [],
-        }),
-        doStream: async () => ({
-          stream: new ReadableStream({
-            start(controller) {
-              controller.close();
-            },
-          }),
-          rawCall: { rawPrompt: null, rawSettings: {} },
-        }),
-      } as const);
+  const createProviderFromModels = (models: MockLanguageModelModule) => {
+    const { artifactModel, chatModel, reasoningModel, titleModel } = models;
 
     return customProvider({
       languageModels: {
-        "chat-model": createBuildTimeModel(),
-        "chat-model-reasoning": createBuildTimeModel(),
-        "title-model": createBuildTimeModel(),
-        "artifact-model": createBuildTimeModel(),
-      } as unknown as Record<string, never>,
+        "chat-model": chatModel,
+        "chat-model-reasoning": reasoningModel,
+        "title-model": titleModel,
+        "artifact-model": artifactModel,
+      },
     });
+  };
+
+  const shouldPreferTestingFixtures =
+    isMockTestingEnvironment || isPlaywrightEnvironment;
+
+  if (isNextBuild || isClient) {
+    return createProviderFromModels(
+      createInlineMockLanguageModels(
+        shouldPreferTestingFixtures ? "playwright" : "basic"
+      )
+    );
   }
 
   /**
@@ -133,29 +122,21 @@ function createMockProvider() {
   const models = loadMockLanguageModels({
     loadModule,
     testingModels,
-    isMockTestingEnvironment,
+    profile: shouldPreferTestingFixtures ? "playwright" : "basic",
   });
-  const { artifactModel, chatModel, reasoningModel, titleModel } = models;
-  return customProvider({
-    languageModels: {
-      "chat-model": chatModel,
-      "chat-model-reasoning": reasoningModel,
-      "title-model": titleModel,
-      "artifact-model": artifactModel,
-    },
-  });
+  return createProviderFromModels(models);
 }
 
 function loadMockLanguageModels({
   loadModule,
   testingModels,
-  isMockTestingEnvironment,
+  profile,
 }: {
   readonly loadModule: <T>(moduleId: string) => T;
   readonly testingModels: MockLanguageModelModule | null;
-  readonly isMockTestingEnvironment: boolean;
+  readonly profile: InlineMockProfile;
 }): MockLanguageModelModule {
-  if (isMockTestingEnvironment && testingModels) {
+  if (profile === "playwright" && testingModels) {
     return testingModels;
   }
 
@@ -166,17 +147,16 @@ function loadMockLanguageModels({
       throw error;
     }
 
-    return createInlineMockLanguageModels(loadModule);
+    return createInlineMockLanguageModels(profile);
   }
 }
 
 function createInlineMockLanguageModels(
-  loadModule: <T>(moduleId: string) => T
+  profile: InlineMockProfile = "basic"
 ): MockLanguageModelModule {
-  const { simulateReadableStream } = loadModule<typeof import("ai")>("ai");
-  const { MockLanguageModelV2 } = loadModule<typeof import("ai/test")>(
-    "ai/test"
-  );
+  if (profile === "playwright") {
+    return createPlaywrightInlineMocks();
+  }
 
   const createModel = (responseText: string = "Hello, world!") =>
     new MockLanguageModelV2({
@@ -191,36 +171,333 @@ function createInlineMockLanguageModels(
         stream: simulateReadableStream({
           /**
            * The inline fallback mirrors the behaviour from `models.mock.ts` so
-           * Playwright and Vitest continue to observe the same deterministic
-           * events even when the bundler accidentally tree-shakes the original
-           * module. Keeping the mocked chunks identical avoids accidental
-           * expectation drift between local runs and CI.
+           * unit tests continue to observe the same deterministic events even
+           * when the bundler tree-shakes the original module.
            */
           initialDelayInMs: 0,
           chunkDelayInMs: 0,
-          chunks: [
-            { id: "mock-1", type: "text-start" },
-            { id: "mock-1", type: "text-delta", delta: responseText },
-            { id: "mock-1", type: "text-end" },
-            {
-              type: "finish",
-              finishReason: "stop",
-              usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
-            },
-          ],
+          chunks: buildBasicChunks(responseText),
         }),
         rawCall: { rawPrompt: null, rawSettings: {} },
       }),
     });
 
-  const inlineModels: MockLanguageModelModule = {
+  return {
     chatModel: createModel(),
     reasoningModel: createModel(),
     titleModel: createModel("This is a test title"),
     artifactModel: createModel(),
   };
+}
 
-  return inlineModels;
+function createPlaywrightInlineMocks(): MockLanguageModelModule {
+  const createModel = ({
+    responseText = "Hello, world!",
+    includeReasoning = false,
+  }: {
+    readonly responseText?: string;
+    readonly includeReasoning?: boolean;
+  }) =>
+    new MockLanguageModelV2({
+      doGenerate: async () => ({
+        rawCall: { rawPrompt: null, rawSettings: {} },
+        finishReason: "stop",
+        usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
+        content: [{ type: "text", text: responseText }],
+        warnings: [],
+      }),
+      doStream: async ({ prompt }) => ({
+        stream: simulateReadableStream({
+          /**
+           * The hermetic Playwright fixtures mimic the streaming cadence of
+           * the original `models.testing` helpers (25 ms cadence) so the
+           * browser tests continue to observe realistic token arrivals while
+           * remaining fast.
+           */
+          initialDelayInMs: 25,
+          chunkDelayInMs: 25,
+          chunks: buildPlaywrightChunks({
+            prompt,
+            includeReasoning,
+            fallbackText: responseText,
+          }),
+        }),
+        rawCall: { rawPrompt: null, rawSettings: {} },
+      }),
+    });
+
+  return {
+    chatModel: createModel({}),
+    reasoningModel: createModel({ includeReasoning: true }),
+    titleModel: createModel({ responseText: "This is a test title" }),
+    artifactModel: createModel({}),
+  };
+}
+
+function buildBasicChunks(responseText: string): LanguageModelV2StreamPart[] {
+  const id = "mock-1";
+
+  return [
+    { id, type: "text-start" },
+    { id, type: "text-delta", delta: responseText },
+    { id, type: "text-end" },
+    buildFinishChunk({ inputTokens: 10, outputTokens: 20, totalTokens: 30 }),
+  ];
+}
+
+function buildPlaywrightChunks({
+  prompt,
+  includeReasoning,
+  fallbackText,
+}: {
+  readonly prompt: ModelMessage[];
+  readonly includeReasoning: boolean;
+  readonly fallbackText: string;
+}): LanguageModelV2StreamPart[] {
+  const recentMessage = prompt.at(-1);
+
+  if (!recentMessage) {
+    throw new Error("No recent message found!");
+  }
+
+  if (includeReasoning) {
+    const reasoningChunks = resolveReasoningPrompt(recentMessage);
+    if (reasoningChunks) {
+      return reasoningChunks;
+    }
+  }
+
+  const nonReasoningChunks = resolveStandardPrompt(recentMessage);
+  if (nonReasoningChunks) {
+    return nonReasoningChunks;
+  }
+
+  return [
+    ...buildTextDeltas(fallbackText),
+    buildFinishChunk({ inputTokens: 3, outputTokens: 10, totalTokens: 13 }),
+  ];
+}
+
+function resolveReasoningPrompt(
+  message: ModelMessage
+): LanguageModelV2StreamPart[] | null {
+  if (matchesSingleTextMessage(message, "Why is the sky blue?")) {
+    return [
+      ...buildReasoningDeltas("The sky is blue because of rayleigh scattering!"),
+      ...buildTextDeltas("It's just blue duh!"),
+      buildFinishChunk({ inputTokens: 3, outputTokens: 10, totalTokens: 13 }),
+    ];
+  }
+
+  if (matchesSingleTextMessage(message, "Why is grass green?")) {
+    return [
+      ...buildReasoningDeltas(
+        "Grass is green because of chlorophyll absorption!"
+      ),
+      ...buildTextDeltas("It's just green duh!"),
+      buildFinishChunk({ inputTokens: 3, outputTokens: 10, totalTokens: 13 }),
+    ];
+  }
+
+  return null;
+}
+
+function resolveStandardPrompt(
+  message: ModelMessage
+): LanguageModelV2StreamPart[] | null {
+  if (matchesSingleTextMessage(message, "Thanks!")) {
+    return [
+      ...buildTextDeltas("You're welcome!"),
+      buildFinishChunk({ inputTokens: 3, outputTokens: 10, totalTokens: 13 }),
+    ];
+  }
+
+  if (matchesSingleTextMessage(message, "Why is grass green?")) {
+    return [
+      ...buildTextDeltas("It's just green duh!"),
+      buildFinishChunk({ inputTokens: 3, outputTokens: 10, totalTokens: 13 }),
+    ];
+  }
+
+  if (
+    matchesSingleTextMessage(message, "Montre BTCUSD 1D avec SMA(50/200)")
+  ) {
+    return [
+      {
+        type: "tool-call",
+        toolCallId: "call_finance_chart",
+        toolName: "tool.finance.chart.fetch",
+        input: JSON.stringify({
+          symbol: "BTCUSD",
+          timeframe: "1D",
+          limit: 300,
+          overlays: [
+            { type: "sma", length: 50 },
+            { type: "sma", length: 200 },
+          ],
+        }),
+      },
+      buildFinishChunk({ inputTokens: 12, outputTokens: 4, totalTokens: 16 }, "tool-calls"),
+    ];
+  }
+
+  if (
+    message.role === "tool" &&
+    message.content?.some(
+      (part) =>
+        part.type === "tool-result" &&
+        part.toolCallId === "call_finance_chart" &&
+        part.toolName === "tool.finance.chart.fetch"
+    )
+  ) {
+    return [
+      ...buildTextDeltas(
+        "Graphique BTCUSD quotidien généré avec les moyennes 50 et 200 périodes."
+      ),
+      buildFinishChunk({ inputTokens: 12, outputTokens: 18, totalTokens: 30 }),
+    ];
+  }
+
+  if (
+    matchesSingleTextMessage(
+      message,
+      "Backteste SMA 50/200 sur AAPL 2018-01-01 → 2020-12-31"
+    )
+  ) {
+    return [
+      {
+        type: "tool-call",
+        toolCallId: "call_finance_backtest",
+        toolName: "tool.finance.strategy.backtest",
+        input: JSON.stringify({
+          symbol: "AAPL",
+          timeframe: "1D",
+          range: {
+            from: "2018-01-01T00:00:00Z",
+            to: "2020-12-31T00:00:00Z",
+          },
+          strategy: {
+            type: "sma-crossover",
+            params: { fastPeriod: 50, slowPeriod: 200 },
+          },
+          risk: {
+            initialCapital: 100_000,
+            commissionPerTrade: 1,
+            slippageBps: 10,
+          },
+        }),
+      },
+      buildFinishChunk({ inputTokens: 15, outputTokens: 6, totalTokens: 21 }, "tool-calls"),
+    ];
+  }
+
+  if (
+    message.role === "tool" &&
+    message.content?.some(
+      (part) =>
+        part.type === "tool-result" &&
+        part.toolCallId === "call_finance_backtest" &&
+        part.toolName === "tool.finance.strategy.backtest"
+    )
+  ) {
+    return [
+      ...buildTextDeltas(
+        "Backtest SMA 50/200 exécuté sur AAPL entre 2018 et 2020."
+      ),
+      buildFinishChunk({ inputTokens: 12, outputTokens: 18, totalTokens: 30 }),
+    ];
+  }
+
+  if (
+    matchesSingleTextMessage(message, "Donne fondamentaux + 3 news pour NVDA")
+  ) {
+    return [
+      {
+        type: "tool-call",
+        toolCallId: "call_finance_fundamentals",
+        toolName: "tool.finance.fundamentals.fetch",
+        input: JSON.stringify({ symbol: "NVDA" }),
+      },
+      buildFinishChunk({ inputTokens: 11, outputTokens: 6, totalTokens: 17 }, "tool-calls"),
+    ];
+  }
+
+  if (
+    message.role === "tool" &&
+    message.content?.some(
+      (part) =>
+        part.type === "tool-result" &&
+        part.toolCallId === "call_finance_fundamentals" &&
+        part.toolName === "tool.finance.fundamentals.fetch"
+    )
+  ) {
+    return [
+      ...buildTextDeltas(
+        "Fondamentaux NVDA et actualités synthétisés avec les données hors-ligne."
+      ),
+      buildFinishChunk({ inputTokens: 11, outputTokens: 24, totalTokens: 35 }),
+    ];
+  }
+
+  return null;
+}
+
+function matchesSingleTextMessage(
+  message: ModelMessage,
+  expectedText: string
+): boolean {
+  if (message.role !== "user") {
+    return false;
+  }
+
+  if (!Array.isArray(message.content) || message.content.length !== 1) {
+    return false;
+  }
+
+  const [part] = message.content;
+
+  return part.type === "text" && part.text === expectedText;
+}
+
+function buildTextDeltas(text: string): LanguageModelV2StreamPart[] {
+  const id = "mock-inline";
+  const words = text.split(" ");
+
+  return [
+    { id, type: "text-start" },
+    ...words.map((word) => ({
+      id,
+      type: "text-delta" as const,
+      delta: `${word} `,
+    })),
+    { id, type: "text-end" },
+  ];
+}
+
+function buildReasoningDeltas(text: string): LanguageModelV2StreamPart[] {
+  const id = "mock-inline-reasoning";
+  const words = text.split(" ");
+
+  return [
+    { id, type: "reasoning-start" },
+    ...words.map((word) => ({
+      id,
+      type: "reasoning-delta" as const,
+      delta: `${word} `,
+    })),
+    { id, type: "reasoning-end" },
+  ];
+}
+
+function buildFinishChunk(
+  usage: { inputTokens: number; outputTokens: number; totalTokens: number },
+  finishReason: "stop" | "tool-calls" = "stop"
+): LanguageModelV2StreamPart {
+  return {
+    type: "finish",
+    finishReason,
+    usage,
+  };
 }
 
 export const __test = {
