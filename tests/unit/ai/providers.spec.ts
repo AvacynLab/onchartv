@@ -158,6 +158,8 @@ describe("loadMockLanguageModels", () => {
 
         return require(moduleId) as T;
       },
+      resolveModule: (moduleId: string) =>
+        moduleId === "./models.mock" ? null : moduleId,
       testingModels: null,
       profile: "playwright",
     });
@@ -188,6 +190,8 @@ describe("loadMockLanguageModels", () => {
 
         return require(moduleId) as T;
       },
+      resolveModule: (moduleId: string) =>
+        moduleId === "./models.mock" ? null : moduleId,
       testingModels: null,
       profile: "basic",
     });
@@ -221,6 +225,7 @@ describe("loadMockLanguageModels", () => {
       loadModule: () => {
         throw new Error("loadModule should not be invoked when mocks already exist");
       },
+      resolveModule: () => "./models.mock",
       testingModels,
       profile: "playwright",
     });

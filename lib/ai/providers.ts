@@ -106,6 +106,22 @@ function createMockProvider() {
    */
   const loadModule = <T>(moduleId: string) => nodeRequire(moduleId) as T;
   /**
+   * Resolve optional mocks without emitting noisy stack traces when the file
+   * is absent (e.g. production bundles that strip the Playwright helpers).
+   */
+  const resolveModule = (moduleId: string) => {
+    try {
+      return nodeRequire.resolve(moduleId);
+    } catch (error) {
+      const { code } = error as NodeJS.ErrnoException;
+      if (code && code !== "MODULE_NOT_FOUND") {
+        throw error;
+      }
+
+      return null;
+    }
+  };
+  /**
    * Eagerly try to resolve the Playwright fixtures so the bundler keeps the
    * module in the compiled output. If the file is absent (e.g. in production
    * deployments where we do not ship the testing helpers) we silently fall
@@ -125,6 +141,7 @@ function createMockProvider() {
 
   const models = loadMockLanguageModels({
     loadModule,
+    resolveModule,
     testingModels,
     profile: shouldPreferTestingFixtures ? "playwright" : "basic",
   });
@@ -133,10 +150,12 @@ function createMockProvider() {
 
 function loadMockLanguageModels({
   loadModule,
+  resolveModule,
   testingModels,
   profile,
 }: {
   readonly loadModule: <T>(moduleId: string) => T;
+  readonly resolveModule: (moduleId: string) => string | null;
   readonly testingModels: MockLanguageModelModule | null;
   readonly profile: InlineMockProfile;
 }): MockLanguageModelModule {
@@ -144,10 +163,16 @@ function loadMockLanguageModels({
     return testingModels;
   }
 
+  const resolvedModuleId = resolveModule("./models.mock");
+  if (!resolvedModuleId) {
+    return createInlineMockLanguageModels(profile);
+  }
+
   try {
-    return loadModule<MockLanguageModelModule>("./models.mock");
+    return loadModule<MockLanguageModelModule>(resolvedModuleId);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "MODULE_NOT_FOUND") {
+    const { code } = error as NodeJS.ErrnoException;
+    if (code !== "MODULE_NOT_FOUND") {
       throw error;
     }
 
