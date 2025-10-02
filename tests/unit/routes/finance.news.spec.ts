@@ -1,5 +1,7 @@
 const originalPlaywright = process.env.PLAYWRIGHT;
-process.env.PLAYWRIGHT = "1";
+// Ensure Playwright-aware guards see the explicit "true" value, matching the
+// contract expected by the finance routes.
+process.env.PLAYWRIGHT = "true";
 
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -36,6 +38,27 @@ describe("/api/finance/news", () => {
     expect(payload.items).toHaveLength(2);
     expect(new Date(payload.items[0].publishedAt).getTime()).toBeGreaterThanOrEqual(
       new Date(payload.items[1].publishedAt).getTime()
+    );
+  });
+
+  it("exposes three NVDA headlines when the agent requests \"3 news\"", async () => {
+    const response = await GET(
+      new Request("http://localhost/api/finance/news?symbol=NVDA&limit=3")
+    );
+
+    expect(response.status).toBe(200);
+
+    const payload = await response.json();
+    expect(payload.symbol).toBe("NVDA");
+    expect(payload.items).toHaveLength(3);
+
+    /**
+     * The timestamps decrease chronologically so Playwright can assert both the
+     * count and the ordering when exercising the NVDA scenario. A failure here
+     * would surface if the offline catalogue accidentally drops an entry.
+     */
+    expect(new Date(payload.items[0].publishedAt).getTime()).toBeGreaterThan(
+      new Date(payload.items[2].publishedAt).getTime()
     );
   });
 

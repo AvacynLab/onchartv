@@ -34,6 +34,31 @@ export function ArtifactRenderer({
   chartAnnotations,
   onRetest,
 }: ArtifactRendererProps) {
+  /**
+   * Guard against malformed payloads. Even though the type signature narrows
+   * the artefact union, runtime data coming from the AI assistant can still be
+   * ill-formed, so we present a helpful alert instead of crashing the UI.
+   */
+  if (!artifact || typeof artifact !== "object" || !("type" in artifact)) {
+    console.error("[ArtifactRenderer] unsupported artefact payload", artifact);
+    return (
+      <div
+        className="rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive"
+        data-testid="artifact-renderer-error"
+        role="alert"
+      >
+        Contenu indisponible : le format de l’artefact fourni est invalide.
+      </div>
+    );
+  }
+
+  /**
+   * Preserve the artefact label upfront so the default branch can surface a
+   * human-readable message without trying to access `type` on a `never`
+   * discriminant (which causes the build failure observed in CI).
+   */
+  const fallbackTypeLabel = artifact.type;
+
   switch (artifact.type) {
     case "finance.chart":
       return (
@@ -56,6 +81,15 @@ export function ArtifactRenderer({
     case "finance.screen":
       return <ScreenResultsCard artifact={artifact} />;
     default:
-      return null;
+      console.error("[ArtifactRenderer] unknown artefact type", artifact);
+      return (
+        <div
+          className="rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive"
+          data-testid="artifact-renderer-error"
+          role="alert"
+        >
+          Contenu indisponible : l’artefact « {fallbackTypeLabel} » n’est pas pris en charge.
+        </div>
+      );
   }
 }

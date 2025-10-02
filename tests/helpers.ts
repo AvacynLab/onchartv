@@ -9,6 +9,7 @@ import {
 } from "@playwright/test";
 import { generateId } from "ai";
 import { getUnixTime } from "date-fns";
+import { chatModels } from "@/lib/ai/models";
 import { ChatPage } from "./pages/chat";
 
 export type UserContext = {
@@ -58,8 +59,26 @@ export async function createAuthenticatedContext({
 
   const chatPage = new ChatPage(page);
   await chatPage.createNewChat();
-  await chatPage.chooseModelFromSelector("chat-model-reasoning");
-  await expect(chatPage.getSelectedModel()).resolves.toEqual("Reasoning model");
+
+  /**
+   * Resolve the human-readable label for the reasoning model directly from the
+   * shared chat model catalog. The product copy recently changed from the
+   * generic "Reasoning model" wording to the branded "Grok Reasoning" label,
+   * which caused the hard-coded assertion below to fall out of sync and break
+   * every Playwright journey during authentication.
+   */
+  const reasoningModel = chatModels.find(
+    (model) => model.id === "chat-model-reasoning"
+  );
+
+  if (!reasoningModel) {
+    throw new Error("Unable to locate the reasoning chat model metadata");
+  }
+
+  await chatPage.chooseModelFromSelector(reasoningModel.id);
+  await expect(chatPage.getSelectedModel()).resolves.toEqual(
+    reasoningModel.name
+  );
 
   await page.waitForTimeout(1000);
   await context.storageState({ path: storageFile });

@@ -4,7 +4,10 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { FinanceChartArtifact } from "@/components/finance/finance-chart-artifact";
+import {
+  FinanceChartArtifact,
+  normalizeFinanceColor,
+} from "@/components/finance/finance-chart-artifact";
 import type { FinanceChartArtifact as FinanceChartPayload } from "@/lib/finance/types";
 
 type CrosshairHandler = (param: any) => void;
@@ -24,9 +27,17 @@ const lineSeries = {
   applyOptions: vi.fn(),
 };
 
+const chartInstances: Array<{
+  subscribeCrosshairMove: ReturnType<typeof vi.fn>;
+  unsubscribeCrosshairMove: ReturnType<typeof vi.fn>;
+  subscribeClick: ReturnType<typeof vi.fn>;
+  unsubscribeClick: ReturnType<typeof vi.fn>;
+  removeSeries: ReturnType<typeof vi.fn>;
+  remove: ReturnType<typeof vi.fn>;
+}> = [];
 
-vi.mock("lightweight-charts", () => ({
-  createChart: vi.fn(() => ({
+const makeChartMock = () => {
+  const chart = {
     applyOptions: vi.fn(),
     addCandlestickSeries: vi.fn(() => candlestickSeries),
     addLineSeries: vi.fn(() => ({ ...lineSeries })),
@@ -41,7 +52,13 @@ vi.mock("lightweight-charts", () => ({
     unsubscribeClick: vi.fn(),
     removeSeries: vi.fn(),
     remove: vi.fn(),
-  })),
+  };
+  chartInstances.push(chart);
+  return chart;
+};
+
+vi.mock("lightweight-charts", () => ({
+  createChart: vi.fn(() => makeChartMock()),
   CrosshairMode: { Normal: 0 },
 }));
 
@@ -68,16 +85,35 @@ describe("FinanceChartArtifact", () => {
   };
 
   beforeEach(() => {
+    localStorage.clear();
     crosshairHandlers.length = 0;
     clickHandlers.length = 0;
+    chartInstances.length = 0;
     candlestickSeries.setData.mockClear();
     candlestickSeries.applyOptions.mockClear();
     lineSeries.setData.mockClear();
     lineSeries.applyOptions.mockClear();
   });
 
-  it("renders toggles and allows enabling/disabling overlays", async () => {
-    render(<FinanceChartArtifact artifact={artifact} />);
+  const storageKeyFor = (payload: FinanceChartPayload) =>
+    `finance.chart.overlays:${payload.symbol}:${payload.timeframe}`;
+
+  describe("normalizeFinanceColor", () => {
+    it("converts whitespace-separated hsl strings to comma syntax", () => {
+      expect(normalizeFinanceColor("hsl(240 3.8% 46.1%)")).toBe(
+        "hsl(240, 3.8%, 46.1%)"
+      );
+    });
+
+    it("preserves alpha segments while inserting commas", () => {
+      expect(normalizeFinanceColor("hsla(200 50% 40% / 0.5)")).toBe(
+        "hsla(200, 50%, 40%, 0.5)"
+      );
+    });
+  });
+
+  it("renders toggles, allows enabling/disabling overlays and persists the preference", async () => {
+    const { unmount } = render(<FinanceChartArtifact artifact={artifact} />);
 
     const toggle = screen.getByRole("button", { name: /sma/i });
     expect(toggle).toHaveAttribute("aria-pressed", "true");
@@ -85,6 +121,20 @@ describe("FinanceChartArtifact", () => {
     await userEvent.click(toggle);
 
     expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(lineSeries.applyOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ visible: false })
+    );
+
+    const stored = window.localStorage.getItem(storageKeyFor(artifact));
+    expect(stored).not.toBeNull();
+    expect(JSON.parse(stored as string)).toMatchObject({ "sma-20": false });
+
+    unmount();
+
+    render(<FinanceChartArtifact artifact={artifact} />);
+
+    const persistedToggle = await screen.findByRole("button", { name: /sma/i });
+    expect(persistedToggle).toHaveAttribute("aria-pressed", "false");
   });
 
   it("expose des repères d'accessibilité pour le graphique et ses contrôles", () => {
@@ -104,7 +154,11 @@ describe("FinanceChartArtifact", () => {
     const labelledBy = chart.getAttribute("aria-labelledby") ?? "";
     const headingId = heading.getAttribute("id") ?? "";
     expect(labelledBy.trim().split(/\s+/)).toContain(headingId);
-    expect(chart).toHaveAttribute("aria-describedby", detailPanel.getAttribute("id"));
+    const describedBy = chart.getAttribute("aria-describedby") ?? "";
+    const descriptionIds = describedBy.trim().split(/\s+/);
+    expect(descriptionIds).toContain(detailPanel.getAttribute("id"));
+    const keyboardHint = document.getElementById(descriptionIds[0]!);
+    expect(keyboardHint?.textContent).toMatch(/flèches gauche et droite/i);
 
     const overlayGroup = screen.getByRole("group", {
       name: /indicateurs superposés/i,
@@ -151,5 +205,38 @@ describe("FinanceChartArtifact", () => {
     const detailPanel = screen.getByTestId("finance-chart-details");
     expect(detailPanel).toHaveTextContent(/Ouverture\s*170\.00/);
     expect(detailPanel).toHaveTextContent(/Clôture\s*172\.00/);
+  });
+
+  it("permet la navigation clavier des bougies et conserve le focus accessible", async () => {
+    render(<FinanceChartArtifact artifact={artifact} />);
+
+    const chart = screen.getByRole("img", {
+      name: /graphique en chandeliers pour aapl en 1d/i,
+    });
+
+    chart.focus();
+    await userEvent.keyboard("{ArrowLeft}");
+
+    const detailPanel = screen.getByTestId("finance-chart-details");
+    expect(detailPanel).toHaveTextContent(/170\.00/);
+
+    await userEvent.keyboard("{End}");
+    expect(detailPanel).toHaveTextContent(/174\.00/);
+  });
+
+  it("enregistre et libère les abonnements chartistiques lors du démontage", () => {
+    const { unmount } = render(<FinanceChartArtifact artifact={artifact} />);
+
+    const latestChart = chartInstances.at(-1);
+    expect(latestChart).toBeDefined();
+
+    const crosshair = crosshairHandlers.at(-1);
+    const click = clickHandlers.at(-1);
+
+    unmount();
+
+    expect(latestChart?.unsubscribeCrosshairMove).toHaveBeenCalledWith(crosshair);
+    expect(latestChart?.unsubscribeClick).toHaveBeenCalledWith(click);
+    expect(latestChart?.remove).toHaveBeenCalled();
   });
 });

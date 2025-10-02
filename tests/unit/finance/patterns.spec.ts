@@ -58,6 +58,34 @@ describe("detectCandlestickPatterns", () => {
       "bearish_engulfing"
     );
   });
+
+  it("remains silent on flat price action that lacks decisive bodies", () => {
+    const neutral: OHLCV[] = Array.from({ length: 25 }, (_, index) =>
+      candle(index, {
+        open: 100,
+        close: 100,
+        high: 100.5 + (index % 2) * 0.1,
+        low: 99.5 - (index % 3) * 0.1,
+      })
+    );
+
+    const detections = detectCandlestickPatterns(neutral);
+    expect(detections).toHaveLength(0);
+  });
+
+  it("produces deterministic detections on repeated runs", () => {
+    const candles: OHLCV[] = [
+      candle(0, { open: 100, close: 98.5, high: 100.3, low: 98.2 }),
+      candle(1, { open: 98.7, close: 100.5, high: 101.0, low: 98.6 }),
+      candle(2, { open: 100.8, close: 98.2, high: 101.1, low: 97.9 }),
+      candle(3, { open: 97.5, close: 99.6, high: 100.0, low: 96.8 }),
+    ];
+
+    const first = detectCandlestickPatterns(candles);
+    const second = detectCandlestickPatterns(candles);
+
+    expect(second).toEqual(first);
+  });
 });
 
 describe("detectSupportResistanceLevels", () => {

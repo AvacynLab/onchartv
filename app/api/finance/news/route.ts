@@ -67,7 +67,12 @@ export async function GET(request: Request): Promise<Response> {
 
     console.error("[api:finance.news] unexpected error", error);
     return Response.json(
-      { code: "internal_error:api", message: "Unexpected error while fetching news." },
+      {
+        error: {
+          code: "internal_error:api",
+          message: "Unexpected error while fetching news.",
+        },
+      },
       { status: 500 }
     );
   } finally {

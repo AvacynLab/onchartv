@@ -28,6 +28,12 @@ test.describe("Weather tool", () => {
       HERMETIC_WEATHER_SAMPLE,
       "Playwright runs must reuse the cached weather payload"
     );
+
+    assert.ok(
+      Array.isArray(result.hourly.temperature_2m) &&
+        result.hourly.temperature_2m.length > 0,
+      "Hermetic payload should expose hourly temperatures for the UI"
+    );
   });
 
   test("delegates to fetch implementation outside hermetic runs", async () => {

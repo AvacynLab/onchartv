@@ -1,15 +1,19 @@
 import {
   APICallError,
+  type LanguageModelV2,
   type LanguageModelV2CallOptions,
   type LanguageModelV2Middleware,
+  type LanguageModelV2StreamPart,
 } from "@ai-sdk/provider";
 import {
   customProvider,
   extractReasoningMiddleware,
   wrapLanguageModel,
+  simulateReadableStream,
 } from "ai";
 
 type NodeModule = typeof import("module");
+import type { ModelMessage } from "ai";
 
 import { isPlaywrightLikeEnvironment } from "./playwright-env";
 
@@ -43,47 +47,38 @@ const isMockTestingEnvironment = Boolean(
     Reflect.get(env, "CI_PLAYWRIGHT")
 );
 
+type MockLanguageModelModule = {
+  readonly chatModel: LanguageModelV2;
+  readonly reasoningModel: LanguageModelV2;
+  readonly titleModel: LanguageModelV2;
+  readonly artifactModel: LanguageModelV2;
+};
+
+type InlineMockProfile = "basic" | "playwright";
+
 function createMockProvider() {
-  if (isNextBuild) {
-    /**
-     * During the production build Next.js evaluates the provider even though no
-     * requests are executed. Returning a lightweight inline model avoids the
-     * `eval('require')` path and keeps the build hermetic when fixtures are not
-     * bundled alongside the compiled output.
-     */
-    const createBuildTimeModel = () =>
-      ({
-        specificationVersion: "v2",
-        provider: "mock",
-        modelId: "build-mock",
-        supportedUrls: {},
-        supportsImageUrls: false,
-        supportsStructuredOutputs: false,
-        doGenerate: async () => ({
-          rawCall: { rawPrompt: null, rawSettings: {} },
-          finishReason: "stop",
-          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-          content: [{ type: "text", text: "" }],
-          warnings: [],
-        }),
-        doStream: async () => ({
-          stream: new ReadableStream({
-            start(controller) {
-              controller.close();
-            },
-          }),
-          rawCall: { rawPrompt: null, rawSettings: {} },
-        }),
-      } as const);
+  const createProviderFromModels = (models: MockLanguageModelModule) => {
+    const { artifactModel, chatModel, reasoningModel, titleModel } = models;
 
     return customProvider({
       languageModels: {
-        "chat-model": createBuildTimeModel(),
-        "chat-model-reasoning": createBuildTimeModel(),
-        "title-model": createBuildTimeModel(),
-        "artifact-model": createBuildTimeModel(),
-      } as unknown as Record<string, never>,
+        "chat-model": chatModel,
+        "chat-model-reasoning": reasoningModel,
+        "title-model": titleModel,
+        "artifact-model": artifactModel,
+      },
     });
+  };
+
+  const shouldPreferTestingFixtures =
+    isMockTestingEnvironment || isPlaywrightEnvironment;
+
+  if (isNextBuild || isClient) {
+    return createProviderFromModels(
+      createInlineMockLanguageModels(
+        shouldPreferTestingFixtures ? "playwright" : "basic"
+      )
+    );
   }
 
   /**
@@ -111,6 +106,22 @@ function createMockProvider() {
    */
   const loadModule = <T>(moduleId: string) => nodeRequire(moduleId) as T;
   /**
+   * Resolve optional mocks without emitting noisy stack traces when the file
+   * is absent (e.g. production bundles that strip the Playwright helpers).
+   */
+  const resolveModule = (moduleId: string) => {
+    try {
+      return nodeRequire.resolve(moduleId);
+    } catch (error) {
+      const { code } = error as NodeJS.ErrnoException;
+      if (code && code !== "MODULE_NOT_FOUND") {
+        throw error;
+      }
+
+      return null;
+    }
+  };
+  /**
    * Eagerly try to resolve the Playwright fixtures so the bundler keeps the
    * module in the compiled output. If the file is absent (e.g. in production
    * deployments where we do not ship the testing helpers) we silently fall
@@ -128,20 +139,584 @@ function createMockProvider() {
     }
   })();
 
-  const models =
-    isMockTestingEnvironment && testingModels
-      ? testingModels
-      : loadModule<typeof import("./models.mock")>("./models.mock");
-  const { artifactModel, chatModel, reasoningModel, titleModel } = models;
-  return customProvider({
-    languageModels: {
-      "chat-model": chatModel,
-      "chat-model-reasoning": reasoningModel,
-      "title-model": titleModel,
-      "artifact-model": artifactModel,
-    },
-  });
+  try {
+    const models = loadMockLanguageModels({
+      loadModule,
+      resolveModule,
+      testingModels,
+      profile: shouldPreferTestingFixtures ? "playwright" : "basic",
+    });
+    return createProviderFromModels(models);
+  } catch (error) {
+    const maybeErrno = error as NodeJS.ErrnoException;
+
+    /**
+     * Some bundlers attempt to evaluate the CommonJS `require` call eagerly and
+     * surface a `MODULE_NOT_FOUND` error before we reach `loadMockLanguageModels`.
+     * When that happens we still want to fall back to the inline mocks so the
+     * finance/chat journeys remain functional during end-to-end tests.
+     */
+    if (maybeErrno?.code === "MODULE_NOT_FOUND") {
+      return createProviderFromModels(
+        createInlineMockLanguageModels(
+          shouldPreferTestingFixtures ? "playwright" : "basic"
+        )
+      );
+    }
+
+    throw error;
+  }
 }
+
+function loadMockLanguageModels({
+  loadModule,
+  resolveModule,
+  testingModels,
+  profile,
+}: {
+  readonly loadModule: <T>(moduleId: string) => T;
+  readonly resolveModule: (moduleId: string) => string | null;
+  readonly testingModels: MockLanguageModelModule | null;
+  readonly profile: InlineMockProfile;
+}): MockLanguageModelModule {
+  if (profile === "playwright") {
+    if (testingModels) {
+      return testingModels;
+    }
+
+    /**
+     * Playwright environments sometimes execute within stripped bundles where the
+     * shared `models.mock` module is tree-shaken. Attempting to `require` it in
+     * those scenarios raises a fatal `MODULE_NOT_FOUND` before our broader
+     * fallback logic can engage. Returning the deterministic inline mocks keeps
+     * chat and finance journeys stable without relying on the optional module.
+     */
+    return createInlineMockLanguageModels("playwright");
+  }
+
+  const resolvedModuleId = resolveModule("./models.mock");
+  if (!resolvedModuleId) {
+    return createInlineMockLanguageModels(profile);
+  }
+
+  try {
+    return loadModule<MockLanguageModelModule>(resolvedModuleId);
+  } catch (error) {
+    const { code } = error as NodeJS.ErrnoException;
+    if (code !== "MODULE_NOT_FOUND") {
+      throw error;
+    }
+
+    return createInlineMockLanguageModels(profile);
+  }
+}
+
+function createInlineMockLanguageModels(
+  profile: InlineMockProfile = "basic"
+): MockLanguageModelModule {
+  if (profile === "playwright") {
+    return createPlaywrightInlineMocks();
+  }
+
+  const createModel = (responseText: string = "Hello, world!") =>
+    createInlineLanguageModel({
+      modelId: "inline-basic",
+      responseText,
+      chunkBuilder: (_options) => buildBasicChunks(responseText),
+    });
+
+  return {
+    chatModel: createModel(),
+    reasoningModel: createModel(),
+    titleModel: createModel("This is a test title"),
+    artifactModel: createModel(),
+  };
+}
+
+function createPlaywrightInlineMocks(): MockLanguageModelModule {
+  const createModel = ({
+    responseText = "Hello, world!",
+    includeReasoning = false,
+  }: {
+    readonly responseText?: string;
+    readonly includeReasoning?: boolean;
+  }) =>
+    createInlineLanguageModel({
+      modelId: "inline-playwright",
+      responseText,
+      initialDelayInMs: 25,
+      chunkDelayInMs: 25,
+      chunkBuilder: ({ prompt }) =>
+        buildPlaywrightChunks({
+          prompt,
+          includeReasoning,
+          fallbackText: responseText,
+        }),
+    });
+
+  return {
+    chatModel: createModel({}),
+    reasoningModel: createModel({ includeReasoning: true }),
+    titleModel: createModel({ responseText: "This is a test title" }),
+    artifactModel: createModel({}),
+  };
+}
+
+function createInlineLanguageModel({
+  modelId,
+  responseText,
+  chunkBuilder,
+  initialDelayInMs = 0,
+  chunkDelayInMs = 0,
+}: {
+  readonly modelId: string;
+  readonly responseText: string;
+  readonly chunkBuilder: (
+    options: LanguageModelV2CallOptions
+  ) => LanguageModelV2StreamPart[];
+  readonly initialDelayInMs?: number;
+  readonly chunkDelayInMs?: number;
+}): LanguageModelV2 {
+  return {
+    specificationVersion: "v2",
+    provider: "mock-provider",
+    modelId,
+    supportedUrls: {},
+    async doGenerate() {
+      return {
+        content: [{ type: "text", text: responseText }],
+        finishReason: "stop",
+        usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
+        warnings: [],
+      };
+    },
+    async doStream(options) {
+      return {
+        stream: simulateReadableStream({
+          initialDelayInMs,
+          chunkDelayInMs,
+          chunks: chunkBuilder(options),
+        }),
+      };
+    },
+  };
+}
+
+function buildBasicChunks(responseText: string): LanguageModelV2StreamPart[] {
+  const id = "mock-1";
+
+  return [
+    { id, type: "text-start" },
+    { id, type: "text-delta", delta: responseText },
+    { id, type: "text-end" },
+    buildFinishChunk({ inputTokens: 10, outputTokens: 20, totalTokens: 30 }),
+  ];
+}
+
+function buildPlaywrightChunks({
+  prompt,
+  includeReasoning,
+  fallbackText,
+}: {
+  readonly prompt: ModelMessage[];
+  readonly includeReasoning: boolean;
+  readonly fallbackText: string;
+}): LanguageModelV2StreamPart[] {
+  const recentMessage = prompt.at(-1);
+
+  if (!recentMessage) {
+    throw new Error("No recent message found!");
+  }
+
+  if (includeReasoning) {
+    const reasoningChunks = resolveReasoningPrompt(recentMessage);
+    if (reasoningChunks) {
+      return reasoningChunks;
+    }
+  }
+
+  const nonReasoningChunks = resolveStandardPrompt(recentMessage);
+  if (nonReasoningChunks) {
+    return nonReasoningChunks;
+  }
+
+  return [
+    ...buildTextDeltas(fallbackText),
+    buildFinishChunk({ inputTokens: 3, outputTokens: 10, totalTokens: 13 }),
+  ];
+}
+
+function resolveReasoningPrompt(
+  message: ModelMessage
+): LanguageModelV2StreamPart[] | null {
+  if (matchesSingleTextMessage(message, "Why is the sky blue?")) {
+    return [
+      ...buildReasoningDeltas("The sky is blue because of rayleigh scattering!"),
+      ...buildTextDeltas("It's just blue duh!"),
+      buildFinishChunk({ inputTokens: 3, outputTokens: 10, totalTokens: 13 }),
+    ];
+  }
+
+  if (matchesSingleTextMessage(message, "Why is grass green?")) {
+    return [
+      ...buildReasoningDeltas(
+        "Grass is green because of chlorophyll absorption!"
+      ),
+      ...buildTextDeltas("It's just green duh!"),
+      buildFinishChunk({ inputTokens: 3, outputTokens: 10, totalTokens: 13 }),
+    ];
+  }
+
+  return null;
+}
+
+function resolveStandardPrompt(
+  message: ModelMessage
+): LanguageModelV2StreamPart[] | null {
+  if (matchesSingleTextMessage(message, "Thanks!")) {
+    return [
+      ...buildTextDeltas("You're welcome!"),
+      buildFinishChunk({ inputTokens: 3, outputTokens: 10, totalTokens: 13 }),
+    ];
+  }
+
+  if (matchesSingleTextMessage(message, "Why is grass green?")) {
+    return [
+      ...buildTextDeltas("It's just green duh!"),
+      buildFinishChunk({ inputTokens: 3, outputTokens: 10, totalTokens: 13 }),
+    ];
+  }
+
+  if (matchesSingleTextMessage(message, "Why is the sky blue?")) {
+    return [
+      ...buildTextDeltas("It's just blue duh!"),
+      buildFinishChunk({ inputTokens: 3, outputTokens: 10, totalTokens: 13 }),
+    ];
+  }
+
+  if (
+    matchesSingleTextMessage(message, "What are the advantages of using Next.js?")
+  ) {
+    return [
+      ...buildTextDeltas("With Next.js, you can ship fast!"),
+      buildFinishChunk({ inputTokens: 3, outputTokens: 10, totalTokens: 13 }),
+    ];
+  }
+
+  if (matchesImageAttachmentPrompt(message)) {
+    return [
+      ...buildTextDeltas("This painting is by Monet!"),
+      buildFinishChunk({ inputTokens: 3, outputTokens: 10, totalTokens: 13 }),
+    ];
+  }
+
+  if (matchesSingleTextMessage(message, "What's the weather in sf?")) {
+    return [
+      {
+        type: "tool-call",
+        toolCallId: "call_weather",
+        toolName: "getWeather",
+        input: JSON.stringify({ latitude: 37.7749, longitude: -122.4194 }),
+      },
+      buildFinishChunk({ inputTokens: 3, outputTokens: 10, totalTokens: 13 }, "tool-calls"),
+    ];
+  }
+
+  if (
+    matchesSingleTextMessage(message, "Montre BTCUSD 1D avec SMA(50/200)") ||
+    matchesSingleTextMessage(message, "/chart BTCUSD 1D")
+  ) {
+    return [
+      {
+        type: "tool-call",
+        toolCallId: "call_finance_chart",
+        toolName: "tool.finance.chart.fetch",
+        input: JSON.stringify({
+          symbol: "BTCUSD",
+          timeframe: "1D",
+          limit: 300,
+          overlays: [
+            { type: "sma", length: 50 },
+            { type: "sma", length: 200 },
+          ],
+        }),
+      },
+      buildFinishChunk({ inputTokens: 12, outputTokens: 4, totalTokens: 16 }, "tool-calls"),
+    ];
+  }
+
+  if (
+    message.role === "tool" &&
+    message.content?.some(
+      (part) =>
+        part.type === "tool-result" &&
+        part.toolCallId === "call_finance_chart" &&
+        part.toolName === "tool.finance.chart.fetch"
+    )
+  ) {
+    return [
+      ...buildTextDeltas(
+        "Graphique BTCUSD quotidien généré avec les moyennes 50 et 200 périodes."
+      ),
+      buildFinishChunk({ inputTokens: 12, outputTokens: 18, totalTokens: 30 }),
+    ];
+  }
+
+  if (
+    matchesSingleTextMessage(
+      message,
+      "Backteste SMA 50/200 sur AAPL 2018-01-01 → 2020-12-31"
+    ) ||
+    matchesSingleTextMessage(
+      message,
+      "/backtest AAPL 2018-01-01 2020-12-31 50 200"
+    )
+  ) {
+    return [
+      {
+        type: "tool-call",
+        toolCallId: "call_finance_backtest",
+        toolName: "tool.finance.strategy.backtest",
+        input: JSON.stringify({
+          symbol: "AAPL",
+          timeframe: "1D",
+          range: {
+            from: "2018-01-01T00:00:00Z",
+            to: "2020-12-31T00:00:00Z",
+          },
+          strategy: {
+            type: "sma-crossover",
+            params: { fastPeriod: 50, slowPeriod: 200 },
+          },
+          risk: {
+            initialCapital: 100_000,
+            commissionPerTrade: 1,
+            slippageBps: 10,
+          },
+        }),
+      },
+      buildFinishChunk({ inputTokens: 15, outputTokens: 6, totalTokens: 21 }, "tool-calls"),
+    ];
+  }
+
+  if (
+    message.role === "tool" &&
+    message.content?.some(
+      (part) =>
+        part.type === "tool-result" &&
+        part.toolCallId === "call_finance_backtest" &&
+        part.toolName === "tool.finance.strategy.backtest"
+    )
+  ) {
+    return [
+      ...buildTextDeltas(
+        "Backtest SMA 50/200 exécuté sur AAPL entre 2018 et 2020."
+      ),
+      buildFinishChunk({ inputTokens: 12, outputTokens: 18, totalTokens: 30 }),
+    ];
+  }
+
+  if (
+    matchesSingleTextMessage(message, "Donne fondamentaux + 3 news pour NVDA") ||
+    matchesSingleTextMessage(
+      message,
+      "Summarise NVDA fundamentals using the finance artefacts"
+    )
+  ) {
+    return [
+      {
+        type: "tool-call",
+        toolCallId: "call_finance_fundamentals",
+        toolName: "tool.finance.fundamentals.fetch",
+        input: JSON.stringify({ symbol: "NVDA" }),
+      },
+      buildFinishChunk({ inputTokens: 11, outputTokens: 6, totalTokens: 17 }, "tool-calls"),
+    ];
+  }
+
+  if (
+    message.role === "tool" &&
+    message.content?.some(
+      (part) =>
+        part.type === "tool-result" &&
+        part.toolCallId === "call_finance_fundamentals" &&
+        part.toolName === "tool.finance.fundamentals.fetch"
+    )
+  ) {
+    return [
+      {
+        type: "tool-call",
+        toolCallId: "call_finance_news",
+        toolName: "tool.finance.news.fetch",
+        input: JSON.stringify({ symbol: "NVDA", limit: 3 }),
+      },
+      buildFinishChunk({ inputTokens: 10, outputTokens: 4, totalTokens: 14 }, "tool-calls"),
+    ];
+  }
+
+  if (
+    message.role === "tool" &&
+    message.content?.some(
+      (part) =>
+        part.type === "tool-result" &&
+        part.toolCallId === "call_finance_news" &&
+        part.toolName === "tool.finance.news.fetch"
+    )
+  ) {
+    return [
+      ...buildTextDeltas(
+        "Synthèse NVDA : fondamentaux clés et trois actualités fournies dans les artefacts."
+      ),
+      buildFinishChunk({ inputTokens: 10, outputTokens: 20, totalTokens: 30 }),
+    ];
+  }
+
+  if (matchesSingleTextMessage(message, "Help me write an essay about Silicon Valley")) {
+    return buildDocumentCreationChunks();
+  }
+
+  if (
+    message.role === "tool" &&
+    message.content?.some(
+      (part) =>
+        part.type === "tool-result" && part.toolName === "createDocument"
+    )
+  ) {
+    return [
+      ...buildTextDeltas("A document was created and is now visible to the user."),
+      buildFinishChunk({ inputTokens: 3, outputTokens: 10, totalTokens: 13 }),
+    ];
+  }
+
+  if (
+    message.role === "tool" &&
+    message.content?.some(
+      (part) =>
+        part.type === "tool-result" && part.toolName === "getWeather"
+    )
+  ) {
+    return [
+      ...buildTextDeltas("The current temperature in San Francisco is 17°C."),
+      buildFinishChunk({ inputTokens: 3, outputTokens: 10, totalTokens: 13 }),
+    ];
+  }
+
+  return null;
+}
+
+function matchesImageAttachmentPrompt(message: ModelMessage): boolean {
+  if (message.role !== "user" || !Array.isArray(message.content)) {
+    return false;
+  }
+
+  if (message.content.length < 2) {
+    return false;
+  }
+
+  const hasFile = message.content.some((part) => part.type === "file");
+  const question = message.content.find(
+    (part): part is Extract<ModelMessage["content"][number], { type: "text" }> =>
+      part.type === "text"
+  );
+
+  return hasFile && question?.text === "Who painted this?";
+}
+
+/**
+ * Mirror the document authoring helper used by the legacy Playwright fixtures so
+ * the inline mocks still exercise the tool streaming life-cycle (input start →
+ * deltas → result → finish). The IDs remain deterministic to simplify test
+ * assertions without leaking implementation details from the real provider.
+ */
+function buildDocumentCreationChunks(): LanguageModelV2StreamPart[] {
+  const toolCallId = "inline_create_document";
+
+  return [
+    { id: toolCallId, type: "tool-input-start", toolName: "createDocument" },
+    {
+      id: toolCallId,
+      type: "tool-input-delta",
+      delta: JSON.stringify({
+        title: "Essay about Silicon Valley",
+        kind: "text",
+      }),
+    },
+    { id: toolCallId, type: "tool-input-end" },
+    {
+      type: "tool-result",
+      toolCallId,
+      toolName: "createDocument",
+      result: {
+        id: "doc_123",
+        title: "Essay about Silicon Valley",
+        kind: "text",
+      },
+    },
+    buildFinishChunk({ inputTokens: 3, outputTokens: 10, totalTokens: 13 }),
+  ];
+}
+
+function matchesSingleTextMessage(
+  message: ModelMessage,
+  expectedText: string
+): boolean {
+  if (message.role !== "user") {
+    return false;
+  }
+
+  if (!Array.isArray(message.content) || message.content.length !== 1) {
+    return false;
+  }
+
+  const [part] = message.content;
+
+  return part.type === "text" && part.text === expectedText;
+}
+
+function buildTextDeltas(text: string): LanguageModelV2StreamPart[] {
+  const id = "mock-inline";
+  const words = text.split(" ");
+
+  return [
+    { id, type: "text-start" },
+    ...words.map((word) => ({
+      id,
+      type: "text-delta" as const,
+      delta: `${word} `,
+    })),
+    { id, type: "text-end" },
+  ];
+}
+
+function buildReasoningDeltas(text: string): LanguageModelV2StreamPart[] {
+  const id = "mock-inline-reasoning";
+  const words = text.split(" ");
+
+  return [
+    { id, type: "reasoning-start" },
+    ...words.map((word) => ({
+      id,
+      type: "reasoning-delta" as const,
+      delta: `${word} `,
+    })),
+    { id, type: "reasoning-end" },
+  ];
+}
+
+function buildFinishChunk(
+  usage: { inputTokens: number; outputTokens: number; totalTokens: number },
+  finishReason: "stop" | "tool-calls" = "stop"
+): LanguageModelV2StreamPart {
+  return {
+    type: "finish",
+    finishReason,
+    usage,
+  };
+}
+
+export const __test = {
+  loadMockLanguageModels,
+};
 
 const shouldUseMocks =
   isClient ||

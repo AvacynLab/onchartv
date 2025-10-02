@@ -1,5 +1,7 @@
 const originalPlaywright = process.env.PLAYWRIGHT;
-process.env.PLAYWRIGHT = "1";
+// Toggle the hermetic flag to "true" so the screening route exercises the
+// offline path used in end-to-end tests.
+process.env.PLAYWRIGHT = "true";
 
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

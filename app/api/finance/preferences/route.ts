@@ -93,8 +93,10 @@ export async function GET(request: Request): Promise<Response> {
     console.error("[api:finance.preferences] unexpected error", error);
     return Response.json(
       {
-        code: "internal_error:api",
-        message: "Unexpected error while loading finance preferences.",
+        error: {
+          code: "internal_error:api",
+          message: "Unexpected error while loading finance preferences.",
+        },
       },
       { status: 500 }
     );
@@ -170,8 +172,10 @@ export async function PATCH(request: Request): Promise<Response> {
     console.error("[api:finance.preferences] unexpected error", error);
     return Response.json(
       {
-        code: "internal_error:api",
-        message: "Unexpected error while saving finance preferences.",
+        error: {
+          code: "internal_error:api",
+          message: "Unexpected error while saving finance preferences.",
+        },
       },
       { status: 500 }
     );

@@ -56,7 +56,12 @@ export async function GET(request: Request): Promise<Response> {
 
     console.error("[api:finance.quote] unexpected error", error);
     return Response.json(
-      { code: "internal_error:api", message: "Unexpected error while fetching quote." },
+      {
+        error: {
+          code: "internal_error:api",
+          message: "Unexpected error while fetching quote.",
+        },
+      },
       { status: 500 }
     );
   } finally {

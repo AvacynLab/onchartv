@@ -165,7 +165,10 @@ export const TEST_PROMPTS: Record<string, ModelMessage> = {
   FINANCE_BACKTEST_REQUEST: {
     role: "user",
     content: [
-      { type: "text", text: "Backteste SMA 50/200 sur AAPL 2018-2020" },
+      {
+        type: "text",
+        text: "Backteste SMA 50/200 sur AAPL 2018-01-01 → 2020-12-31",
+      },
     ],
   },
   FINANCE_BACKTEST_RESULT: {
@@ -182,10 +185,7 @@ export const TEST_PROMPTS: Record<string, ModelMessage> = {
   FINANCE_FUNDAMENTALS_REQUEST: {
     role: "user",
     content: [
-      {
-        type: "text",
-        text: "Montre fondamentaux + 3 dernières news de NVDA",
-      },
+      { type: "text", text: "Donne fondamentaux + 3 news pour NVDA" },
     ],
   },
   FINANCE_FUNDAMENTALS_RESULT: {

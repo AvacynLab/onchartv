@@ -34,6 +34,14 @@ const isHermeticPlaywrightRun =
   Boolean(process.env.PLAYWRIGHT_TEST_BASE_URL);
 
 /**
+ * Persist the generated reports and traces in predictable locations so the CI
+ * workflow can upload them as downloadable artifacts when the suite finishes.
+ */
+const htmlReportDir = path.join(__dirname, "playwright-report");
+const blobReportPath = path.join(htmlReportDir, "blob-report.zip");
+const artifactOutputDir = path.join(__dirname, "playwright-results");
+
+/**
  * Keep the hermetic Playwright runs lightweight. The Next.js dev server tends
  * to drop connections or crash outright when eight workers hammer it in
  * parallel, which previously surfaced as `ERR_EMPTY_RESPONSE` and aborted
@@ -109,11 +117,16 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: 0,
   workers: workerCount,
-  reporter: "html",
+  reporter: [
+    ["list"],
+    ["html", { outputFolder: htmlReportDir, open: "never" }],
+    ["blob", { outputFile: blobReportPath }],
+  ],
   use: {
     baseURL,
     trace: "retain-on-failure",
   },
+  outputDir: artifactOutputDir,
   timeout: 240 * 1000,
   expect: {
     timeout: 240 * 1000,
@@ -128,7 +141,7 @@ export default defineConfig({
     },
     {
       name: "e2e",
-      testMatch: /e2e\/.*\.test\.ts/,
+      testMatch: /e2e\/.*\.(spec|test)\.ts/,
       use: {
         ...devices["Desktop Chrome"],
         storageState: "tests/.auth/state.json",

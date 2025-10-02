@@ -66,12 +66,26 @@ export class ChatSDKError extends Error {
       });
 
       return Response.json(
-        { code: "", message: "Something went wrong. Please try again later." },
+        {
+          error: {
+            code: "",
+            message: "Something went wrong. Please try again later.",
+          },
+        },
         { status: statusCode }
       );
     }
 
-    return Response.json({ code, message, cause }, { status: statusCode });
+    return Response.json(
+      {
+        error: {
+          code,
+          message,
+          ...(cause ? { cause } : {}),
+        },
+      },
+      { status: statusCode }
+    );
   }
 }
 

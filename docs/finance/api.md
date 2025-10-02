@@ -2,6 +2,13 @@
 
 The `/api/finance/*` routes expose offline-friendly market data and analytics. All handlers enforce strict Zod validation, rate limiting, and return deterministic mock payloads for local development and CI.
 
+## Usage responsable & mode hors ligne
+
+- **Ce n’est pas un conseil financier** : les réponses issues des routes décrites ci-dessous sont éducatives et n’ont pas vocation à remplacer un avis professionnel.
+- **Données simulées par défaut** : tant que `FEATURE_USE_REAL_DATA` n’est pas activé avec les identifiants requis, tous les endpoints répondent via les jeux de données de `lib/finance/mock-data.ts`. Les timestamps sont gelés pour garantir la reproductibilité des tests.
+- **Vérifications nécessaires** : si vous activez un fournisseur externe, affichez un avertissement équivalent côté produit et exposez les hypothèses de calcul (commission, slippage, limites d’horizon) dans vos interfaces.
+- **Terminologie normalisée** : les champs JSON documentés ci-dessous suivent exactement les clés exposées par `lib/finance/types.ts` (`maxDrawdown`, `winRate`, `profitFactor`, etc.) afin d’éviter toute ambiguïté dans les artefacts et la documentation.
+
 > **Real provider opt-in**
 >
 > Set `FEATURE_USE_REAL_DATA=true` together with `MARKET_DATA_API_BASE_URL` and `MARKET_DATA_API_KEY` to switch the quote/history
@@ -93,26 +100,52 @@ Query parameters:
 | Name   | Type   | Description |
 |--------|--------|-------------|
 | symbol | string | Equity or crypto ticker. |
-| limit  | number _(optional)_ | Number of articles (default 5, cap 25). |
+| limit  | number _(optional)_ | Number of articles (default 10). |
 
 Response body:
 
 ```jsonc
 {
   "symbol": "NVDA",
+  "exchange": "NASDAQ",
   "items": [
     {
       "id": "news_nvidia_1",
+      "source": "Reuters",
+      "title": "NVIDIA étend sa feuille de route data center",
+      "url": "https://news.example.com/nvda-datacenter",
+      "publishedAt": "2025-01-22T09:15:00Z",
+      "summary": "Le groupe annonce une nouvelle gamme de GPU axés sur l'inférence temps réel et des partenariats cloud renforcés.",
+      "sentiment": "positive"
+    },
+    {
+      "id": "news_nvidia_2",
       "source": "MockWire",
-      "title": "NVIDIA dévoile une nouvelle architecture GPU IA",
-      "url": "https://example.com/nvidia-gpu",
-      "publishedAt": 1736208000,
-      "summary": "La société lance une puce optimisée pour les centres de données edge.",
+      "title": "La division gaming de NVIDIA franchit un nouveau palier",
+      "url": "https://news.example.com/nvda-gaming",
+      "publishedAt": "2025-02-10T14:05:00Z",
+      "summary": "Les revenus gaming progressent de 18 % grâce aux cartes spécialisées IA et au ray tracing génératif.",
+      "sentiment": "neutral"
+    },
+    {
+      "id": "news_nvidia_3",
+      "source": "Les Échos",
+      "title": "NVIDIA investit dans une chaîne d'approvisionnement européenne",
+      "url": "https://news.example.com/nvda-europe",
+      "publishedAt": "2025-02-24T07:45:00Z",
+      "summary": "Un plan d'investissement conjoint avec plusieurs fondeurs vise à sécuriser la production de puces haut de gamme.",
       "sentiment": "positive"
     }
-  ]
+  ],
+  "count": 3,
+  "rateLimit": { "remaining": 42, "reset": 1_706_949_600_000 },
+  "source": "mock"
 }
 ```
+
+> **Offline defaults** — The hermetic dataset ships with at least three NVDA
+> articles so the end-to-end scenario "Fondamentaux + 3 news" can validate the
+> rendered list without reaching external providers.
 
 ## `POST /api/finance/backtest`
 
@@ -135,7 +168,17 @@ Response body:
 ```jsonc
 {
   "runId": "bt_abc123",
-  "metrics": { "totalReturn": 0.32, "cagr": 0.14, "maxDrawdown": 0.18, "winRate": 0.55 },
+  "metrics": {
+    "totalReturn": 0.32,
+    "cagr": 0.14,
+    "maxDrawdown": 0.18,
+    "winRate": 0.55,
+    "averageWin": 0.042,
+    "averageLoss": 0.021,
+    "sharpe": 0.9,
+    "profitFactor": 1.6,
+    "trades": 84
+  },
   "equityCurve": [ { "t": 1514764800, "e": 1.0 } ],
   "trades": [
     {

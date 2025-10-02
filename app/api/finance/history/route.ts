@@ -90,16 +90,23 @@ export async function GET(request: Request): Promise<Response> {
       );
     }
 
+    /**
+     * Clamp the effective limit so large date ranges never exceed the
+     * server-side maximum. This keeps responses predictable and avoids
+     * overwhelming the client when mocks are replaced by live providers.
+     */
+    const effectiveLimit = Math.min(limit ?? MAX_CANDLES, MAX_CANDLES);
+
     const adapter = getMarketDataAdapter();
     const candles = await adapter.history({
       symbol: metadata.symbol,
       timeframe,
       from: range.from,
       to: range.to,
-      limit,
+      limit: effectiveLimit,
     });
 
-    const payload = applyHistoryLimit(candles, limit);
+    const payload = applyHistoryLimit(candles, effectiveLimit);
 
     return Response.json({
       symbol: metadata.symbol,
@@ -124,7 +131,12 @@ export async function GET(request: Request): Promise<Response> {
 
     console.error("[api:finance.history] unexpected error", error);
     return Response.json(
-      { code: "internal_error:api", message: "Unexpected error while fetching history." },
+      {
+        error: {
+          code: "internal_error:api",
+          message: "Unexpected error while fetching history.",
+        },
+      },
       { status: 500 }
     );
   } finally {
