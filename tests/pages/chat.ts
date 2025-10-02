@@ -114,6 +114,29 @@ export class ChatPage {
           ) {
             return "content-updated";
           }
+
+          const [loadingCount, stopCount, sendVisible] = await Promise.all([
+            this.page
+              .getByTestId("message-assistant-loading")
+              .count()
+              .catch(() => 0),
+            this.page.getByTestId("stop-button").count().catch(() => 0),
+            this.sendButton
+              .isVisible()
+              .then(Boolean)
+              .catch(() => false),
+          ]);
+
+          /**
+           * Streaming can finish before the helper observes any deltas,
+           * especially when the inline mocks respond synchronously. If the UI
+           * already cleared the loading spinner and re-enabled the send button
+           * we treat the run as complete to avoid polling indefinitely on a
+           * stable message bubble.
+           */
+          if (loadingCount === 0 && stopCount === 0 && sendVisible) {
+            return "idle";
+          }
         }
 
         return "pending";
@@ -162,8 +185,21 @@ export class ChatPage {
       await this.page.waitForTimeout(200);
     }
 
-    const finalText = (await latestMessageContent.innerText()).trim();
-    expect(finalText.length).toBeGreaterThan(0);
+    const [finalText, finalArtifactCount] = await Promise.all([
+      latestMessageContent.innerText().then((value) => value.trim()),
+      latestAssistantMessage
+        .locator('[data-testid$="-artifact"]')
+        .count()
+        .catch(() => 0),
+    ]);
+
+    /**
+     * Artefact-only responses intentionally leave the chat bubble empty while
+     * rendering dedicated finance components. Accept either textual deltas or
+     * newly attached artefacts so both interaction styles satisfy the
+     * completion contract.
+     */
+    expect(finalText.length > 0 || finalArtifactCount > 0).toBe(true);
   }
 
   async isVoteComplete() {
