@@ -208,75 +208,94 @@ function cloneFallbackWeather(): WeatherAtLocation {
  * values the provider supplied (current temperature, timezone, etc.).
  */
 export function normaliseWeatherPayload(
-  weatherAtLocation?: Partial<WeatherAtLocation>
+  weatherAtLocation?: Partial<WeatherAtLocation> | null
 ): WeatherAtLocation {
   const fallback = cloneFallbackWeather();
 
-  if (!weatherAtLocation) {
+  if (!weatherAtLocation || typeof weatherAtLocation !== "object") {
     return fallback;
   }
 
-  const safeHourlyTime = Array.isArray(weatherAtLocation.hourly?.time) &&
-    weatherAtLocation.hourly!.time.length > 0
-      ? weatherAtLocation.hourly!.time
-      : fallback.hourly.time;
-  const safeHourlyTemperatures = Array.isArray(
-    weatherAtLocation.hourly?.temperature_2m
-  ) && weatherAtLocation.hourly!.temperature_2m.length > 0
-    ? weatherAtLocation.hourly!.temperature_2m
-    : fallback.hourly.temperature_2m;
-  const hourlyLength = Math.min(
-    safeHourlyTime.length,
-    safeHourlyTemperatures.length
-  );
+  /**
+   * Merge any partial tool payload with the deterministic fallback while
+   * defensively handling malformed structures that occasionally surface when
+   * hermetic mocks drift from the production schema.
+   */
+  try {
+    const hourlySource =
+      weatherAtLocation && typeof weatherAtLocation.hourly === "object"
+        ? weatherAtLocation.hourly
+        : undefined;
+    const dailySource =
+      weatherAtLocation && typeof weatherAtLocation.daily === "object"
+        ? weatherAtLocation.daily
+        : undefined;
 
-  const safeDailyTime = Array.isArray(weatherAtLocation.daily?.time) &&
-    weatherAtLocation.daily!.time.length > 0
-      ? weatherAtLocation.daily!.time
-      : fallback.daily.time;
-  const safeDailySunrise = Array.isArray(weatherAtLocation.daily?.sunrise) &&
-    weatherAtLocation.daily!.sunrise.length > 0
-      ? weatherAtLocation.daily!.sunrise
-      : fallback.daily.sunrise;
-  const safeDailySunset = Array.isArray(weatherAtLocation.daily?.sunset) &&
-    weatherAtLocation.daily!.sunset.length > 0
-      ? weatherAtLocation.daily!.sunset
-      : fallback.daily.sunset;
-  const dailyLength = Math.min(
-    safeDailyTime.length,
-    safeDailySunrise.length,
-    safeDailySunset.length
-  );
+    const safeHourlyTime =
+      Array.isArray(hourlySource?.time) && hourlySource!.time.length > 0
+        ? hourlySource!.time
+        : fallback.hourly.time;
+    const safeHourlyTemperatures =
+      Array.isArray(hourlySource?.temperature_2m) &&
+      hourlySource!.temperature_2m.length > 0
+        ? hourlySource!.temperature_2m
+        : fallback.hourly.temperature_2m;
+    const hourlyLength = Math.min(
+      safeHourlyTime.length,
+      safeHourlyTemperatures.length
+    );
 
-  return {
-    ...fallback,
-    ...weatherAtLocation,
-    current_units: {
-      ...fallback.current_units,
-      ...weatherAtLocation.current_units,
-    },
-    hourly_units: {
-      ...fallback.hourly_units,
-      ...weatherAtLocation.hourly_units,
-    },
-    daily_units: {
-      ...fallback.daily_units,
-      ...weatherAtLocation.daily_units,
-    },
-    current: {
-      ...fallback.current,
-      ...weatherAtLocation.current,
-    },
-    hourly: {
-      time: safeHourlyTime.slice(0, hourlyLength),
-      temperature_2m: safeHourlyTemperatures.slice(0, hourlyLength),
-    },
-    daily: {
-      time: safeDailyTime.slice(0, dailyLength),
-      sunrise: safeDailySunrise.slice(0, dailyLength),
-      sunset: safeDailySunset.slice(0, dailyLength),
-    },
-  };
+    const safeDailyTime =
+      Array.isArray(dailySource?.time) && dailySource!.time.length > 0
+        ? dailySource!.time
+        : fallback.daily.time;
+    const safeDailySunrise =
+      Array.isArray(dailySource?.sunrise) && dailySource!.sunrise.length > 0
+        ? dailySource!.sunrise
+        : fallback.daily.sunrise;
+    const safeDailySunset =
+      Array.isArray(dailySource?.sunset) && dailySource!.sunset.length > 0
+        ? dailySource!.sunset
+        : fallback.daily.sunset;
+    const dailyLength = Math.min(
+      safeDailyTime.length,
+      safeDailySunrise.length,
+      safeDailySunset.length
+    );
+
+    return {
+      ...fallback,
+      ...weatherAtLocation,
+      current_units: {
+        ...fallback.current_units,
+        ...weatherAtLocation.current_units,
+      },
+      hourly_units: {
+        ...fallback.hourly_units,
+        ...weatherAtLocation.hourly_units,
+      },
+      daily_units: {
+        ...fallback.daily_units,
+        ...weatherAtLocation.daily_units,
+      },
+      current: {
+        ...fallback.current,
+        ...weatherAtLocation.current,
+      },
+      hourly: {
+        time: safeHourlyTime.slice(0, hourlyLength),
+        temperature_2m: safeHourlyTemperatures.slice(0, hourlyLength),
+      },
+      daily: {
+        time: safeDailyTime.slice(0, dailyLength),
+        sunrise: safeDailySunrise.slice(0, dailyLength),
+        sunset: safeDailySunset.slice(0, dailyLength),
+      },
+    };
+  } catch (error) {
+    console.error("[Weather] Failed to normalise payload", error);
+    return fallback;
+  }
 }
 
 function n(num: number): number {

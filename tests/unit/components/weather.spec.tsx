@@ -47,4 +47,15 @@ describe("Weather component", () => {
 
     expect(unitNodes.length).toBeGreaterThan(0);
   });
+
+  it("recovers from completely malformed tool payloads", () => {
+    const coerced = normaliseWeatherPayload({
+      current: { temperature_2m: 11 },
+      hourly: null,
+      daily: "not-a-structure" as unknown as WeatherAtLocation["daily"],
+    });
+
+    expect(coerced.hourly.temperature_2m.length).toBeGreaterThan(0);
+    expect(coerced.daily.sunrise.length).toBeGreaterThan(0);
+  });
 });
