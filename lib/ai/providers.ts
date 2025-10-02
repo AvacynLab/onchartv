@@ -331,8 +331,44 @@ function resolveStandardPrompt(
     ];
   }
 
+  if (matchesSingleTextMessage(message, "Why is the sky blue?")) {
+    return [
+      ...buildTextDeltas("It's just blue duh!"),
+      buildFinishChunk({ inputTokens: 3, outputTokens: 10, totalTokens: 13 }),
+    ];
+  }
+
   if (
-    matchesSingleTextMessage(message, "Montre BTCUSD 1D avec SMA(50/200)")
+    matchesSingleTextMessage(message, "What are the advantages of using Next.js?")
+  ) {
+    return [
+      ...buildTextDeltas("With Next.js, you can ship fast!"),
+      buildFinishChunk({ inputTokens: 3, outputTokens: 10, totalTokens: 13 }),
+    ];
+  }
+
+  if (matchesImageAttachmentPrompt(message)) {
+    return [
+      ...buildTextDeltas("This painting is by Monet!"),
+      buildFinishChunk({ inputTokens: 3, outputTokens: 10, totalTokens: 13 }),
+    ];
+  }
+
+  if (matchesSingleTextMessage(message, "What's the weather in sf?")) {
+    return [
+      {
+        type: "tool-call",
+        toolCallId: "call_weather",
+        toolName: "getWeather",
+        input: JSON.stringify({ latitude: 37.7749, longitude: -122.4194 }),
+      },
+      buildFinishChunk({ inputTokens: 3, outputTokens: 10, totalTokens: 13 }, "tool-calls"),
+    ];
+  }
+
+  if (
+    matchesSingleTextMessage(message, "Montre BTCUSD 1D avec SMA(50/200)") ||
+    matchesSingleTextMessage(message, "/chart BTCUSD 1D")
   ) {
     return [
       {
@@ -374,6 +410,10 @@ function resolveStandardPrompt(
     matchesSingleTextMessage(
       message,
       "Backteste SMA 50/200 sur AAPL 2018-01-01 → 2020-12-31"
+    ) ||
+    matchesSingleTextMessage(
+      message,
+      "/backtest AAPL 2018-01-01 2020-12-31 50 200"
     )
   ) {
     return [
@@ -421,7 +461,11 @@ function resolveStandardPrompt(
   }
 
   if (
-    matchesSingleTextMessage(message, "Donne fondamentaux + 3 news pour NVDA")
+    matchesSingleTextMessage(message, "Donne fondamentaux + 3 news pour NVDA") ||
+    matchesSingleTextMessage(
+      message,
+      "Summarise NVDA fundamentals using the finance artefacts"
+    )
   ) {
     return [
       {
@@ -444,14 +488,116 @@ function resolveStandardPrompt(
     )
   ) {
     return [
+      {
+        type: "tool-call",
+        toolCallId: "call_finance_news",
+        toolName: "tool.finance.news.fetch",
+        input: JSON.stringify({ symbol: "NVDA", limit: 3 }),
+      },
+      buildFinishChunk({ inputTokens: 10, outputTokens: 4, totalTokens: 14 }, "tool-calls"),
+    ];
+  }
+
+  if (
+    message.role === "tool" &&
+    message.content?.some(
+      (part) =>
+        part.type === "tool-result" &&
+        part.toolCallId === "call_finance_news" &&
+        part.toolName === "tool.finance.news.fetch"
+    )
+  ) {
+    return [
       ...buildTextDeltas(
-        "Fondamentaux NVDA et actualités synthétisés avec les données hors-ligne."
+        "Synthèse NVDA : fondamentaux clés et trois actualités fournies dans les artefacts."
       ),
-      buildFinishChunk({ inputTokens: 11, outputTokens: 24, totalTokens: 35 }),
+      buildFinishChunk({ inputTokens: 10, outputTokens: 20, totalTokens: 30 }),
+    ];
+  }
+
+  if (matchesSingleTextMessage(message, "Help me write an essay about Silicon Valley")) {
+    return buildDocumentCreationChunks();
+  }
+
+  if (
+    message.role === "tool" &&
+    message.content?.some(
+      (part) =>
+        part.type === "tool-result" && part.toolName === "createDocument"
+    )
+  ) {
+    return [
+      ...buildTextDeltas("A document was created and is now visible to the user."),
+      buildFinishChunk({ inputTokens: 3, outputTokens: 10, totalTokens: 13 }),
+    ];
+  }
+
+  if (
+    message.role === "tool" &&
+    message.content?.some(
+      (part) =>
+        part.type === "tool-result" && part.toolName === "getWeather"
+    )
+  ) {
+    return [
+      ...buildTextDeltas("The current temperature in San Francisco is 17°C."),
+      buildFinishChunk({ inputTokens: 3, outputTokens: 10, totalTokens: 13 }),
     ];
   }
 
   return null;
+}
+
+function matchesImageAttachmentPrompt(message: ModelMessage): boolean {
+  if (message.role !== "user" || !Array.isArray(message.content)) {
+    return false;
+  }
+
+  if (message.content.length < 2) {
+    return false;
+  }
+
+  const hasFile = message.content.some((part) => part.type === "file");
+  const question = message.content.find(
+    (part): part is Extract<ModelMessage["content"][number], { type: "text" }> =>
+      part.type === "text"
+  );
+
+  return hasFile && question?.text === "Who painted this?";
+}
+
+/**
+ * Mirror the document authoring helper used by the legacy Playwright fixtures so
+ * the inline mocks still exercise the tool streaming life-cycle (input start →
+ * deltas → result → finish). The IDs remain deterministic to simplify test
+ * assertions without leaking implementation details from the real provider.
+ */
+function buildDocumentCreationChunks(): LanguageModelV2StreamPart[] {
+  const toolCallId = "inline_create_document";
+
+  return [
+    { id: toolCallId, type: "tool-input-start", toolName: "createDocument" },
+    {
+      id: toolCallId,
+      type: "tool-input-delta",
+      delta: JSON.stringify({
+        title: "Essay about Silicon Valley",
+        kind: "text",
+      }),
+    },
+    { id: toolCallId, type: "tool-input-end" },
+    {
+      type: "tool-result",
+      toolCallId,
+      toolName: "createDocument",
+      result: {
+        id: "doc_123",
+        title: "Essay about Silicon Valley",
+        kind: "text",
+      },
+    },
+    buildFinishChunk({ inputTokens: 3, outputTokens: 10, totalTokens: 13 }),
+  ];
 }
 
 function matchesSingleTextMessage(

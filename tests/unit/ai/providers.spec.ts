@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelMessage } from "ai";
 
 const createOpenAIMock = vi.fn(() => ({
   languageModel: vi.fn((modelId: string) => ({
@@ -142,6 +143,26 @@ describe("loadMockLanguageModels", () => {
     return module.__test;
   };
 
+  const createPlaywrightInlineModels = async () => {
+    const moduleNotFound = Object.assign(new Error("missing"), {
+      code: "MODULE_NOT_FOUND",
+    });
+
+    const __test = await importTestHelpers();
+
+    return __test.loadMockLanguageModels({
+      loadModule: <T,>(moduleId: string): T => {
+        if (moduleId === "./models.mock") {
+          throw moduleNotFound;
+        }
+
+        return require(moduleId) as T;
+      },
+      testingModels: null,
+      profile: "playwright",
+    });
+  };
+
   beforeEach(() => {
     vi.resetModules();
     resetEnv();
@@ -208,23 +229,7 @@ describe("loadMockLanguageModels", () => {
   });
 
   it("emits Playwright-specific deltas when testing fixtures are unavailable", async () => {
-    const moduleNotFound = Object.assign(new Error("missing"), {
-      code: "MODULE_NOT_FOUND",
-    });
-
-    const __test = await importTestHelpers();
-
-    const models = __test.loadMockLanguageModels({
-      loadModule: <T,>(moduleId: string): T => {
-        if (moduleId === "./models.mock") {
-          throw moduleNotFound;
-        }
-
-        return require(moduleId) as T;
-      },
-      testingModels: null,
-      profile: "playwright",
-    });
+    const models = await createPlaywrightInlineModels();
 
     const streamResult = await models.chatModel.doStream?.({
       prompt: [
@@ -254,5 +259,151 @@ describe("loadMockLanguageModels", () => {
     }
 
     expect(deltas.join("").trim()).toContain("It's just green duh!");
+  });
+  it("streams the updated Next.js suggestion response via inline mocks", async () => {
+    const models = await createPlaywrightInlineModels();
+
+    const streamResult = await models.chatModel.doStream?.({
+      prompt: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "What are the advantages of using Next.js?" },
+          ],
+        },
+      ],
+    } as never);
+
+    if (!streamResult) {
+      throw new Error("Expected a streaming response from the inline Playwright mock");
+    }
+
+    const reader = streamResult.stream.getReader();
+    const deltas: string[] = [];
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      if (value.type === "text-delta") {
+        deltas.push(value.delta);
+      }
+    }
+
+    expect(deltas.join("").trim()).toContain("With Next.js, you can ship fast!");
+  });
+
+  it("emits weather tool calls before returning the stubbed forecast", async () => {
+    const models = await createPlaywrightInlineModels();
+
+    const streamResult = await models.chatModel.doStream?.({
+      prompt: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "What's the weather in sf?" }],
+        },
+      ],
+    } as never);
+
+    if (!streamResult) {
+      throw new Error("Expected a streaming response from the inline Playwright mock");
+    }
+
+    const reader = streamResult.stream.getReader();
+    const firstChunk = await reader.read();
+
+    expect(firstChunk.value).toMatchObject({
+      type: "tool-call",
+      toolName: "getWeather",
+    });
+
+    let sawForecast = false;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      if (value?.type === "text-delta") {
+        sawForecast ||= value.delta.includes("San Francisco");
+      }
+    }
+
+    expect(sawForecast).toBe(true);
+  });
+
+  it("serialises document creation tool traffic for essay prompts", async () => {
+    const models = await createPlaywrightInlineModels();
+
+    const streamResult = await models.chatModel.doStream?.({
+      prompt: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Help me write an essay about Silicon Valley" },
+          ],
+        },
+      ],
+    } as never);
+
+    if (!streamResult) {
+      throw new Error("Expected a streaming response from the inline Playwright mock");
+    }
+
+    const reader = streamResult.stream.getReader();
+    const chunkTypes: string[] = [];
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      chunkTypes.push(value.type);
+    }
+
+    expect(chunkTypes).toEqual(
+      expect.arrayContaining([
+        "tool-input-start",
+        "tool-input-delta",
+        "tool-input-end",
+        "tool-result",
+        "finish",
+      ])
+    );
+  });
+
+  it("requests finance news after receiving fundamentals tool results", async () => {
+    const models = await createPlaywrightInlineModels();
+
+    const fundamentalsMessage: ModelMessage = {
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId: "call_finance_fundamentals",
+          toolName: "tool.finance.fundamentals.fetch",
+          output: { type: "json", value: {} },
+        },
+      ],
+    };
+
+    const streamResult = await models.chatModel.doStream?.({
+      prompt: [fundamentalsMessage],
+    } as never);
+
+    if (!streamResult) {
+      throw new Error("Expected a streaming response from the inline Playwright mock");
+    }
+
+    const reader = streamResult.stream.getReader();
+    const firstChunk = await reader.read();
+
+    expect(firstChunk.value).toMatchObject({
+      type: "tool-call",
+      toolName: "tool.finance.news.fetch",
+    });
   });
 });
