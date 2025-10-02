@@ -139,13 +139,33 @@ function createMockProvider() {
     }
   })();
 
-  const models = loadMockLanguageModels({
-    loadModule,
-    resolveModule,
-    testingModels,
-    profile: shouldPreferTestingFixtures ? "playwright" : "basic",
-  });
-  return createProviderFromModels(models);
+  try {
+    const models = loadMockLanguageModels({
+      loadModule,
+      resolveModule,
+      testingModels,
+      profile: shouldPreferTestingFixtures ? "playwright" : "basic",
+    });
+    return createProviderFromModels(models);
+  } catch (error) {
+    const maybeErrno = error as NodeJS.ErrnoException;
+
+    /**
+     * Some bundlers attempt to evaluate the CommonJS `require` call eagerly and
+     * surface a `MODULE_NOT_FOUND` error before we reach `loadMockLanguageModels`.
+     * When that happens we still want to fall back to the inline mocks so the
+     * finance/chat journeys remain functional during end-to-end tests.
+     */
+    if (maybeErrno?.code === "MODULE_NOT_FOUND") {
+      return createProviderFromModels(
+        createInlineMockLanguageModels(
+          shouldPreferTestingFixtures ? "playwright" : "basic"
+        )
+      );
+    }
+
+    throw error;
+  }
 }
 
 function loadMockLanguageModels({

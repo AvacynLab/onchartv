@@ -135,6 +135,60 @@ describe("ai provider configuration", () => {
     expect(chatModel.provider).toBe("mock-provider");
     expect(chatModel.specificationVersion).toBe("v2");
   });
+
+  it("recovers with inline mocks when the bundled fixtures resolve but fail to load", async () => {
+    process.env.PLAYWRIGHT = "true";
+
+    const moduleNotFound = Object.assign(new Error("missing"), {
+      code: "MODULE_NOT_FOUND",
+    });
+
+    globalThis.eval = ((expression: string) => {
+      if (expression === "require") {
+        const failingRequire = ((moduleId: string) => {
+          if (moduleId === "./models.mock" || moduleId === "./models.testing") {
+            throw moduleNotFound;
+          }
+
+          return nodeRequire(moduleId);
+        }) as NodeJS.Require;
+
+        failingRequire.resolve = (moduleId: string) => {
+          if (moduleId === "./models.mock") {
+            return moduleId;
+          }
+
+          return nodeRequire.resolve(moduleId);
+        };
+        failingRequire.cache = nodeRequire.cache;
+        failingRequire.extensions = nodeRequire.extensions;
+        failingRequire.main = nodeRequire.main;
+
+        return ((moduleId: string) => {
+          if (moduleId === "module") {
+            return {
+              createRequire: () => failingRequire,
+            } satisfies Partial<typeof import("node:module")>;
+          }
+
+          if (moduleId === "@ai-sdk/openai") {
+            return { createOpenAI: createOpenAIMock };
+          }
+
+          return nodeRequire(moduleId);
+        }) as NodeJS.Require;
+      }
+
+      return originalEval(expression);
+    }) as typeof globalThis.eval;
+
+    const { myProvider } = await import("@/lib/ai/providers");
+
+    const chatModel = myProvider.languageModel("chat-model");
+
+    expect(chatModel.provider).toBe("mock-provider");
+    expect(chatModel.specificationVersion).toBe("v2");
+  });
 });
 
 describe("loadMockLanguageModels", () => {
