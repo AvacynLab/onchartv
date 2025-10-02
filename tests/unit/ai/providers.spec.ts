@@ -298,13 +298,15 @@ describe("loadMockLanguageModels", () => {
   it("emits weather tool calls before returning the stubbed forecast", async () => {
     const models = await createPlaywrightInlineModels();
 
+    const userPrompt: ModelMessage[] = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "What's the weather in sf?" }],
+      },
+    ];
+
     const streamResult = await models.chatModel.doStream?.({
-      prompt: [
-        {
-          role: "user",
-          content: [{ type: "text", text: "What's the weather in sf?" }],
-        },
-      ],
+      prompt: userPrompt,
     } as never);
 
     if (!streamResult) {
@@ -319,19 +321,41 @@ describe("loadMockLanguageModels", () => {
       toolName: "getWeather",
     });
 
-    let sawForecast = false;
+    const secondStream = await models.chatModel.doStream?.({
+      prompt: [
+        ...userPrompt,
+        {
+          role: "tool",
+          content: [
+            {
+              type: "tool-result",
+              toolCallId: "call_weather",
+              toolName: "getWeather",
+            },
+          ],
+        },
+      ],
+    } as never);
+
+    if (!secondStream) {
+      throw new Error("Expected a follow-up streaming response with the stubbed forecast");
+    }
+
+    const secondReader = secondStream.stream.getReader();
+    let forecastResponse = "";
+
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await secondReader.read();
       if (done) {
         break;
       }
 
       if (value?.type === "text-delta") {
-        sawForecast ||= value.delta.includes("San Francisco");
+        forecastResponse += value.delta;
       }
     }
 
-    expect(sawForecast).toBe(true);
+    expect(forecastResponse).toContain("San Francisco");
   });
 
   it("serialises document creation tool traffic for essay prompts", async () => {

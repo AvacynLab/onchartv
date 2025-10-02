@@ -56,16 +56,54 @@ export class ChatPage {
   async isGenerationComplete() {
     const assistantMessages = this.page.getByTestId("message-assistant");
     const initialAssistantCount = await assistantMessages.count();
+    const initialLatestMessage =
+      initialAssistantCount > 0
+        ? await assistantMessages
+            .nth(initialAssistantCount - 1)
+            .getByTestId("message-content")
+            .innerText()
+            .then((value) => value.trim())
+            .catch(() => "")
+        : "";
 
+    /**
+     * Some chat journeys (notably the finance accessibility sweep) reuse the
+     * same assistant bubble when multiple prompts run back to back. The DOM
+     * still streams fresh content, but the overall assistant count remains
+     * stable. Poll both the count and the text payload so we unblock as soon as
+     * either a new bubble appears or the latest response finishes streaming.
+     */
     await expect
-      .poll(async () => assistantMessages.count())
-      .toBeGreaterThan(initialAssistantCount);
+      .poll(async () => {
+        const currentCount = await assistantMessages.count();
+
+        if (currentCount > initialAssistantCount) {
+          return "count-increased";
+        }
+
+        if (currentCount === initialAssistantCount && currentCount > 0) {
+          const latestContent = await assistantMessages
+            .nth(currentCount - 1)
+            .getByTestId("message-content")
+            .innerText()
+            .then((value) => value.trim())
+            .catch(() => "");
+
+          if (latestContent.length > 0 && latestContent !== initialLatestMessage) {
+            return "content-updated";
+          }
+        }
+
+        return "pending";
+      })
+      .not.toBe("pending");
 
     /**
      * The assistant stream reuses the same container while piping tool results
-     * into the UI. Poll until we see an extra assistant bubble so the helper
-     * always inspects the most recent response, even when previous runs left
-     * history entries in the DOM.
+     * into the UI. By the time we reach this section the guard above has either
+     * observed a brand-new bubble or detected fresh content within the latest
+     * one, so selecting `count() - 1` safely targets the resolved response even
+     * when earlier interactions left history entries in the DOM.
      */
 
     const latestAssistantMessage = assistantMessages.nth(
