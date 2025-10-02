@@ -1,5 +1,7 @@
 const originalPlaywright = process.env.PLAYWRIGHT;
-process.env.PLAYWRIGHT = "1";
+// Use the canonical "true" marker so the finance preferences route thinks it
+// runs under Playwright, matching the CI and e2e environment contract.
+process.env.PLAYWRIGHT = "true";
 
 import {
   afterAll,

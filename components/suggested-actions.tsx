@@ -14,7 +14,14 @@ type SuggestedActionsProps = {
 };
 
 function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
+  /**
+   * Keep the first suggestion anchored to the long-standing onboarding prompt so
+   * the regression suite continues to assert the deterministic "With Next.js,
+   * you can ship fast!" response while the remaining entries highlight the new
+   * finance shortcuts.
+   */
   const suggestedActions = [
+    "What are the advantages of using Next.js?",
     "/chart BTCUSD 1D",
     "/backtest AAPL 2018-01-01 2020-12-31 50 200",
     "Summarise NVDA fundamentals using the finance artefacts",

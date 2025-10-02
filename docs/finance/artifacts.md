@@ -61,7 +61,8 @@ This document describes the JSON payloads that power the finance artefacts strea
     "winRate": 0.55,
     "sharpe": 0.9,
     "profitFactor": 1.6,
-    "averageTrade": 0.0042,
+    "averageWin": 0.042,
+    "averageLoss": 0.021,
     "trades": 84
   },
   "equityCurve": [
@@ -84,6 +85,8 @@ This document describes the JSON payloads that power the finance artefacts strea
   "explanation": "La stratégie croisée SMA a généré un rendement annuel composé de 14% en surfant sur les tendances longues." 
 }
 ```
+
+- `averageLoss` est exprimé en valeur absolue pour refléter l’ampleur moyenne des pertes, conformément à `BacktestMetrics`.
 
 ## `finance.fundamentals`
 

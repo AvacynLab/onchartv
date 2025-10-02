@@ -225,7 +225,12 @@ export async function POST(request: Request): Promise<Response> {
 
     console.error("[api:finance.backtest] unexpected error", error);
     return Response.json(
-      { code: "internal_error:api", message: "Unexpected error while running backtest." },
+      {
+        error: {
+          code: "internal_error:api",
+          message: "Unexpected error while running backtest.",
+        },
+      },
       { status: 500 }
     );
   } finally {

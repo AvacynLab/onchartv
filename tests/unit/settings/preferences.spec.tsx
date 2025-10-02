@@ -85,6 +85,9 @@ describe("FinanceSettings", () => {
     expect(newsToggle).toBeChecked();
     await userEvent.click(newsToggle);
     expect(newsToggle).not.toBeChecked();
+    expect(
+      screen.getByTestId("finance-settings-news-disabled")
+    ).toBeInTheDocument();
 
     const emaPreset = screen.getByTestId("finance-indicator-ema-mid");
     const emaToggle = within(emaPreset).getByRole("checkbox");

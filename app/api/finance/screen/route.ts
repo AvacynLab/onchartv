@@ -160,7 +160,12 @@ export async function POST(request: Request): Promise<Response> {
 
     console.error("[api:finance.screen] unexpected error", error);
     return Response.json(
-      { code: "internal_error:api", message: "Unexpected error while screening assets." },
+      {
+        error: {
+          code: "internal_error:api",
+          message: "Unexpected error while screening assets.",
+        },
+      },
       { status: 500 }
     );
   } finally {

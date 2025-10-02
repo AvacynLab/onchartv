@@ -29,7 +29,7 @@ test.describe("Finance artefacts accessibility", () => {
     await overlayToggle.focus();
     await expect(overlayToggle).toBeFocused();
 
-    await chatPage.sendUserMessage("Backteste SMA 50/200 sur AAPL 2018-2020");
+    await chatPage.sendUserMessage("Backteste SMA 50/200 sur AAPL 2018-01-01 → 2020-12-31");
     await chatPage.isGenerationComplete();
 
     const retestButton = page.getByRole("button", { name: /Re-tester avec ces paramètres/ });
@@ -42,7 +42,7 @@ test.describe("Finance artefacts accessibility", () => {
     await nextPageButton.focus();
     await expect(nextPageButton).toBeFocused();
 
-    await chatPage.sendUserMessage("Montre fondamentaux + 3 dernières news de NVDA");
+    await chatPage.sendUserMessage("Donne fondamentaux + 3 news pour NVDA");
     await chatPage.isGenerationComplete();
 
     const externalLink = page.getByRole("link", { name: /Ouvrir l'article/ }).first();

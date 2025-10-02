@@ -34,9 +34,18 @@ test.describe
       });
       expect(response.status()).toBe(400);
 
-      const { code, message } = await response.json();
-      expect(code).toEqual("bad_request:api");
-      expect(message).toEqual(getMessageByErrorCode("bad_request:api"));
+      const { error } = await response.json();
+      expect(error).toBeDefined();
+      /**
+       * The chat routes were upgraded to return a namespaced error envelope so
+       * we mirror the production contract here. This prevents the regression
+       * where Playwright attempted to read top-level `code` and `message`
+       * fields that no longer exist on the JSON payload.
+       */
+      expect(error).toMatchObject({
+        code: "bad_request:api",
+        message: getMessageByErrorCode("bad_request:api"),
+      });
     });
 
     test("Ada can invoke chat generation", async ({ adaContext }) => {
@@ -81,9 +90,12 @@ test.describe
       });
       expect(response.status()).toBe(403);
 
-      const { code, message } = await response.json();
-      expect(code).toEqual("forbidden:chat");
-      expect(message).toEqual(getMessageByErrorCode("forbidden:chat"));
+      const { error } = await response.json();
+      expect(error).toBeDefined();
+      expect(error).toMatchObject({
+        code: "forbidden:chat",
+        message: getMessageByErrorCode("forbidden:chat"),
+      });
     });
 
     test("Babbage cannot delete Ada's chat", async ({ babbageContext }) => {
@@ -94,9 +106,12 @@ test.describe
       );
       expect(response.status()).toBe(403);
 
-      const { code, message } = await response.json();
-      expect(code).toEqual("forbidden:chat");
-      expect(message).toEqual(getMessageByErrorCode("forbidden:chat"));
+      const { error } = await response.json();
+      expect(error).toBeDefined();
+      expect(error).toMatchObject({
+        code: "forbidden:chat",
+        message: getMessageByErrorCode("forbidden:chat"),
+      });
     });
 
     test("Ada can delete her own chat", async ({ adaContext }) => {

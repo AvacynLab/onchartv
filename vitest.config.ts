@@ -9,6 +9,13 @@ import { defineConfig } from "vitest/config";
  */
 const projectRoot = fileURLToPath(new URL(".", import.meta.url));
 
+/**
+ * Deterministic output location for machine-readable Vitest telemetry.
+ * The CI workflow uploads the folder so dashboards can surface coverage
+ * and test regressions without rerunning the suite locally.
+ */
+const coverageDirectory = resolve(projectRoot, "coverage");
+
 export default defineConfig({
   resolve: {
     alias: {
@@ -26,7 +33,16 @@ export default defineConfig({
     exclude: ["tests/unit/**/*.test.ts"],
     coverage: {
       provider: "v8",
+      reportsDirectory: coverageDirectory,
       reporter: ["text", "lcov"],
     },
+    /**
+     * Emit human-readable output alongside a deterministic JUnit report so the
+     * CI workflow can publish coverage and test telemetry without reruns.
+     */
+    reporters: [
+      "default",
+      ["junit", { outputFile: resolve(coverageDirectory, "junit.xml") }],
+    ],
   },
 });

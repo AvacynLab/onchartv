@@ -1,5 +1,7 @@
 const originalPlaywright = process.env.PLAYWRIGHT;
-process.env.PLAYWRIGHT = "1";
+// Normalise the hermetic Playwright flag to the canonical "true" string so the
+// routes exercise the same code paths as the e2e environment.
+process.env.PLAYWRIGHT = "true";
 
 import {
   afterAll,
