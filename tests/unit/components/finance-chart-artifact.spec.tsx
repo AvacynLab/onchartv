@@ -4,7 +4,10 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { FinanceChartArtifact } from "@/components/finance/finance-chart-artifact";
+import {
+  FinanceChartArtifact,
+  normalizeFinanceColor,
+} from "@/components/finance/finance-chart-artifact";
 import type { FinanceChartArtifact as FinanceChartPayload } from "@/lib/finance/types";
 
 type CrosshairHandler = (param: any) => void;
@@ -94,6 +97,20 @@ describe("FinanceChartArtifact", () => {
 
   const storageKeyFor = (payload: FinanceChartPayload) =>
     `finance.chart.overlays:${payload.symbol}:${payload.timeframe}`;
+
+  describe("normalizeFinanceColor", () => {
+    it("converts whitespace-separated hsl strings to comma syntax", () => {
+      expect(normalizeFinanceColor("hsl(240 3.8% 46.1%)")).toBe(
+        "hsl(240, 3.8%, 46.1%)"
+      );
+    });
+
+    it("preserves alpha segments while inserting commas", () => {
+      expect(normalizeFinanceColor("hsla(200 50% 40% / 0.5)")).toBe(
+        "hsla(200, 50%, 40%, 0.5)"
+      );
+    });
+  });
 
   it("renders toggles, allows enabling/disabling overlays and persists the preference", async () => {
     const { unmount } = render(<FinanceChartArtifact artifact={artifact} />);

@@ -1,10 +1,10 @@
 "use client";
 
+import React, { useEffect, useState } from "react";
 import cx from "classnames";
 import { format, isWithinInterval } from "date-fns";
-import { useEffect, useState } from "react";
 
-type WeatherAtLocation = {
+export type WeatherAtLocation = {
   latitude: number;
   longitude: number;
   generationtime_ms: number;
@@ -42,7 +42,7 @@ type WeatherAtLocation = {
   };
 };
 
-const SAMPLE = {
+export const WEATHER_FALLBACK_SAMPLE: WeatherAtLocation = {
   latitude: 37.763_283,
   longitude: -122.412_86,
   generationtime_ms: 0.027_894_973_754_882_812,
@@ -195,27 +195,110 @@ const SAMPLE = {
       "2024-10-11T18:54",
     ],
   },
-};
+} as const;
+
+function cloneFallbackWeather(): WeatherAtLocation {
+  return structuredClone(WEATHER_FALLBACK_SAMPLE);
+}
+
+/**
+ * Ensure the weather widget always receives a complete dataset, even when
+ * mocks omit optional properties. Returning a merged payload keeps the UI from
+ * crashing during hermetic Playwright runs while still reflecting any dynamic
+ * values the provider supplied (current temperature, timezone, etc.).
+ */
+export function normaliseWeatherPayload(
+  weatherAtLocation?: Partial<WeatherAtLocation>
+): WeatherAtLocation {
+  const fallback = cloneFallbackWeather();
+
+  if (!weatherAtLocation) {
+    return fallback;
+  }
+
+  const safeHourlyTime = Array.isArray(weatherAtLocation.hourly?.time) &&
+    weatherAtLocation.hourly!.time.length > 0
+      ? weatherAtLocation.hourly!.time
+      : fallback.hourly.time;
+  const safeHourlyTemperatures = Array.isArray(
+    weatherAtLocation.hourly?.temperature_2m
+  ) && weatherAtLocation.hourly!.temperature_2m.length > 0
+    ? weatherAtLocation.hourly!.temperature_2m
+    : fallback.hourly.temperature_2m;
+  const hourlyLength = Math.min(
+    safeHourlyTime.length,
+    safeHourlyTemperatures.length
+  );
+
+  const safeDailyTime = Array.isArray(weatherAtLocation.daily?.time) &&
+    weatherAtLocation.daily!.time.length > 0
+      ? weatherAtLocation.daily!.time
+      : fallback.daily.time;
+  const safeDailySunrise = Array.isArray(weatherAtLocation.daily?.sunrise) &&
+    weatherAtLocation.daily!.sunrise.length > 0
+      ? weatherAtLocation.daily!.sunrise
+      : fallback.daily.sunrise;
+  const safeDailySunset = Array.isArray(weatherAtLocation.daily?.sunset) &&
+    weatherAtLocation.daily!.sunset.length > 0
+      ? weatherAtLocation.daily!.sunset
+      : fallback.daily.sunset;
+  const dailyLength = Math.min(
+    safeDailyTime.length,
+    safeDailySunrise.length,
+    safeDailySunset.length
+  );
+
+  return {
+    ...fallback,
+    ...weatherAtLocation,
+    current_units: {
+      ...fallback.current_units,
+      ...weatherAtLocation.current_units,
+    },
+    hourly_units: {
+      ...fallback.hourly_units,
+      ...weatherAtLocation.hourly_units,
+    },
+    daily_units: {
+      ...fallback.daily_units,
+      ...weatherAtLocation.daily_units,
+    },
+    current: {
+      ...fallback.current,
+      ...weatherAtLocation.current,
+    },
+    hourly: {
+      time: safeHourlyTime.slice(0, hourlyLength),
+      temperature_2m: safeHourlyTemperatures.slice(0, hourlyLength),
+    },
+    daily: {
+      time: safeDailyTime.slice(0, dailyLength),
+      sunrise: safeDailySunrise.slice(0, dailyLength),
+      sunset: safeDailySunset.slice(0, dailyLength),
+    },
+  };
+}
 
 function n(num: number): number {
   return Math.ceil(num);
 }
 
 export function Weather({
-  weatherAtLocation = SAMPLE,
+  weatherAtLocation,
 }: {
   weatherAtLocation?: WeatherAtLocation;
 }) {
+  const safeWeather = normaliseWeatherPayload(weatherAtLocation);
   const currentHigh = Math.max(
-    ...weatherAtLocation.hourly.temperature_2m.slice(0, 24)
+    ...safeWeather.hourly.temperature_2m.slice(0, 24)
   );
   const currentLow = Math.min(
-    ...weatherAtLocation.hourly.temperature_2m.slice(0, 24)
+    ...safeWeather.hourly.temperature_2m.slice(0, 24)
   );
 
-  const isDay = isWithinInterval(new Date(weatherAtLocation.current.time), {
-    start: new Date(weatherAtLocation.daily.sunrise[0]),
-    end: new Date(weatherAtLocation.daily.sunset[0]),
+  const isDay = isWithinInterval(new Date(safeWeather.current.time), {
+    start: new Date(safeWeather.daily.sunrise[0]),
+    end: new Date(safeWeather.daily.sunset[0]),
   });
 
   const [isMobile, setIsMobile] = useState(false);
@@ -234,18 +317,19 @@ export function Weather({
   const hoursToShow = isMobile ? 5 : 6;
 
   // Find the index of the current time or the next closest time
-  const currentTimeIndex = weatherAtLocation.hourly.time.findIndex(
-    (time) => new Date(time) >= new Date(weatherAtLocation.current.time)
+  const currentTimeIndex = safeWeather.hourly.time.findIndex(
+    (time) => new Date(time) >= new Date(safeWeather.current.time)
   );
+  const startIndex = currentTimeIndex === -1 ? 0 : currentTimeIndex;
 
   // Slice the arrays to get the desired number of items
-  const displayTimes = weatherAtLocation.hourly.time.slice(
-    currentTimeIndex,
-    currentTimeIndex + hoursToShow
+  const displayTimes = safeWeather.hourly.time.slice(
+    startIndex,
+    startIndex + hoursToShow
   );
-  const displayTemperatures = weatherAtLocation.hourly.temperature_2m.slice(
-    currentTimeIndex,
-    currentTimeIndex + hoursToShow
+  const displayTemperatures = safeWeather.hourly.temperature_2m.slice(
+    startIndex,
+    startIndex + hoursToShow
   );
 
   return (
@@ -274,8 +358,8 @@ export function Weather({
             )}
           />
           <div className="font-medium text-4xl text-blue-50">
-            {n(weatherAtLocation.current.temperature_2m)}
-            {weatherAtLocation.current_units.temperature_2m}
+            {n(safeWeather.current.temperature_2m)}
+            {safeWeather.current_units.temperature_2m}
           </div>
         </div>
 
@@ -301,7 +385,7 @@ export function Weather({
             />
             <div className="text-blue-50 text-sm">
               {n(displayTemperatures[index])}
-              {weatherAtLocation.hourly_units.temperature_2m}
+              {safeWeather.hourly_units.temperature_2m}
             </div>
           </div>
         ))}

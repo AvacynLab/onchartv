@@ -77,12 +77,50 @@ type ThemePalette = {
   readonly overlayEma: string;
 };
 
+/**
+ * Lightweight Charts (the underlying finance renderer) only accepts CSS Level
+ * 3 colour syntax for the `hsl()` helpers. Our design tokens use the more
+ * modern whitespace-separated notation which triggers runtime "Cannot parse
+ * color" errors. Normalising the tokens once keeps the component resilient on
+ * both the server (during hydration) and the client (when Playwright toggles
+ * themes mid-test).
+ */
+export function normalizeFinanceColor(color: string): string {
+  const trimmed = color.trim();
+  const hslMatch = /^\s*(hsl|hsla)\(\s*([^)]*?)\s*\)\s*$/i.exec(trimmed);
+
+  if (!hslMatch) {
+    return trimmed;
+  }
+
+  if (trimmed.includes(",")) {
+    return `${hslMatch[1].toLowerCase()}(${hslMatch[2]})`;
+  }
+
+  const [, fnName, body] = hslMatch;
+  const [rawMain, rawAlpha] = body.split("/").map((segment) => segment.trim());
+  const components = rawMain.split(/\s+/).filter(Boolean);
+
+  if (components.length < 3) {
+    return `${fnName.toLowerCase()}(${rawMain})`;
+  }
+
+  const normalisedMain = components.join(", ");
+  const fn = fnName.toLowerCase();
+
+  if (rawAlpha) {
+    return `${fn}(${normalisedMain}, ${rawAlpha})`;
+  }
+
+  return `${fn}(${normalisedMain})`;
+}
+
 /** Internal helper describing the visible time window accepted by the scale. */
 type ChartTimeRange = { from: UTCTimestamp; to: UTCTimestamp };
 
 const FALLBACK_PALETTE: ThemePalette = {
-  text: "hsl(240 3.8% 46.1%)",
-  grid: "hsl(220 16% 90%)",
+  text: normalizeFinanceColor("hsl(240 3.8% 46.1%)"),
+  grid: normalizeFinanceColor("hsl(220 16% 90%)"),
   candleUp: "#22c55e",
   candleUpBorder: "#15803d",
   candleUpWick: "#166534",
@@ -111,7 +149,7 @@ const readColorVariable = (
   variable: string,
   fallback: string
 ) => {
-  const value = style.getPropertyValue(variable).trim();
+  const value = normalizeFinanceColor(style.getPropertyValue(variable));
   return value.length === 0 ? fallback : value;
 };
 
