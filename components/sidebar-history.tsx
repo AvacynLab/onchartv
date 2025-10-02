@@ -1,10 +1,8 @@
 "use client";
-
-import { isToday, isYesterday, subMonths, subWeeks } from "date-fns";
 import { motion } from "framer-motion";
 import { useParams, useRouter } from "next/navigation";
 import type { User } from "next-auth";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import useSWRInfinite from "swr/infinite";
 import {
@@ -33,49 +31,12 @@ import {
 import { fetcher } from "@/lib/utils";
 import { LoaderIcon } from "./icons";
 import { ChatItem } from "./sidebar-history-item";
-
-type GroupedChats = {
-  today: Chat[];
-  yesterday: Chat[];
-  lastWeek: Chat[];
-  lastMonth: Chat[];
-  older: Chat[];
-};
+import {
+  groupChatsByDate,
+  selectHistoryPagesForRender,
+} from "./sidebar-history.utils";
 
 export type ChatHistory = ChatHistoryPage;
-
-const groupChatsByDate = (chats: Chat[]): GroupedChats => {
-  const now = new Date();
-  const oneWeekAgo = subWeeks(now, 1);
-  const oneMonthAgo = subMonths(now, 1);
-
-  return chats.reduce(
-    (groups, chat) => {
-      const chatDate = new Date(chat.createdAt);
-
-      if (isToday(chatDate)) {
-        groups.today.push(chat);
-      } else if (isYesterday(chatDate)) {
-        groups.yesterday.push(chat);
-      } else if (chatDate > oneWeekAgo) {
-        groups.lastWeek.push(chat);
-      } else if (chatDate > oneMonthAgo) {
-        groups.lastMonth.push(chat);
-      } else {
-        groups.older.push(chat);
-      }
-
-      return groups;
-    },
-    {
-      today: [],
-      yesterday: [],
-      lastWeek: [],
-      lastMonth: [],
-      older: [],
-    } as GroupedChats
-  );
-};
 
 export function getChatHistoryPaginationKey(
   pageIndex: number,
@@ -110,6 +71,18 @@ type SidebarHistoryProps = {
 export function SidebarHistory({ initialHistory, user }: SidebarHistoryProps) {
   const { setOpenMobile } = useSidebar();
   const { id } = useParams();
+  /**
+   * Capture the server-rendered timestamp once so the client reuses the same
+   * reference point after hydration. Without this guard the grouping logic
+   * would call `Date.now()` during each render, causing the server and client
+   * to disagree about whether a chat belongs to "Today" or "Yesterday" and
+   * crashing the app with a hydration error during Playwright runs.
+   */
+  const [groupingTimestamp] = useState(() => Date.now());
+  const groupingReferenceDate = useMemo(
+    () => new Date(groupingTimestamp),
+    [groupingTimestamp]
+  );
 
   const shouldPauseFetches = isPlaywrightFeatureEnabled();
   const historyConfig = useMemo(
@@ -133,16 +106,45 @@ export function SidebarHistory({ initialHistory, user }: SidebarHistoryProps) {
     historyConfig
   );
 
+  /**
+   * Preserve the loading state observed during the server render so the client
+   * does not flip from the skeleton view to the populated history during the
+   * hydration pass. The SWR `isLoading` flag switches to `false` once the
+   * browser resolves the first request, but we only want to show the skeleton
+   * while the initial payload is genuinely unavailable.
+   */
+  const [initialLoading] = useState(() => isLoading);
+  const [hasHydrated, setHasHydrated] = useState(false);
+  /**
+   * Preserve the server-rendered chat history snapshot so the first client
+   * render mirrors the markup that Next.js streamed. Without this guard the
+   * sidebar could briefly render an empty skeleton while the SWR cache warms
+   * up, which previously produced a hydration mismatch during Playwright runs.
+   */
+  const [initialChatHistoryPages] = useState(
+    () => paginatedChatHistories ?? null
+  );
+
+  const historyPagesForRender = selectHistoryPagesForRender({
+    currentPages: paginatedChatHistories ?? null,
+    initialSnapshot: initialChatHistoryPages,
+    hasHydrated,
+  });
+
+  useEffect(() => {
+    setHasHydrated(true);
+  }, []);
+
   const router = useRouter();
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
-  const hasReachedEnd = paginatedChatHistories
-    ? paginatedChatHistories.some((page) => page.hasMore === false)
+  const hasReachedEnd = historyPagesForRender
+    ? historyPagesForRender.some((page) => page.hasMore === false)
     : false;
 
-  const hasEmptyChatHistory = paginatedChatHistories
-    ? paginatedChatHistories.every((page) => page.chats.length === 0)
+  const hasEmptyChatHistory = historyPagesForRender
+    ? historyPagesForRender.every((page) => page.chats.length === 0)
     : false;
 
   const handleDelete = () => {
@@ -186,7 +188,11 @@ export function SidebarHistory({ initialHistory, user }: SidebarHistoryProps) {
     );
   }
 
-  if (isLoading) {
+  if (
+    !hasHydrated &&
+    initialLoading &&
+    (!historyPagesForRender || historyPagesForRender.length === 0)
+  ) {
     return (
       <SidebarGroup>
         <div className="px-2 py-1 text-sidebar-foreground/50 text-xs">
@@ -232,13 +238,16 @@ export function SidebarHistory({ initialHistory, user }: SidebarHistoryProps) {
       <SidebarGroup>
         <SidebarGroupContent>
           <SidebarMenu>
-            {paginatedChatHistories &&
+            {historyPagesForRender &&
               (() => {
-                const chatsFromHistory = paginatedChatHistories.flatMap(
+                const chatsFromHistory = historyPagesForRender.flatMap(
                   (paginatedChatHistory) => paginatedChatHistory.chats
                 );
 
-                const groupedChats = groupChatsByDate(chatsFromHistory);
+                const groupedChats = groupChatsByDate(
+                  chatsFromHistory,
+                  groupingReferenceDate
+                );
 
                 return (
                   <div className="flex flex-col gap-6">
