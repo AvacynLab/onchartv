@@ -89,6 +89,8 @@ test.describe.serial("Guest share access control", () => {
     expect(forbiddenResponse.status()).toBe(403);
 
     const responseBody = await forbiddenResponse.json();
-    expect(responseBody).toMatchObject({ code: "forbidden:chat" });
+    expect(responseBody).toMatchObject({
+      error: expect.objectContaining({ code: "forbidden:chat" }),
+    });
   });
 });

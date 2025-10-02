@@ -96,6 +96,41 @@ export class ChatPage {
           return "count-increased";
         }
 
+        const [
+          loadingCount,
+          stopVisible,
+          sendVisible,
+          sendEnabled,
+        ] = await Promise.all([
+          this.page
+            .getByTestId("message-assistant-loading")
+            .count()
+            .catch(() => 0),
+          this.stopButton
+            .isVisible()
+            .then(Boolean)
+            .catch(() => false),
+          this.sendButton
+            .isVisible()
+            .then(Boolean)
+            .catch(() => false),
+          this.sendButton
+            .isEnabled()
+            .then(Boolean)
+            .catch(() => false),
+        ]);
+
+        const uiIdle =
+          loadingCount === 0 &&
+          !stopVisible &&
+          (!sendVisible || sendEnabled);
+
+        /**
+         * `uiIdle` captures the common "generation finished" surface area: no
+         * streaming spinner, stop control hidden and the send control either
+         * visible/enabled or temporarily hidden while the UI transitions back to
+         * its default state.
+         */
         if (currentCount === initialAssistantCount && currentCount > 0) {
           const latestAssistant = assistantMessages.nth(currentCount - 1);
           const latestContent = await latestAssistant
@@ -134,9 +169,25 @@ export class ChatPage {
            * we treat the run as complete to avoid polling indefinitely on a
            * stable message bubble.
            */
-          if (loadingCount === 0 && stopCount === 0 && sendVisible) {
+
+          if (uiIdle) {
+
             return "idle";
           }
+        }
+
+
+        /**
+         * Some flows (e.g. preference toggles) respond without emitting a new
+         * assistant message. As soon as the UI returns to the idle state we can
+         * unblock the caller instead of waiting for a non-existent bubble.
+         */
+        if (
+          currentCount === initialAssistantCount &&
+          currentCount === 0 &&
+          uiIdle
+        ) {
+          return "idle";
         }
 
         return "pending";
@@ -151,16 +202,29 @@ export class ChatPage {
      * when earlier interactions left history entries in the DOM.
      */
 
-    const latestAssistantMessage = assistantMessages.nth(
-      (await assistantMessages.count()) - 1
-    );
+    const finalAssistantCount = await assistantMessages.count();
+
+    if (finalAssistantCount === 0) {
+      /**
+       * Reaching this branch means the assistant never surfaced a response even
+       * though the UI left the loading state. Bubble up an explicit error so the
+       * failing test points developers to the missing artefact instead of timing
+       * out after several minutes.
+       */
+      throw new Error(
+        "Expected the assistant to respond but no messages were rendered."
+      );
+    }
+
+    const latestAssistantMessage = assistantMessages.nth(finalAssistantCount - 1);
     await latestAssistantMessage.waitFor({ state: "attached" });
 
     await expect(this.page.getByTestId("message-assistant-loading")).toHaveCount(0);
-    await expect(this.page.getByTestId("stop-button")).toHaveCount(0);
+    await expect(this.stopButton).not.toBeVisible();
 
     const sendButton = this.sendButton;
     await expect(sendButton).toBeVisible();
+    await expect(sendButton).toBeEnabled();
 
     const latestMessageContent = latestAssistantMessage.getByTestId(
       "message-content"
