@@ -179,8 +179,19 @@ function loadMockLanguageModels({
   readonly testingModels: MockLanguageModelModule | null;
   readonly profile: InlineMockProfile;
 }): MockLanguageModelModule {
-  if (profile === "playwright" && testingModels) {
-    return testingModels;
+  if (profile === "playwright") {
+    if (testingModels) {
+      return testingModels;
+    }
+
+    /**
+     * Playwright environments sometimes execute within stripped bundles where the
+     * shared `models.mock` module is tree-shaken. Attempting to `require` it in
+     * those scenarios raises a fatal `MODULE_NOT_FOUND` before our broader
+     * fallback logic can engage. Returning the deterministic inline mocks keeps
+     * chat and finance journeys stable without relying on the optional module.
+     */
+    return createInlineMockLanguageModels("playwright");
   }
 
   const resolvedModuleId = resolveModule("./models.mock");

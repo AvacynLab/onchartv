@@ -219,6 +219,29 @@ describe("loadMockLanguageModels", () => {
     });
   };
 
+  it("prefers inline Playwright mocks when bundled fixtures are absent", async () => {
+    const __test = await importTestHelpers();
+
+    const loadModule = vi.fn(() => {
+      throw Object.assign(new Error("should not load"), {
+        code: "MODULE_NOT_FOUND",
+      });
+    });
+
+    const result = __test.loadMockLanguageModels({
+      loadModule: loadModule as never,
+      resolveModule: vi.fn(() => "./models.mock"),
+      testingModels: null,
+      profile: "playwright",
+    });
+
+    // The Playwright-specific inline mocks should be returned without ever
+    // attempting to require the optional shared fixtures, ensuring stripped
+    // bundles do not crash end-to-end environments.
+    expect(loadModule).not.toHaveBeenCalled();
+    expect(result.chatModel.provider).toBe("mock-provider");
+  });
+
   beforeEach(() => {
     vi.resetModules();
     resetEnv();
