@@ -65,6 +65,21 @@ export class ChatPage {
             .then((value) => value.trim())
             .catch(() => "")
         : "";
+    const initialArtifactCount =
+      initialAssistantCount > 0
+        ? await assistantMessages
+            .nth(initialAssistantCount - 1)
+            .locator('[data-testid$="-artifact"]')
+            .count()
+            .catch(() => 0)
+        : 0;
+    /**
+     * Finance journeys often render artefacts (chart, backtest, news) without
+     * adding textual content to the assistant bubble. Tracking the initial
+     * artefact footprint lets us confirm the UI updated even when the message
+     * copy stays empty – a scenario that previously caused the polling loop to
+     * spin forever and eventually time out the Playwright run.
+     */
 
     /**
      * Some chat journeys (notably the finance accessibility sweep) reuse the
@@ -82,14 +97,21 @@ export class ChatPage {
         }
 
         if (currentCount === initialAssistantCount && currentCount > 0) {
-          const latestContent = await assistantMessages
-            .nth(currentCount - 1)
+          const latestAssistant = assistantMessages.nth(currentCount - 1);
+          const latestContent = await latestAssistant
             .getByTestId("message-content")
             .innerText()
             .then((value) => value.trim())
             .catch(() => "");
+          const latestArtifactCount = await latestAssistant
+            .locator('[data-testid$="-artifact"]')
+            .count()
+            .catch(() => 0);
 
-          if (latestContent.length > 0 && latestContent !== initialLatestMessage) {
+          if (
+            (latestContent.length > 0 && latestContent !== initialLatestMessage) ||
+            latestArtifactCount > initialArtifactCount
+          ) {
             return "content-updated";
           }
         }
