@@ -131,7 +131,6 @@ export class ChatPage {
          * visible/enabled or temporarily hidden while the UI transitions back to
          * its default state.
          */
-
         if (currentCount === initialAssistantCount && currentCount > 0) {
           const latestAssistant = assistantMessages.nth(currentCount - 1);
           const latestContent = await latestAssistant
@@ -151,6 +150,18 @@ export class ChatPage {
             return "content-updated";
           }
 
+          const [loadingCount, stopCount, sendVisible] = await Promise.all([
+            this.page
+              .getByTestId("message-assistant-loading")
+              .count()
+              .catch(() => 0),
+            this.page.getByTestId("stop-button").count().catch(() => 0),
+            this.sendButton
+              .isVisible()
+              .then(Boolean)
+              .catch(() => false),
+          ]);
+
           /**
            * Streaming can finish before the helper observes any deltas,
            * especially when the inline mocks respond synchronously. If the UI
@@ -158,10 +169,13 @@ export class ChatPage {
            * we treat the run as complete to avoid polling indefinitely on a
            * stable message bubble.
            */
+
           if (uiIdle) {
+
             return "idle";
           }
         }
+
 
         /**
          * Some flows (e.g. preference toggles) respond without emitting a new
