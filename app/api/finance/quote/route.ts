@@ -4,6 +4,7 @@ import { assertSupportedSymbol, logRouteLatency, now, resolveClientKey } from "@
 import { getMarketDataAdapter } from "@/lib/finance/server-adapter";
 import { enforceRateLimit } from "@/lib/ratelimit";
 import { ChatSDKError } from "@/lib/errors";
+import { logError } from "@/lib/logging";
 
 /** Validates the query parameters accepted by the quote endpoint. */
 const querySchema = z.object({
@@ -20,6 +21,7 @@ const querySchema = z.object({
 export async function GET(request: Request): Promise<Response> {
   const startedAt = now();
   const clientKey = resolveClientKey(request);
+  let symbol: string | undefined;
 
   try {
     const rateLimit = enforceRateLimit({
@@ -37,6 +39,7 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     const metadata = assertSupportedSymbol(parsed.data.symbol);
+    symbol = metadata.symbol;
     const adapter = getMarketDataAdapter();
     const quote = await adapter.quote({ symbol: metadata.symbol });
 
@@ -54,7 +57,7 @@ export async function GET(request: Request): Promise<Response> {
       return error.toResponse();
     }
 
-    console.error("[api:finance.quote] unexpected error", error);
+    logError("api:finance.quote", error, { clientKey, symbol });
     return Response.json(
       {
         error: {

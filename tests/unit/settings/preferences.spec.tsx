@@ -35,10 +35,12 @@ describe("FinanceSettings", () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.stubEnv("NEXT_PUBLIC_FEATURE_FINANCE", "true");
   });
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    vi.unstubAllEnvs();
   });
 
   it("loads, edits and saves finance preferences", async () => {
@@ -115,5 +117,23 @@ describe("FinanceSettings", () => {
     expect(parsed.showNews).toBe(false);
     expect(Array.isArray(parsed.defaultIndicators)).toBe(true);
     expect(parsed.defaultIndicators.some((indicator: any) => indicator.type === "ema")).toBe(true);
+  });
+
+  it("returns a placeholder when the finance flag is disabled", () => {
+    vi.stubEnv("NEXT_PUBLIC_FEATURE_FINANCE", "false");
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <FinanceSettings />
+      </QueryClientProvider>
+    );
+
+    expect(
+      screen.getByTestId("finance-settings-disabled-flag")
+    ).toBeInTheDocument();
   });
 });

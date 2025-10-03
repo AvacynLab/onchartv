@@ -1,7 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
-import { createContext, useContext } from "react";
+import React, { createContext, useContext, type ReactNode } from "react";
 
 /**
  * Options accepted by the `prefillPrompt` helper. The composer can either

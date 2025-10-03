@@ -5,6 +5,7 @@ import { FINANCE_ASSET_CATALOG } from "@/lib/finance/catalog";
 import { FUNDAMENTAL_SNAPSHOTS } from "@/lib/finance/mock-data";
 import { enforceRateLimit } from "@/lib/ratelimit";
 import { logRouteLatency, now, resolveClientKey } from "@/lib/finance/api-utils";
+import { logError } from "@/lib/logging";
 import type { Asset } from "@/lib/db/schema";
 
 /**
@@ -61,6 +62,8 @@ const requestSchema = z
 export async function POST(request: Request): Promise<Response> {
   const startedAt = now();
   const clientKey = resolveClientKey(request);
+  let limit: number | undefined;
+  let filters: Record<string, unknown> | undefined;
 
   try {
     const rateLimit = enforceRateLimit({
@@ -89,8 +92,14 @@ export async function POST(request: Request): Promise<Response> {
 
     const {
       filters: { minMarketCap, maxPeRatio, assetTypes },
-      limit,
+      limit: parsedLimit,
     } = parsed.data;
+    limit = parsedLimit;
+    filters = {
+      minMarketCap,
+      maxPeRatio,
+      assetTypes,
+    };
 
     const requestedTypes: ReadonlySet<Asset["type"]> | null = assetTypes
       ?
@@ -158,7 +167,7 @@ export async function POST(request: Request): Promise<Response> {
       return error.toResponse();
     }
 
-    console.error("[api:finance.screen] unexpected error", error);
+    logError("api:finance.screen", error, { clientKey, limit, filters });
     return Response.json(
       {
         error: {

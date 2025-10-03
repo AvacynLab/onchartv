@@ -117,5 +117,15 @@ describe("/api/finance/preferences", () => {
     );
 
     expect(response.status).toBe(400);
+
+    const error = await response.json();
+    expect(error).toEqual(
+      expect.objectContaining({
+        error: expect.objectContaining({
+          code: "bad_request:api",
+          message: expect.stringContaining("request couldn't be processed"),
+        }),
+      })
+    );
   });
 });

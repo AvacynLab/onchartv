@@ -1,4 +1,4 @@
-import { type Dispatch, memo, type SetStateAction, useState } from "react";
+import { memo, useState } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { artifactDefinitions, type UIArtifact } from "./artifact";
@@ -12,8 +12,8 @@ type ArtifactActionsProps = {
   currentVersionIndex: number;
   isCurrentVersion: boolean;
   mode: "edit" | "diff";
-  metadata: any;
-  setMetadata: Dispatch<SetStateAction<any>>;
+  metadata: ArtifactActionContext["metadata"];
+  setMetadata: ArtifactActionContext["setMetadata"];
 };
 
 function PureArtifactActions({

@@ -10,12 +10,12 @@ import {
 } from "@/components/icons";
 import { SpreadsheetEditor } from "@/components/sheet-editor";
 
-type Metadata = any;
+type SheetArtifactMetadata = Record<string, never>;
 
-export const sheetArtifact = new Artifact<"sheet", Metadata>({
+export const sheetArtifact = new Artifact<"sheet", SheetArtifactMetadata>({
   kind: "sheet",
   description: "Useful for working with spreadsheets",
-  initialize: () => null,
+  initialize: async () => {},
   onStreamPart: ({ setArtifact, streamPart }) => {
     if (streamPart.type === "data-sheetDelta") {
       setArtifact((draftArtifact) => ({

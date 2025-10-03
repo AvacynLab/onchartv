@@ -33,11 +33,15 @@ function resetEnv(): void {
   delete process.env.PLAYWRIGHT_TEST_BASE_URL;
   delete process.env.NEXT_PUBLIC_PLAYWRIGHT;
   delete process.env.NEXT_PHASE;
+  delete process.env.VERCEL;
   delete process.env.OPENAI_MODEL_ID;
   delete process.env.OPENAI_REASONING_MODEL_ID;
   delete process.env.OPENAI_TITLE_MODEL_ID;
   delete process.env.OPENAI_ARTIFACT_MODEL_ID;
   delete process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_BASE_URL;
+  delete process.env.OPENAI_ORGANIZATION;
+  delete process.env.OPENAI_PROJECT;
 }
 
 describe("ai provider configuration", () => {
@@ -136,6 +140,40 @@ describe("ai provider configuration", () => {
     expect(chatModel.specificationVersion).toBe("v2");
   });
 
+  it("uses the OpenAI provider when credentials are present", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    process.env.OPENAI_MODEL_ID = "gpt-4.1-mini";
+
+    const { myProvider } = await import("@/lib/ai/providers");
+
+    expect(createOpenAIMock).toHaveBeenCalledWith({ apiKey: "test-key" });
+
+    const [firstCall] = createOpenAIMock.mock.results;
+    const instance = firstCall?.value;
+    expect(instance).toBeDefined();
+    expect(instance.languageModel).toHaveBeenCalledWith("gpt-4.1-mini");
+
+    const chatModel = myProvider.languageModel("chat-model");
+    expect(chatModel.provider).toBe("openai-mock");
+  });
+
+  it("forwards optional OpenAI transport settings when provided", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    process.env.OPENAI_MODEL_ID = "gpt-4.1-mini";
+    process.env.OPENAI_BASE_URL = " https://api.openai-proxy.test/v1 ";
+    process.env.OPENAI_ORGANIZATION = " org-123 ";
+    process.env.OPENAI_PROJECT = " project-456 ";
+
+    await import("@/lib/ai/providers");
+
+    expect(createOpenAIMock).toHaveBeenCalledWith({
+      apiKey: "test-key",
+      baseURL: "https://api.openai-proxy.test/v1",
+      organization: "org-123",
+      project: "project-456",
+    });
+  });
+
   it("recovers with inline mocks when the bundled fixtures resolve but fail to load", async () => {
     process.env.PLAYWRIGHT = "true";
 
@@ -188,6 +226,18 @@ describe("ai provider configuration", () => {
 
     expect(chatModel.provider).toBe("mock-provider");
     expect(chatModel.specificationVersion).toBe("v2");
+  });
+
+  it("exposes a hermetic mock provider helper", async () => {
+    process.env.PLAYWRIGHT = "true";
+
+    const { createHermeticMockProvider } = await import("@/lib/ai/providers");
+
+    const provider = createHermeticMockProvider("playwright");
+    const chatModel = provider.languageModel("chat-model");
+
+    expect(chatModel.provider).toBe("mock-provider");
+    expect(chatModel.modelId).toBe("inline-playwright");
   });
 });
 

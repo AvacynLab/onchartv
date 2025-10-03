@@ -18,6 +18,14 @@ type TextArtifactMetadata = {
   suggestions: Suggestion[];
 };
 
+/**
+ * Ensures we always manipulate a fully populated suggestions array even when
+ * the shared artefact store has not been initialised yet.
+ */
+function ensureMetadata(metadata: TextArtifactMetadata | null): TextArtifactMetadata {
+  return metadata ?? { suggestions: [] };
+}
+
 export const textArtifact = new Artifact<"text", TextArtifactMetadata>({
   kind: "text",
   description: "Useful for text content, like drafting essays and emails.",
@@ -31,8 +39,10 @@ export const textArtifact = new Artifact<"text", TextArtifactMetadata>({
   onStreamPart: ({ streamPart, setMetadata, setArtifact }) => {
     if (streamPart.type === "data-suggestion") {
       setMetadata((metadata) => {
+        const current = ensureMetadata(metadata);
+
         return {
-          suggestions: [...metadata.suggestions, streamPart.data],
+          suggestions: [...current.suggestions, streamPart.data],
         };
       });
     }
@@ -83,7 +93,7 @@ export const textArtifact = new Artifact<"text", TextArtifactMetadata>({
           isCurrentVersion={isCurrentVersion}
           onSaveContent={onSaveContent}
           status={status}
-          suggestions={metadata ? metadata.suggestions : []}
+          suggestions={ensureMetadata(metadata).suggestions}
         />
 
         {metadata?.suggestions && metadata.suggestions.length > 0 ? (

@@ -1,6 +1,10 @@
 import { expect as baseExpect, test as baseTest } from "@playwright/test";
 import { getUnixTime } from "date-fns";
-import { createAuthenticatedContext, type UserContext } from "./helpers";
+import {
+  createAuthenticatedContext,
+  expectNoApplicationErrorOverlay,
+  type UserContext,
+} from "./helpers";
 
 type Fixtures = {
   adaContext: UserContext;
@@ -45,6 +49,13 @@ export const test = baseTest.extend<object, Fixtures>({
     },
     { scope: "worker" },
   ],
+});
+
+test.afterEach(async ({ page }) => {
+  // The client-side Next.js overlay only appears when a runtime exception slips
+  // past our guards. Asserting on its absence after every scenario gives us an
+  // inexpensive e2e signal that the hardened UI continues to render safely.
+  await expectNoApplicationErrorOverlay(page);
 });
 
 export const expect = baseExpect;

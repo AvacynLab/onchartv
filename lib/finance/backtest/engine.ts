@@ -4,6 +4,7 @@ import {
 } from "../indicators";
 import {
   type BacktestParameters,
+  type BacktestMetrics,
   type BacktestResult,
   type BacktestTrade,
   type CandleSeries,
@@ -87,14 +88,15 @@ export function runBacktest(
     const fastValue = fastMa[index];
     const slowValue = slowMa[index];
 
+    const hasPriorAverages = previousFast !== null && previousSlow !== null;
     const shouldEnter =
       position === null &&
       fastValue !== null &&
       slowValue !== null &&
-      previousFast !== null &&
-      previousSlow !== null &&
-      previousFast <= previousSlow &&
-      fastValue > slowValue;
+      ((hasPriorAverages &&
+        (previousFast as number) <= (previousSlow as number) &&
+        fastValue > slowValue) ||
+        (!hasPriorAverages && fastValue > slowValue));
 
     if (shouldEnter) {
       const fillPrice = applySlippage(candle.close, slippageBps, "buy");
@@ -121,10 +123,10 @@ export function runBacktest(
       position !== null &&
       fastValue !== null &&
       slowValue !== null &&
-      previousFast !== null &&
-      previousSlow !== null &&
-      previousFast >= previousSlow &&
-      fastValue < slowValue;
+      ((hasPriorAverages &&
+        (previousFast as number) >= (previousSlow as number) &&
+        fastValue < slowValue) ||
+        (!hasPriorAverages && fastValue < slowValue));
 
     if (shouldExit && position) {
       const exitFill = applySlippage(candle.close, slippageBps, "sell");
@@ -252,7 +254,7 @@ interface MetricComputationContext {
  * Aggregates the trading records into the summary statistics presented in the
  * artefact. Each metric is documented inline for clarity and reproducibility.
  */
-function calculateMetrics(context: MetricComputationContext) {
+function calculateMetrics(context: MetricComputationContext): BacktestMetrics {
   const {
     trades,
     equityCurve,
@@ -266,13 +268,17 @@ function calculateMetrics(context: MetricComputationContext) {
   const finalEquity = equityCurve.length
     ? equityCurve[equityCurve.length - 1].equity
     : initialCapital;
-  const totalReturn =
+  const rawTotalReturn =
     initialCapital === 0 ? 0 : (finalEquity - initialCapital) / initialCapital;
+  const totalReturn = roundToFourDecimals(normaliseTiny(rawTotalReturn));
 
   const durationSeconds = Math.max(lastTimestamp - firstTimestamp, 0);
   const years = durationSeconds / (365 * 24 * 60 * 60);
-  const cagr =
-    years <= 0 ? totalReturn : Math.pow(finalEquity / initialCapital, 1 / years) - 1;
+  const rawCagr =
+    years <= 0
+      ? rawTotalReturn
+      : Math.pow(finalEquity / initialCapital, 1 / years) - 1;
+  const cagr = roundToFourDecimals(normaliseTiny(rawCagr));
 
   let winningCount = 0;
   let losingCount = 0;
@@ -303,9 +309,9 @@ function calculateMetrics(context: MetricComputationContext) {
       : winningSum / losingSum;
 
   return {
-    totalReturn: roundToFourDecimals(totalReturn),
-    cagr: roundToFourDecimals(cagr),
-    maxDrawdown: roundToFourDecimals(maxDrawdown),
+    totalReturn,
+    cagr,
+    maxDrawdown: roundToFourDecimals(Math.max(0, normaliseTiny(maxDrawdown))),
     winRate: roundToFourDecimals(winRate),
     averageWin: roundToTwoDecimals(averageWin),
     averageLoss: roundToTwoDecimals(averageLoss),
@@ -342,4 +348,12 @@ function roundToTwoDecimals(value: number): number {
 /** Rounds to four decimals which is useful for ratios (winRate, CAGR…). */
 function roundToFourDecimals(value: number): number {
   return Math.round((value + Number.EPSILON) * 10_000) / 10_000;
+}
+
+/**
+ * Normalises floating point artefacts so metrics do not expose values such as
+ * `-0` or `1e-12`, which would be misleading in the rendered artefacts.
+ */
+function normaliseTiny(value: number): number {
+  return Math.abs(value) <= 1e-10 ? 0 : value;
 }

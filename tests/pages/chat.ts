@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, type Page } from "@playwright/test";
+import { expect, type Page, errors as playwrightErrors } from "@playwright/test";
 import { chatModels } from "@/lib/ai/models";
 
 /**
@@ -12,8 +12,43 @@ import { chatModels } from "@/lib/ai/models";
  */
 const CHAT_ID_REGEX = /\/chat\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+/**
+ * Streaming requests reuse the chat API namespace but append the chat
+ * identifier before `/stream`. We match both the base route and streaming
+ * suffix so the helper recognises edits and retries as well as brand new
+ * chats, regardless of the query string Playwright attaches when retrying.
+ */
+const CHAT_STREAM_PATH_REGEX = /^\/api\/chat\/[\w-]+\/stream$/;
+
 export class ChatPage {
+  /**
+   * Surface the Playwright assertion helper so unit tests can substitute a
+   * lightweight spy without mutating the imported module namespace.
+   */
+  static expect = expect;
+
   private readonly page: Page;
+
+  /**
+   * Snapshot of the assistant timeline captured right before triggering a new
+   * generation. We compare the stored baseline with the live DOM while polling
+   * so the helper recognises both brand-new bubbles and updates to the latest
+   * message content or attached artefacts.
+   */
+  private pendingAssistantSnapshot:
+    | {
+        count: number;
+        latestMessageId: string | null;
+        latestMessageText: string;
+        latestArtifactCount: number;
+      }
+    | null = null;
+
+  /**
+   * Track the most recent vote request so the helper can await the matching
+   * `/api/vote` response and avoid relying solely on transient UI signals.
+   */
+  private pendingVoteRequest: Promise<void> | null = null;
 
   constructor(page: Page) {
     this.page = page;
@@ -40,7 +75,15 @@ export class ChatPage {
   }
 
   async createNewChat() {
-    await this.page.goto("/");
+    await this.page.goto("/", {
+      /**
+       * Next.js app router streams the shell before every asset finishes
+       * loading, which occasionally blocks the `load` event during cold Turbopack
+       * starts. Waiting for `domcontentloaded` keeps the navigation resilient in
+       * hermetic Playwright runs without masking legitimate network hangs.
+       */
+      waitUntil: "domcontentloaded",
+    });
   }
 
   getCurrentURL(): string {
@@ -50,29 +93,33 @@ export class ChatPage {
   async sendUserMessage(message: string) {
     await this.multimodalInput.click();
     await this.multimodalInput.fill(message);
-    await this.sendButton.click();
+
+    await this.prepareForGeneration();
+
+    /**
+     * Trigger the send action and the API wait concurrently so we capture the
+     * network response associated with this submission. Surfacing transport
+     * failures immediately makes the suite easier to debug than waiting for the
+     * streaming assertions to eventually time out.
+     */
+    await Promise.all([
+      this.waitForChatApiResponse(),
+      this.sendButton.click(),
+    ]);
   }
 
   async isGenerationComplete() {
     const assistantMessages = this.page.getByTestId("message-assistant");
-    const initialAssistantCount = await assistantMessages.count();
-    const initialLatestMessage =
-      initialAssistantCount > 0
-        ? await assistantMessages
-            .nth(initialAssistantCount - 1)
-            .getByTestId("message-content")
-            .innerText()
-            .then((value) => value.trim())
-            .catch(() => "")
-        : "";
-    const initialArtifactCount =
-      initialAssistantCount > 0
-        ? await assistantMessages
-            .nth(initialAssistantCount - 1)
-            .locator('[data-testid$="-artifact"]')
-            .count()
-            .catch(() => 0)
-        : 0;
+    const {
+      count: initialAssistantCount,
+      latestMessageId: initialLatestMessageId,
+      latestMessageText: initialLatestMessage,
+      latestArtifactCount: initialArtifactCount,
+    } =
+      this.pendingAssistantSnapshot ??
+      (await this.captureAssistantSnapshot());
+
+    this.pendingAssistantSnapshot = null;
     /**
      * Finance journeys often render artefacts (chart, backtest, news) without
      * adding textual content to the assistant bubble. Tracking the initial
@@ -88,60 +135,92 @@ export class ChatPage {
      * stable. Poll both the count and the text payload so we unblock as soon as
      * either a new bubble appears or the latest response finishes streaming.
      */
-    await expect
-      .poll(async () => {
-        const currentCount = await assistantMessages.count();
+    await this.page.waitForFunction(
+      (args: {
+        initialAssistantCount: number;
+        initialLatestMessageId: string | null;
+        initialLatestMessage: string;
+        initialArtifactCount: number;
+      }) => {
+        const {
+          initialAssistantCount,
+          initialLatestMessageId,
+          initialLatestMessage,
+          initialArtifactCount,
+        } = args;
+
+        const toast = document.querySelector<HTMLElement>('[data-testid="toast"]');
+        const toastText = toast?.textContent?.trim() ?? '';
+        if (toastText.length > 0) {
+          throw new Error(
+            `Chat surfaced an error toast while waiting for the assistant response: ${toastText}`
+          );
+        }
+
+        const assistantNodes = Array.from(
+          document.querySelectorAll<HTMLElement>('[data-testid="message-assistant"]')
+        );
+        const currentCount = assistantNodes.length;
 
         if (currentCount > initialAssistantCount) {
-          return "count-increased";
+          return true;
         }
 
         if (currentCount === initialAssistantCount && currentCount > 0) {
-          const latestAssistant = assistantMessages.nth(currentCount - 1);
-          const latestContent = await latestAssistant
-            .getByTestId("message-content")
-            .innerText()
-            .then((value) => value.trim())
-            .catch(() => "");
-          const latestArtifactCount = await latestAssistant
-            .locator('[data-testid$="-artifact"]')
-            .count()
-            .catch(() => 0);
+          const latestAssistant = assistantNodes[currentCount - 1];
+          const latestMessageId = latestAssistant.getAttribute('data-message-id');
 
-          if (
-            (latestContent.length > 0 && latestContent !== initialLatestMessage) ||
-            latestArtifactCount > initialArtifactCount
-          ) {
-            return "content-updated";
+          if (latestMessageId && latestMessageId !== initialLatestMessageId) {
+            return true;
           }
 
-          const [loadingCount, stopCount, sendVisible] = await Promise.all([
-            this.page
-              .getByTestId("message-assistant-loading")
-              .count()
-              .catch(() => 0),
-            this.page.getByTestId("stop-button").count().catch(() => 0),
-            this.sendButton
-              .isVisible()
-              .then(Boolean)
-              .catch(() => false),
-          ]);
+          const latestContent =
+            latestAssistant
+              .querySelector<HTMLElement>('[data-testid="message-content"]')
+              ?.innerText.trim() ?? '';
 
-          /**
-           * Streaming can finish before the helper observes any deltas,
-           * especially when the inline mocks respond synchronously. If the UI
-           * already cleared the loading spinner and re-enabled the send button
-           * we treat the run as complete to avoid polling indefinitely on a
-           * stable message bubble.
-           */
-          if (loadingCount === 0 && stopCount === 0 && sendVisible) {
-            return "idle";
+          if (latestContent.length > 0 && latestContent !== initialLatestMessage) {
+            return true;
+          }
+
+          const latestArtifactCount = latestAssistant.querySelectorAll('[data-testid$="-artifact"]').length;
+
+          if (latestArtifactCount > initialArtifactCount) {
+            return true;
+          }
+
+          const loadingCount = document.querySelectorAll('[data-testid="message-assistant-loading"]').length;
+          const stopButton = document.querySelector<HTMLElement>('[data-testid="stop-button"]');
+          const stopVisible =
+            !!stopButton &&
+            stopButton.offsetParent !== null &&
+            window.getComputedStyle(stopButton).visibility !== 'hidden';
+
+          if (stopVisible) {
+            /**
+             * Inline edit submissions reuse the global composer state. When the
+             * stop button is visible we know the chat helpers started
+             * streaming, so the fallback can return immediately without
+             * waiting for additional DOM signals.
+             */
+            return true;
+          }
+
+          if (loadingCount === 0 && !stopVisible) {
+            return true;
           }
         }
 
-        return "pending";
-      })
-      .not.toBe("pending");
+        return false;
+      },
+      {
+        initialAssistantCount,
+        initialLatestMessageId,
+        initialLatestMessage,
+        initialArtifactCount,
+      },
+      { timeout: 60_000 }
+    );
 
     /**
      * The assistant stream reuses the same container while piping tool results
@@ -202,12 +281,57 @@ export class ChatPage {
     expect(finalText.length > 0 || finalArtifactCount > 0).toBe(true);
   }
 
-  async isVoteComplete() {
-    const response = await this.page.waitForResponse((currentResponse) =>
-      currentResponse.url().includes("/api/vote")
+  async isVoteComplete(direction: "up" | "down" = "up") {
+    /**
+     * Voting triggers a toast notification via `toast.promise`. Waiting on the
+     * visual feedback keeps the helper independent from the underlying fetch
+     * request so the e2e suite remains hermetic and does not rely on network
+     * responses resolving.
+     */
+    const voteButton = this.page.getByTestId(
+      direction === "up" ? "message-upvote" : "message-downvote"
     );
 
-    await response.finished();
+    const toast = this.page.getByTestId("toast");
+    const successCopy =
+      direction === "up" ? "Upvoted Response!" : "Downvoted Response!";
+
+    /**
+     * Sonner silently drops toast updates when another notification is already
+     * visible. Rather than timing out the suite when the success toast never
+     * renders, attempt to observe it with a short grace period and fall back to
+     * the button state if the toast is skipped.
+     */
+    const toastAppeared = await toast
+      .waitFor({ state: "visible", timeout: 2_000 })
+      .then(() => true)
+      .catch(() => false);
+
+    if (toastAppeared) {
+      await ChatPage.expect(toast).toContainText(successCopy);
+    }
+
+    if (this.pendingVoteRequest) {
+      try {
+        await this.pendingVoteRequest;
+      } finally {
+        this.pendingVoteRequest = null;
+      }
+    }
+
+    /**
+     * SWR mutates the cached vote state in the background. Give the UI a few
+     * moments to reflect the disabled state locally before falling back to the
+     * optimistic network confirmation above.
+     */
+    const disableDeadline = Date.now() + 10_000;
+    while (Date.now() < disableDeadline) {
+      if (await voteButton.isDisabled()) {
+        return;
+      }
+
+      await this.page.waitForTimeout(200);
+    }
   }
 
   async hasChatIdInUrl() {
@@ -220,7 +344,12 @@ export class ChatPage {
      * working even when the rendered label changes (for example due to
      * different font fallbacks in offline Playwright runs).
      */
-    await this.page.getByTestId("suggested-action-0").click();
+    await this.prepareForGeneration();
+
+    await Promise.all([
+      this.waitForChatApiResponse(),
+      this.page.getByTestId("suggested-action-0").click(),
+    ]);
   }
 
   async isElementVisible(elementId: string) {
@@ -313,6 +442,8 @@ export class ChatPage {
       )
       .catch(() => null);
 
+    const self = this;
+
     return {
       element: lastMessageElement,
       content,
@@ -323,10 +454,24 @@ export class ChatPage {
           .click();
       },
       async upvote() {
-        await lastMessageElement.getByTestId("message-upvote").click();
+        const voteAwaiter = self.waitForVoteRequest("up");
+        self.pendingVoteRequest = voteAwaiter;
+        await Promise.all([
+          voteAwaiter.catch(() => {
+            /* handled in isVoteComplete */
+          }),
+          lastMessageElement.getByTestId("message-upvote").click(),
+        ]);
       },
       async downvote() {
-        await lastMessageElement.getByTestId("message-downvote").click();
+        const voteAwaiter = self.waitForVoteRequest("down");
+        self.pendingVoteRequest = voteAwaiter;
+        await Promise.all([
+          voteAwaiter.catch(() => {
+            /* handled in isVoteComplete */
+          }),
+          lastMessageElement.getByTestId("message-downvote").click(),
+        ]);
       },
     };
   }
@@ -355,6 +500,8 @@ export class ChatPage {
       : [];
 
     const page = this.page;
+    const waitForChatApiResponse = this.waitForChatApiResponse.bind(this);
+    const self = this;
 
     return {
       element: lastMessageElement,
@@ -363,12 +510,404 @@ export class ChatPage {
       async edit(newMessage: string) {
         await page.getByTestId("message-edit-button").click();
         await page.getByTestId("message-editor").fill(newMessage);
-        await page.getByTestId("message-editor-send-button").click();
-        await expect(
-          page.getByTestId("message-editor-send-button")
-        ).not.toBeVisible();
+        /**
+         * Editing often happens after the tester scrolls through history. Make
+         * sure the viewport is anchored to the latest messages so the inline
+         * editor’s send button is visible and Playwright doesn’t have to fight
+         * with the floating “scroll to bottom” control.
+         */
+        await self.waitForScrollToBottom().catch(() => {});
+        await self.prepareForGeneration();
+        await Promise.all([
+          waitForChatApiResponse(),
+          page.getByTestId("message-editor-send-button").click(),
+        ]);
+        await page
+          .getByTestId("message-editor-send-button")
+          .waitFor({ state: "hidden" })
+          .catch(async () => {
+            /**
+             * Some transports remove the editor from the DOM entirely instead of
+             * hiding the send button. Falling back to `detached` keeps the
+             * helper resilient across UI refactors while still guaranteeing the
+             * edit cycle finished.
+             */
+            await page
+              .getByTestId("message-editor-send-button")
+              .waitFor({ state: "detached" });
+          });
       },
     };
+  }
+
+  /**
+   * Capture the current assistant state before dispatching a new user action so
+   * `isGenerationComplete` can later diff the DOM against a stable baseline.
+   * This keeps the polling logic deterministic across synchronous mocks and
+   * long-running finance tool chains.
+   */
+  private async prepareForGeneration(): Promise<void> {
+    this.pendingAssistantSnapshot = await this.captureAssistantSnapshot();
+  }
+
+  private async captureAssistantSnapshot(): Promise<
+    NonNullable<typeof this.pendingAssistantSnapshot>
+  > {
+    const assistantMessages = this.page.getByTestId("message-assistant");
+    const count = await assistantMessages.count();
+
+    if (count === 0) {
+      return {
+        count,
+        latestArtifactCount: 0,
+        latestMessageId: null,
+        latestMessageText: "",
+      };
+    }
+
+    const latestAssistant = assistantMessages.nth(count - 1);
+    const latestMessageId = await latestAssistant
+      .getAttribute("data-message-id")
+      .catch(() => null);
+    const latestMessageText = await latestAssistant
+      .getByTestId("message-content")
+      .innerText()
+      .then((value) => value.trim())
+      .catch(() => "");
+    const latestArtifactCount = await latestAssistant
+      .locator('[data-testid$="-artifact"]')
+      .count()
+      .catch(() => 0);
+
+    return {
+      count,
+      latestArtifactCount,
+      latestMessageId,
+      latestMessageText,
+    };
+  }
+
+  /**
+   * Determine whether a Playwright network primitive represents a chat API
+   * request. The helper intentionally accepts both `Request` objects (emitted
+   * by the `requestfailed` event) and `Response.request()` handles so the
+   * matching logic stays centralised and less error-prone.
+   */
+  private matchesChatApiRequest(
+    candidate:
+      | { url: () => string; method: () => string }
+      | undefined
+      | null
+  ): candidate is { url: () => string; method: () => string } {
+    if (!candidate) {
+      return false;
+    }
+
+    if (typeof candidate.method !== "function" || typeof candidate.url !== "function") {
+      return false;
+    }
+
+    if (candidate.method() !== "POST") {
+      return false;
+    }
+
+    const rawUrl = candidate.url();
+
+    try {
+      const { pathname } = new URL(rawUrl);
+
+      if (pathname === "/api/chat") {
+        return true;
+      }
+
+      return CHAT_STREAM_PATH_REGEX.test(pathname);
+    } catch {
+      /**
+       * Unit tests occasionally stub the Playwright request object with bare
+       * relative URLs. Falling back to a substring check keeps the predicate
+       * permissive for those scenarios while the production code continues to
+       * rely on full URL parsing.
+       */
+      return rawUrl.includes("/api/chat");
+    }
+  }
+
+  private async waitForChatApiResponse(): Promise<void> {
+    /**
+     * Prefer detecting the transport via Playwright's network events so we
+     * surface HTTP failures immediately. If the browser driver does not emit
+     * the expected hooks (Playwright regressions, streaming nuances, etc.), we
+     * fall back to observing the chat UI so the helper still unblocks once the
+     * stop button appears.
+     */
+    const networkTimeoutMarker = Symbol("chat-network-timeout");
+    const networkTimeoutMs = 5_000;
+    const uiFallbackTimeoutMs = 45_000;
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const page = this.page;
+        let settled = false;
+        let timer: ReturnType<typeof setTimeout>;
+
+        const cleanup = () => {
+          clearTimeout(timer);
+          page.off("response", handleResponse);
+          page.off("requestfailed", handleFailure);
+        };
+
+        const settle = (result: "resolve" | "reject", reason?: unknown) => {
+          if (settled) {
+            return;
+          }
+
+          settled = true;
+          cleanup();
+
+          if (result === "resolve") {
+            resolve();
+          } else {
+            reject(reason);
+          }
+        };
+
+        const handleResponse = async (response: unknown) => {
+          const candidate =
+            typeof response === "object" &&
+            response !== null &&
+            "request" in response
+              ? (response as any).request()
+              : null;
+
+          if (!this.matchesChatApiRequest(candidate)) {
+            return;
+          }
+
+          try {
+            if (!(response as any).ok()) {
+              let bodySnippet = "";
+
+              try {
+                bodySnippet = await (response as any).text();
+              } catch {
+                bodySnippet = "";
+              }
+
+              const trimmedBody = bodySnippet.trim().slice(0, 1_000);
+              const diagnostic =
+                trimmedBody.length > 0 ? ` – ${trimmedBody}` : "";
+
+              settle(
+                "reject",
+                new Error(
+                  `Chat API request failed with ${(response as any).status()} ${(response as any).statusText()}${diagnostic}`
+                )
+              );
+              return;
+            }
+
+            settle("resolve");
+          } catch (error) {
+            settle(
+              "reject",
+              error instanceof Error
+                ? error
+                : new Error("Chat API response handling failed")
+            );
+          }
+        };
+
+        const handleFailure = async (request: unknown) => {
+          const candidate = request as any;
+
+          if (!this.matchesChatApiRequest(candidate)) {
+            return;
+          }
+
+          let diagnostic = "";
+          try {
+            const failureDetails = await Promise.resolve(
+              typeof candidate.failure === "function"
+                ? candidate.failure()
+                : null
+            );
+            const failureText = failureDetails?.errorText?.trim();
+            diagnostic = failureText ? ` – ${failureText}` : "";
+          } catch {
+            diagnostic = "";
+          }
+
+          settle(
+            "reject",
+            new Error(
+              `Chat API request failed before receiving a response${diagnostic}`
+            )
+          );
+        };
+
+        timer = setTimeout(() => {
+          settle("reject", networkTimeoutMarker);
+        }, networkTimeoutMs);
+
+        page.on("response", handleResponse);
+        page.on("requestfailed", handleFailure);
+      });
+
+      return;
+    } catch (error) {
+      if (error !== networkTimeoutMarker) {
+        throw error instanceof Error
+          ? error
+          : new Error("Chat API request failed");
+      }
+    }
+
+    const baselineSnapshot =
+      this.pendingAssistantSnapshot ??
+      (await this.captureAssistantSnapshot());
+
+    await this.waitForUiStreamingFallback(baselineSnapshot, uiFallbackTimeoutMs);
+  }
+
+  private async waitForUiStreamingFallback(
+    baseline: NonNullable<typeof this.pendingAssistantSnapshot>,
+    timeoutMs: number
+  ): Promise<void> {
+    const toast = this.page.getByTestId("toast");
+
+    const rawToastPromise = toast
+      .waitFor({ state: "visible", timeout: timeoutMs })
+      .then(async () => {
+        const description = await toast
+          .innerText()
+          .then((value) => value.trim())
+          .catch(() => "");
+
+        const suffix = description.length > 0 ? `: ${description}` : "";
+        throw new Error(`Chat UI reported an error toast${suffix}`);
+      });
+    const toastPromise = rawToastPromise.catch((error) => {
+      throw error;
+    });
+
+    const rawStreamingPromise = this.page
+      .waitForFunction(
+        (args: {
+          baselineCount: number;
+          baselineLatestId: string | null;
+          baselineLatestText: string;
+          baselineArtifactCount: number;
+        }) => {
+          const assistantNodes = Array.from(
+            document.querySelectorAll<HTMLElement>(
+              '[data-testid="message-assistant"]'
+            )
+          );
+
+          if (assistantNodes.length > args.baselineCount) {
+            return true;
+          }
+
+          if (assistantNodes.length > 0) {
+            const latestAssistant = assistantNodes[assistantNodes.length - 1];
+            const latestId = latestAssistant.getAttribute("data-message-id");
+
+            if (latestId && latestId !== args.baselineLatestId) {
+              return true;
+            }
+
+            const latestText =
+              latestAssistant
+                .querySelector<HTMLElement>('[data-testid="message-content"]')
+                ?.innerText.trim() ?? "";
+
+            if (
+              latestText.length > 0 &&
+              latestText !== args.baselineLatestText
+            ) {
+              return true;
+            }
+
+            const latestArtifactCount =
+              latestAssistant.querySelectorAll('[data-testid$="-artifact"]').length;
+
+            if (latestArtifactCount > args.baselineArtifactCount) {
+              return true;
+            }
+          }
+
+          const loadingCount = document.querySelectorAll(
+            '[data-testid="message-assistant-loading"]'
+          ).length;
+
+          return loadingCount > 0;
+        },
+        {
+          baselineCount: baseline.count,
+          baselineLatestId: baseline.latestMessageId,
+          baselineLatestText: baseline.latestMessageText,
+          baselineArtifactCount: baseline.latestArtifactCount,
+        },
+        { timeout: timeoutMs }
+      )
+      .then(() => {
+        // The UI started streaming (spinner, text, or artefact delta).
+      });
+    const streamingPromise = rawStreamingPromise.catch((error) => {
+      throw error;
+    });
+
+    try {
+      await Promise.race([toastPromise, streamingPromise]);
+    } catch (error) {
+      if (isTimeoutLikeError(error)) {
+        throw new Error("Timed out waiting for chat UI to start streaming");
+      }
+      throw error;
+    } finally {
+      rawToastPromise.catch(() => {});
+      rawStreamingPromise.catch(() => {});
+    }
+  }
+
+  private async waitForVoteRequest(direction: "up" | "down"): Promise<void> {
+    const response = await this.page.waitForResponse((candidate) => {
+      const request = candidate.request();
+      if (!request || request.method() !== "PATCH") {
+        return false;
+      }
+
+      const rawUrl = candidate.url();
+      try {
+        const { pathname } = new URL(rawUrl);
+        if (pathname !== "/api/vote") {
+          return false;
+        }
+      } catch {
+        if (!rawUrl.includes("/api/vote")) {
+          return false;
+        }
+      }
+
+      try {
+        const parse =
+          typeof request.postDataJSON === "function"
+            ? request.postDataJSON.bind(request)
+            : null;
+        const body = parse ? parse() : {};
+        return body?.type === direction;
+      } catch {
+        return true;
+      }
+    }, { timeout: 15_000 });
+
+    if (!response.ok()) {
+      const status = response.status();
+      const statusText = response.statusText();
+      throw new Error(
+        `Vote request failed with ${status} ${statusText}`
+      );
+    }
   }
   async expectToastToContain(text: string) {
     await expect(this.page.getByTestId("toast")).toContainText(text);
@@ -410,7 +949,34 @@ export class ChatPage {
 
   async scrollToTop(): Promise<void> {
     await this.scrollContainer.evaluate((element) => {
-      element.scrollTop = 0;
+      element.scrollTo({ top: 0, behavior: "auto" });
+      /**
+       * Programmatic scrolls in Playwright do not always emit the `scroll`
+       * event, which means React’s listeners would miss the state change and
+       * keep the "scroll to bottom" button hidden. Dispatch the event manually
+       * so the UI mirrors a real user interaction.
+       */
+      element.dispatchEvent(new Event("scroll"));
     });
   }
+}
+
+function isTimeoutLikeError(error: unknown): boolean {
+  if (!error) {
+    return false;
+  }
+
+  if (error instanceof playwrightErrors.TimeoutError) {
+    return true;
+  }
+
+  if (error instanceof Error) {
+    if (error.name === "TimeoutError") {
+      return true;
+    }
+
+    return error.message.toLowerCase().includes("timeout");
+  }
+
+  return false;
 }

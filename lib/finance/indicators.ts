@@ -233,5 +233,7 @@ function resolveRSI(averageGain: number, averageLoss: number): number {
   }
 
   const relativeStrength = averageGain / averageLoss;
-  return 100 - 100 / (1 + relativeStrength);
+  const rawValue = 100 - 100 / (1 + relativeStrength);
+  // Clamp the final score to the canonical 0-100 range to avoid rounding artefacts.
+  return Math.min(100, Math.max(0, rawValue));
 }

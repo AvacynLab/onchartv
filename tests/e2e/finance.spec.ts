@@ -34,6 +34,20 @@ const MOCK_ASSET_METADATA: Record<FinanceSymbol, { exchange: string; currency: s
 /** Mock rate-limit metadata shared by every intercepted finance endpoint. */
 const MOCK_RATE_LIMIT = { remaining: 42, reset: Date.parse(FIXED_NOW_ISO) + 60_000 };
 
+type FinanceInterceptLog = {
+  preferencesGet: number;
+  preferencesPatch: number;
+  history: number;
+  fundamentals: number;
+  news: number;
+  backtest: number;
+};
+
+type FinanceMocksHandle = FinanceInterceptLog & {
+  getPreferences: () => FinancePreferences;
+  setPreferences: (preferences: FinancePreferences) => Promise<void>;
+};
+
 /** Parse an ISO string or epoch literal from a query parameter. */
 const parseTimestampParam = (value: string | null): number | undefined => {
   if (!value) {
@@ -72,7 +86,40 @@ const clonePreferences = (preferences: FinancePreferences): FinancePreferences =
  * server already consumes the same mocks, but intercepting here guarantees the
  * browser never reaches for network resources during e2e runs.
  */
-async function setupFinanceApiMocks(page: Page) {
+async function setupFinanceApiMocks(page: Page): Promise<FinanceMocksHandle> {
+  const baseURL =
+    process.env.PLAYWRIGHT_TEST_BASE_URL ??
+    `http://localhost:${process.env.PORT ?? 3100}`;
+
+  const intercepts: FinanceMocksHandle = {
+    preferencesGet: 0,
+    preferencesPatch: 0,
+    history: 0,
+    fundamentals: 0,
+    news: 0,
+    backtest: 0,
+    getPreferences: () => clonePreferences(currentPreferences),
+    setPreferences: async (preferences: FinancePreferences) => {
+      currentPreferences = clonePreferences(preferences);
+      createdAtIso = createdAtIso ?? FIXED_NOW_ISO;
+      updatedAtIso = FIXED_NOW_ISO;
+
+      const response = await page.context().request.patch(
+        `${baseURL}/api/finance/preferences`,
+        {
+          data: preferences,
+        }
+      );
+
+      if (!response.ok()) {
+        const detail = await response.text();
+        throw new Error(
+          `Failed to persist mocked finance preferences (${response.status()}): ${detail}`
+        );
+      }
+    },
+  };
+
   await page.addInitScript((iso: string) => {
     const fixed = Date.parse(iso);
     const OriginalDate = Date;
@@ -117,6 +164,8 @@ async function setupFinanceApiMocks(page: Page) {
       if (updatedAtIso) {
         payload.updatedAt = updatedAtIso;
       }
+
+      intercepts.preferencesGet += 1;
 
       await route.fulfill({
         status: 200,
@@ -164,6 +213,20 @@ async function setupFinanceApiMocks(page: Page) {
       currentPreferences = clonePreferences(parsed.data);
       createdAtIso = createdAtIso ?? FIXED_NOW_ISO;
       updatedAtIso = FIXED_NOW_ISO;
+
+      const upstreamResponse = await route.fetch();
+
+      intercepts.preferencesPatch += 1;
+
+      if (!upstreamResponse.ok) {
+        const body = await upstreamResponse.text();
+        await route.fulfill({
+          status: upstreamResponse.status,
+          headers: upstreamResponse.headers(),
+          body,
+        });
+        return;
+      }
 
       await route.fulfill({
         status: 200,
@@ -235,6 +298,8 @@ async function setupFinanceApiMocks(page: Page) {
         ? windowed.slice(-Math.min(limit, windowed.length))
         : windowed;
 
+    intercepts.history += 1;
+
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -278,6 +343,8 @@ async function setupFinanceApiMocks(page: Page) {
       return;
     }
 
+    intercepts.fundamentals += 1;
+
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -302,6 +369,8 @@ async function setupFinanceApiMocks(page: Page) {
     const items = NEWS_ITEMS.filter((item) => item.symbol === symbol)
       .sort((a, b) => (a.publishedAt < b.publishedAt ? 1 : -1))
       .slice(0, Math.max(1, Math.min(limit, 10)));
+
+    intercepts.news += 1;
 
     await route.fulfill({
       status: 200,
@@ -370,6 +439,8 @@ async function setupFinanceApiMocks(page: Page) {
 
     const result = runBacktest(candles, params);
 
+    intercepts.backtest += 1;
+
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -397,6 +468,7 @@ async function setupFinanceApiMocks(page: Page) {
       }),
     });
   });
+  return intercepts;
 }
 
 /**
@@ -411,10 +483,11 @@ const extractMetricValue = async (locator: Locator) => {
 
 test.describe("Finance end-to-end journeys", () => {
   let chatPage: ChatPage;
+  let intercepts: FinanceInterceptLog;
 
   test.beforeEach(async ({ page }) => {
     chatPage = new ChatPage(page);
-    await setupFinanceApiMocks(page);
+    intercepts = await setupFinanceApiMocks(page);
     await chatPage.createNewChat();
   });
 
@@ -428,19 +501,38 @@ test.describe("Finance end-to-end journeys", () => {
 
     const canvas = chart.locator("canvas").first();
     await canvas.waitFor({ state: "visible" });
-    await canvas.click({ position: { x: 80, y: 140 } });
 
     const details = page.getByTestId("finance-chart-details");
     await expect(details).toBeVisible();
+    const detailHeading = details.locator("p.font-medium");
+    const baselineHeading = (await detailHeading.innerText()).trim();
+
+    const chartContainer = chart.getByRole("img", {
+      name: /Graphique en chandeliers/i,
+    });
+    await chartContainer.focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect(detailHeading).not.toHaveText(baselineHeading);
     await expect(details).toContainText("Ouverture");
     await expect(details).toContainText("BTCUSD");
 
-    const overlayToggle = page.getByRole("button", { name: "SMA (50)" });
+    const overlayToggle = page.getByTestId("finance-overlay-toggle-sma-50");
     await expect(overlayToggle).toHaveAttribute("aria-pressed", "true");
     await overlayToggle.click();
     await expect(overlayToggle).toHaveAttribute("aria-pressed", "false");
     await overlayToggle.click();
     await expect(overlayToggle).toHaveAttribute("aria-pressed", "true");
+
+    const historyCheck = await page.evaluate(async () => {
+      const response = await fetch("/api/finance/history?symbol=BTCUSD");
+      const payload = await response.json();
+      return { status: response.status, count: payload.count ?? 0 };
+    });
+
+    expect(historyCheck.status).toBe(200);
+    expect(historyCheck.count).toBeGreaterThan(0);
+
+    expect(intercepts.history).toBeGreaterThan(0);
   });
 
   test("runs the SMA backtest and renders key metrics", async ({ page }) => {
@@ -471,8 +563,36 @@ test.describe("Finance end-to-end journeys", () => {
     );
     expect(winRate).toBeGreaterThan(0);
 
+    await expect(page.getByTestId("finance-backtest-retest-toggle")).toBeVisible();
     await expect(backtest.locator("svg polyline")).toBeVisible();
     await expect(backtest.locator("tbody tr").first()).toBeVisible();
+
+    const backtestCheck = await page.evaluate(async () => {
+      const response = await fetch("/api/finance/backtest", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          symbol: "AAPL",
+          timeframe: "1D",
+          period: {
+            from: "2018-01-01T00:00:00Z",
+            to: "2020-12-31T00:00:00Z",
+          },
+          strategy: {
+            type: "sma-crossover" as const,
+            params: { fastPeriod: 50, slowPeriod: 200 },
+          },
+          risk: { initialCapital: 10_000 },
+        }),
+      });
+      const payload = await response.json();
+      return { status: response.status, type: payload.type ?? null };
+    });
+
+    expect(backtestCheck.status).toBe(200);
+    expect(backtestCheck.type).toBe("finance.backtest");
+
+    expect(intercepts.backtest).toBeGreaterThan(0);
   });
 
   test("surfaces fundamentals and three news items for NVDA", async ({ page }) => {
@@ -495,6 +615,30 @@ test.describe("Finance end-to-end journeys", () => {
     await expect(news.locator("article")).toHaveCount(3);
     await expect(news.locator("time")).toHaveCount(3);
     await expect(news).toContainText("Sentiment");
+
+    const fundamentalsCheck = await page.evaluate(async () => {
+      const response = await fetch("/api/finance/fundamentals?symbol=NVDA");
+      const payload = await response.json();
+      return {
+        status: response.status,
+        metricCount: payload.metrics ? Object.keys(payload.metrics).length : 0,
+      };
+    });
+
+    expect(fundamentalsCheck.status).toBe(200);
+    expect(fundamentalsCheck.metricCount).toBeGreaterThan(0);
+
+    const newsCheck = await page.evaluate(async () => {
+      const response = await fetch("/api/finance/news?symbol=NVDA&limit=3");
+      const payload = await response.json();
+      return { status: response.status, count: Array.isArray(payload.items) ? payload.items.length : 0 };
+    });
+
+    expect(newsCheck.status).toBe(200);
+    expect(newsCheck.count).toBe(3);
+
+    expect(intercepts.fundamentals).toBeGreaterThan(0);
+    expect(intercepts.news).toBeGreaterThan(0);
   });
 
   test("honours the news visibility preference toggle", async ({ page }) => {
@@ -516,6 +660,22 @@ test.describe("Finance end-to-end journeys", () => {
       }
     };
 
+    const resetNewsPreference = async () => {
+      await intercepts.setPreferences({
+        ...intercepts.getPreferences(),
+        showNews: true,
+      });
+
+      /**
+       * Update the settings UI as well so the server-side state reflects the
+       * mocked preferences. Without this round-trip the browser intercept would
+       * flip back to `showNews: true`, but the Next.js API would still persist
+       * the previously toggled value, causing subsequent chats to keep the news
+       * feed suppressed.
+       */
+      await toggleNewsPreference(true);
+    };
+
     await toggleNewsPreference(false);
 
     try {
@@ -527,7 +687,10 @@ test.describe("Finance end-to-end journeys", () => {
       await expect(news).toBeVisible();
       await expect(news).toContainText("Aucune actualité récente n'est disponible");
     } finally {
-      await toggleNewsPreference(true);
+      await resetNewsPreference();
     }
+
+    expect(intercepts.preferencesGet).toBeGreaterThan(0);
+    expect(intercepts.preferencesPatch).toBeGreaterThan(0);
   });
 });

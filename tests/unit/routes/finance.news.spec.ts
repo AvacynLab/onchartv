@@ -67,5 +67,27 @@ describe("/api/finance/news", () => {
       new Request("http://localhost/api/finance/news?symbol=AAPL&limit=0")
     );
     expect(response.status).toBe(400);
+
+    const error = await response.json();
+    expect(error).toEqual(
+      expect.objectContaining({
+        error: expect.objectContaining({
+          code: "bad_request:api",
+          message: expect.stringContaining("request couldn't be processed"),
+          cause: expect.stringContaining("positive integer"),
+        }),
+      })
+    );
+  });
+
+  it("rejects decimal limits to avoid implicit truncation", async () => {
+    const response = await GET(
+      new Request("http://localhost/api/finance/news?symbol=AAPL&limit=2.5")
+    );
+
+    expect(response.status).toBe(400);
+    const error = await response.json();
+    expect(error.error.code).toBe("bad_request:api");
+    expect(error.error.cause).toMatch(/positive integer/);
   });
 });

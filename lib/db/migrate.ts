@@ -3,6 +3,8 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
 
+import { logError } from "../logging";
+
 config({
   path: ".env.local",
 });
@@ -77,8 +79,7 @@ if (import.meta.main) {
       process.exit(0);
     },
     (err) => {
-      console.error("❌ Migration failed");
-      console.error(err);
+      logError("db:migrate", err, { message: "Migration failed" });
       process.exit(1);
     }
   );

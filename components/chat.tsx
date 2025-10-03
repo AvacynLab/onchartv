@@ -3,20 +3,10 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { unstable_serialize } from "swr/infinite";
 import { ChatHeader } from "@/components/chat-header";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { useArtifactSelector } from "@/hooks/use-artifact";
 import { useAutoResume } from "@/hooks/use-auto-resume";
 import { useChatVisibility } from "@/hooks/use-chat-visibility";
@@ -64,9 +54,20 @@ export function Chat({
   const { mutate } = useSWRConfig();
   const { setDataStream } = useDataStream();
 
+  /**
+   * Nous suivons l'état de montage du composant afin d'éviter toute mise à jour
+   * d'état lorsque le chat est démonté (ce qui provoquerait des erreurs React
+   * lors du streaming).
+   */
+  const isComponentMountedRef = useRef(true);
+  useEffect(() => {
+    return () => {
+      isComponentMountedRef.current = false;
+    };
+  }, []);
+
   const [input, setInput] = useState<string>("");
   const [usage, setUsage] = useState<AppUsage | undefined>(initialLastContext);
-  const [showCreditCardAlert, setShowCreditCardAlert] = useState(false);
   const [currentModelId, setCurrentModelId] = useState(initialChatModel);
   const currentModelIdRef = useRef(currentModelId);
   const [composerFocusSignal, setComposerFocusSignal] = useState(0);
@@ -104,8 +105,19 @@ export function Chat({
       },
     }),
     onData: (dataPart) => {
-      setDataStream((ds) => (ds ? [...ds, dataPart] : []));
-      if (dataPart.type === "data-usage") {
+      if (!isComponentMountedRef.current || !dataPart) {
+        return;
+      }
+
+      setDataStream((previousParts) => {
+        const safePreviousParts = Array.isArray(previousParts)
+          ? previousParts
+          : [];
+
+        return [...safePreviousParts, dataPart];
+      });
+
+      if (dataPart.type === "data-usage" && dataPart.data) {
         setUsage(dataPart.data);
       }
     },
@@ -114,23 +126,22 @@ export function Chat({
     },
     onError: (error) => {
       if (error instanceof ChatSDKError) {
-        // Check if it's a credit card error
-        if (
-          error.message?.includes("AI Gateway requires a valid credit card")
-        ) {
-          setShowCreditCardAlert(true);
-        } else {
-          toast({
-            type: "error",
-            description: error.message,
-          });
-        }
+        toast({
+          type: "error",
+          description: error.message,
+        });
       }
     },
   });
 
   const searchParams = useSearchParams();
-  const query = searchParams.get("query");
+  /**
+   * En environnement de test ou lorsque le hook n'est pas initialisé, l'accès
+   * aux paramètres peut échouer. Nous défendons donc l'accès au paramètre de
+   * requête.
+   */
+  const query =
+    typeof searchParams?.get === "function" ? searchParams.get("query") : null;
 
   const [hasAppendedQuery, setHasAppendedQuery] = useState(false);
 
@@ -142,12 +153,27 @@ export function Chat({
       });
 
       setHasAppendedQuery(true);
-      window.history.replaceState({}, "", `/chat/${id}`);
+
+      if (typeof window !== "undefined") {
+        window.history.replaceState({}, "", `/chat/${id}`);
+      }
     }
   }, [query, sendMessage, hasAppendedQuery, id]);
 
+  /**
+   * Les flux de messages peuvent être transitoirement `undefined` pendant le
+   * streaming. Ce mémo normalise la valeur pour le rendu et les effets.
+   */
+  const safeMessages = useMemo<ChatMessage[]>(() => {
+    if (!Array.isArray(messages)) {
+      return [];
+    }
+
+    return messages;
+  }, [messages]);
+
   const { data: votes } = useSWR<Vote[]>(
-    messages.length >= 2 ? `/api/vote?chatId=${id}` : null,
+    safeMessages.length >= 2 ? `/api/vote?chatId=${id}` : null,
     fetcher
   );
 
@@ -182,7 +208,9 @@ export function Chat({
 
   const sendPrompt = useCallback(
     (prompt: string) => {
-      window.history.replaceState({}, "", `/chat/${id}`);
+      if (typeof window !== "undefined") {
+        window.history.replaceState({}, "", `/chat/${id}`);
+      }
 
       sendMessage({
         role: "user" as const,
@@ -211,7 +239,7 @@ export function Chat({
           chatId={id}
           isArtifactVisible={isArtifactVisible}
           isReadonly={isReadonly}
-          messages={messages}
+          messages={safeMessages}
           regenerate={regenerate}
           selectedModelId={initialChatModel}
           setMessages={setMessages}
@@ -225,7 +253,7 @@ export function Chat({
               attachments={attachments}
               chatId={id}
               input={input}
-              messages={messages}
+              messages={safeMessages}
               onModelChange={setCurrentModelId}
               selectedModelId={currentModelId}
               selectedVisibilityType={visibilityType}
@@ -247,7 +275,7 @@ export function Chat({
         chatId={id}
         input={input}
         isReadonly={isReadonly}
-        messages={messages}
+        messages={safeMessages}
         regenerate={regenerate}
         selectedModelId={currentModelId}
         selectedVisibilityType={visibilityType}
@@ -261,35 +289,6 @@ export function Chat({
         votes={votes}
       />
 
-      <AlertDialog
-        onOpenChange={setShowCreditCardAlert}
-        open={showCreditCardAlert}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Activate AI Gateway</AlertDialogTitle>
-            <AlertDialogDescription>
-              This application requires{" "}
-              {process.env.NODE_ENV === "production" ? "the owner" : "you"} to
-              activate Vercel AI Gateway.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                window.open(
-                  "https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai%3Fmodal%3Dadd-credit-card",
-                  "_blank"
-                );
-                window.location.href = "/";
-              }}
-            >
-              Activate
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </ChatComposerProvider>
   );
 }

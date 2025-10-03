@@ -1,10 +1,8 @@
-import { geolocation } from "@vercel/functions";
 import {
   createUIMessageStream,
   JsonToSseTransformStream,
   smoothStream,
   stepCountIs,
-  streamText,
 } from "ai";
 import { unstable_cache as cache } from "next/cache";
 import { after } from "next/server";
@@ -16,9 +14,11 @@ import type { ModelCatalog } from "tokenlens/core";
 import { fetchModels } from "tokenlens/fetch";
 import { getUsage } from "tokenlens/helpers";
 import { auth, type UserType } from "@/app/(auth)/auth";
+import { assertRegularChatUser } from "@/lib/chat/authorization";
 import type { VisibilityType } from "@/components/visibility-selector";
 import { entitlementsByUserType } from "@/lib/ai/entitlements";
 import { shouldFetchTokenlensCatalog } from "@/lib/ai/tokenlens";
+import { resolveRequestGeolocation } from "@/lib/ai/geolocation";
 import type { ChatModel } from "@/lib/ai/models";
 import { type RequestHints, systemPrompt } from "@/lib/ai/prompts";
 import { myProvider } from "@/lib/ai/providers";
@@ -28,6 +28,11 @@ import { getWeather } from "@/lib/ai/tools/get-weather";
 import { requestSuggestions } from "@/lib/ai/tools/request-suggestions";
 import { updateDocument } from "@/lib/ai/tools/update-document";
 import { convertToModelMessages } from "@/lib/ai/messages/convert-to-model-messages";
+import {
+  streamChatResponse,
+  type StreamTextOptions,
+  __test as streamChatResponseTestUtils,
+} from "@/lib/ai/stream-chat-response";
 import { isProductionEnvironment } from "@/lib/constants";
 import {
   createStreamId,
@@ -47,6 +52,7 @@ import {
   type FinancePreferences,
 } from "@/lib/finance/preferences";
 import { ChatSDKError } from "@/lib/errors";
+import { logError, logWarning } from "@/lib/logging";
 import type { ChatMessage } from "@/lib/types";
 import type { AppUsage } from "@/lib/usage";
 import type { UIDataTypes, UIMessagePart, UITools } from "ai";
@@ -70,9 +76,10 @@ const getTokenlensCatalog = tokenlensFetchEnabled
         try {
           return await fetchModels();
         } catch (err) {
-          console.warn(
-            "TokenLens: catalog fetch failed, using default catalog",
-            err
+          logWarning(
+            "tokenlens.catalog",
+            "Catalog fetch failed; using bundled fallback",
+            { error: err }
           );
           return; // tokenlens helpers will fall back to defaultCatalog
         }
@@ -127,12 +134,13 @@ export function getStreamContext() {
         waitUntil: after,
       });
     } catch (error: any) {
-      if (error.message.includes("REDIS_URL")) {
-        console.log(
-          " > Resumable streams are disabled due to missing REDIS_URL"
+      if (typeof error?.message === "string" && error.message.includes("REDIS_URL")) {
+        logWarning(
+          "chat.streams",
+          "Resumable streams are disabled because REDIS_URL is unset"
         );
       } else {
-        console.error(error);
+        logError("chat.streams", error);
       }
     }
   }
@@ -142,6 +150,10 @@ export function getStreamContext() {
 
 export async function POST(request: Request) {
   let requestBody: PostRequestBody;
+  // Preserve the chat identifier for error logging so the catch block can
+  // report context even if parsing or auth validation throw before the local
+  // `id` variable is in scope.
+  let chatIdForLogs: string | undefined;
 
   try {
     const json = await request.json();
@@ -163,20 +175,31 @@ export async function POST(request: Request) {
       selectedVisibilityType: VisibilityType;
     } = requestBody;
 
+    chatIdForLogs = id;
+
     const session = await auth();
 
-    if (!session?.user) {
-      return new ChatSDKError("unauthorized:chat").toResponse();
+    /**
+     * Validate the session upfront so downstream persistence only executes for
+     * fully authorised users. This keeps the API responses deterministic and
+     * avoids leaking whether a chat exists to guests.
+     */
+    let sessionUser: ReturnType<typeof assertRegularChatUser>;
+
+    try {
+      sessionUser = assertRegularChatUser(session);
+    } catch (error) {
+      if (error instanceof ChatSDKError) {
+        return error.toResponse();
+      }
+
+      throw error;
     }
 
-    if (session.user.type !== "regular") {
-      return new ChatSDKError("forbidden:chat").toResponse();
-    }
-
-    const userType: UserType = session.user.type;
+    const userType: UserType = sessionUser.type;
 
     const messageCount = await getMessageCountByUserId({
-      id: session.user.id,
+      id: sessionUser.id,
       differenceInHours: 24,
     });
 
@@ -187,7 +210,7 @@ export async function POST(request: Request) {
     const chat = await getChatById({ id });
 
     if (chat) {
-      if (chat.userId !== session.user.id) {
+      if (chat.userId !== sessionUser.id) {
         return new ChatSDKError("forbidden:chat").toResponse();
       }
     } else {
@@ -197,14 +220,14 @@ export async function POST(request: Request) {
 
       await saveChat({
         id,
-        userId: session.user.id,
+        userId: sessionUser.id,
         title,
         visibility: selectedVisibilityType,
       });
     }
 
     const preferenceRecord = await getFinancePreferencesByUserId({
-      userId: session.user.id,
+      userId: sessionUser.id,
     });
 
     const financePreferences: FinancePreferences = preferenceRecord
@@ -221,7 +244,12 @@ export async function POST(request: Request) {
     const messagesFromDb = await getMessagesByChatId({ id });
     const uiMessages = [...convertToUIMessages(messagesFromDb), message];
 
-    const { longitude, latitude, city, country } = geolocation(request);
+    // Resolve coarse location data without triggering network calls during
+    // hermetic Playwright runs. The helper gracefully falls back to an empty
+    // payload whenever the underlying resolver throws.
+    const { longitude, latitude, city, country } = resolveRequestGeolocation(
+      request
+    );
 
     const requestHints: RequestHints = {
       longitude,
@@ -253,7 +281,9 @@ export async function POST(request: Request) {
     const capturedArtifacts: MessageArtifact[] = [];
 
     const stream = createUIMessageStream({
-      execute: ({ writer: dataStream }) => {
+      // Streaming may yield provider fallbacks and database writes, so we keep
+      // the executor async to await those side effects sequentially.
+      execute: async ({ writer: dataStream }) => {
         const financeTools = createFinanceTools({
           preferences: financePreferences,
           onArtifact: (artifact: FinanceArtifact) => {
@@ -308,8 +338,7 @@ export async function POST(request: Request) {
           },
         });
 
-        const result = streamText({
-          model: myProvider.languageModel(selectedChatModel),
+        const streamOptions: StreamTextOptions = {
           system: systemPrompt({ selectedChatModel, requestHints }),
           messages: convertToModelMessages(uiMessages),
           stopWhen: stepCountIs(5),
@@ -376,11 +405,20 @@ export async function POST(request: Request) {
               finalMergedUsage = { ...usage, ...summary, modelId } as AppUsage;
               dataStream.write({ type: "data-usage", data: finalMergedUsage });
             } catch (err) {
-              console.warn("TokenLens enrichment failed", err);
+              logWarning(
+                "tokenlens.enrichment",
+                "TokenLens enrichment failed",
+                { error: err, modelId: selectedChatModel }
+              );
               finalMergedUsage = usage;
               dataStream.write({ type: "data-usage", data: finalMergedUsage });
             }
           },
+        };
+
+        const result = await streamChatResponse({
+          selectedChatModel,
+          streamOptions,
         });
 
         result.consumeStream();
@@ -420,7 +458,11 @@ export async function POST(request: Request) {
               context: finalMergedUsage,
             });
           } catch (err) {
-            console.warn("Unable to persist last usage for chat", id, err);
+            logWarning(
+              "chat.persistence",
+              "Unable to persist last usage for chat",
+              { chatId: id, error: err }
+            );
           }
         }
       },
@@ -447,20 +489,15 @@ export async function POST(request: Request) {
       return error.toResponse();
     }
 
-    // Check for Vercel AI Gateway credit card error
-    if (
-      error instanceof Error &&
-      error.message?.includes(
-        "AI Gateway requires a valid credit card on file to service requests"
-      )
-    ) {
-      return new ChatSDKError("bad_request:activate_gateway").toResponse();
-    }
-
-    console.error("Unhandled error in chat API:", error, { vercelId });
+    logError("api:chat", error, { vercelId, chatId: chatIdForLogs });
     return new ChatSDKError("offline:chat").toResponse();
   }
 }
+
+export const __test = {
+  ...streamChatResponseTestUtils,
+  streamChatResponse,
+};
 
 export async function DELETE(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -472,17 +509,21 @@ export async function DELETE(request: Request) {
 
   const session = await auth();
 
-  if (!session?.user) {
-    return new ChatSDKError("unauthorized:chat").toResponse();
-  }
+  let sessionUser: ReturnType<typeof assertRegularChatUser>;
 
-  if (session.user.type !== "regular") {
-    return new ChatSDKError("forbidden:chat").toResponse();
+  try {
+    sessionUser = assertRegularChatUser(session);
+  } catch (error) {
+    if (error instanceof ChatSDKError) {
+      return error.toResponse();
+    }
+
+    throw error;
   }
 
   const chat = await getChatById({ id });
 
-  if (chat?.userId !== session.user.id) {
+  if (chat?.userId !== sessionUser.id) {
     return new ChatSDKError("forbidden:chat").toResponse();
   }
 

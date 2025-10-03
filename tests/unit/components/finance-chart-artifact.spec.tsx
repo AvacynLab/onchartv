@@ -2,13 +2,14 @@ import React from "react";
 import "@testing-library/jest-dom/vitest";
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, afterAll, describe, expect, it, vi } from "vitest";
 
 import {
   FinanceChartArtifact,
   normalizeFinanceColor,
 } from "@/components/finance/finance-chart-artifact";
 import type { FinanceChartArtifact as FinanceChartPayload } from "@/lib/finance/types";
+import { createChart } from "lightweight-charts";
 
 type CrosshairHandler = (param: any) => void;
 
@@ -62,6 +63,52 @@ vi.mock("lightweight-charts", () => ({
   CrosshairMode: { Normal: 0 },
 }));
 
+beforeAll(() => {
+  class ResizeObserverMock implements ResizeObserver {
+    private readonly callback: ResizeObserverCallback;
+
+    constructor(callback: ResizeObserverCallback) {
+      this.callback = callback;
+    }
+
+    observe(target: Element) {
+      const entry: ResizeObserverEntry = {
+        target,
+        contentRect: {
+          width: 640,
+          height: 480,
+          x: 0,
+          y: 0,
+          top: 0,
+          right: 640,
+          bottom: 480,
+          left: 0,
+          toJSON: () => ({}),
+        },
+        borderBoxSize: [],
+        contentBoxSize: [],
+        devicePixelContentBoxSize: [],
+      };
+
+      this.callback([entry], this as unknown as ResizeObserver);
+    }
+
+    unobserve() {}
+
+    disconnect() {}
+
+    takeRecords(): ResizeObserverEntry[] {
+      return [];
+    }
+  }
+
+  vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+});
+
+afterAll(() => {
+  vi.unstubAllGlobals();
+});
+
 describe("FinanceChartArtifact", () => {
   const artifact: FinanceChartPayload = {
     type: "finance.chart",
@@ -93,21 +140,28 @@ describe("FinanceChartArtifact", () => {
     candlestickSeries.applyOptions.mockClear();
     lineSeries.setData.mockClear();
     lineSeries.applyOptions.mockClear();
+    vi.mocked(createChart).mockClear();
   });
 
   const storageKeyFor = (payload: FinanceChartPayload) =>
     `finance.chart.overlays:${payload.symbol}:${payload.timeframe}`;
 
   describe("normalizeFinanceColor", () => {
-    it("converts whitespace-separated hsl strings to comma syntax", () => {
+    it("convertit les notations HSL en sortie rgba exploitable par Lightweight Charts", () => {
       expect(normalizeFinanceColor("hsl(240 3.8% 46.1%)")).toBe(
-        "hsl(240, 3.8%, 46.1%)"
+        "rgba(113, 113, 122, 1)"
       );
     });
 
-    it("preserves alpha segments while inserting commas", () => {
+    it("gère les composantes alpha fractionnaires", () => {
       expect(normalizeFinanceColor("hsla(200 50% 40% / 0.5)")).toBe(
-        "hsla(200, 50%, 40%, 0.5)"
+        "rgba(51, 119, 153, 0.5)"
+      );
+    });
+
+    it("convertit les alpha exprimés en pourcentage", () => {
+      expect(normalizeFinanceColor("hsla(200 50% 40% / 75%)")).toBe(
+        "rgba(51, 119, 153, 0.75)"
       );
     });
   });
@@ -135,6 +189,54 @@ describe("FinanceChartArtifact", () => {
 
     const persistedToggle = await screen.findByRole("button", { name: /sma/i });
     expect(persistedToggle).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("affiche un état vide sans initialiser le chart lorsque la série OHLCV est vide", () => {
+    render(
+      <FinanceChartArtifact
+        artifact={{
+          ...artifact,
+          ohlcv: [],
+          overlays: [],
+        }}
+      />
+    );
+
+    expect(
+      screen.getByTestId("finance-chart-empty-state")
+    ).toBeInTheDocument();
+    expect(createChart).not.toHaveBeenCalled();
+  });
+
+  it("initialise le chart une seule fois malgré les rerenders successifs", () => {
+    const { rerender, unmount } = render(
+      <FinanceChartArtifact artifact={artifact} />
+    );
+
+    expect(createChart).toHaveBeenCalledTimes(1);
+
+    rerender(<FinanceChartArtifact artifact={{ ...artifact }} />);
+
+    expect(createChart).toHaveBeenCalledTimes(1);
+
+    unmount();
+  });
+
+  it("ignore gracieusement les événements de pointeur sans données de série", () => {
+    render(<FinanceChartArtifact artifact={artifact} />);
+
+    const hoverHandler = crosshairHandlers.at(-1);
+    const clickHandler = clickHandlers.at(-1);
+
+    expect(hoverHandler).toBeDefined();
+    expect(clickHandler).toBeDefined();
+
+    expect(() => {
+      act(() => {
+        hoverHandler?.({ time: artifact.ohlcv[0]!.t, seriesData: new Map() });
+        clickHandler?.({ time: artifact.ohlcv[0]!.t, seriesData: new Map() });
+      });
+    }).not.toThrow();
   });
 
   it("expose des repères d'accessibilité pour le graphique et ses contrôles", () => {
@@ -214,13 +316,22 @@ describe("FinanceChartArtifact", () => {
       name: /graphique en chandeliers pour aapl en 1d/i,
     });
 
-    chart.focus();
-    await userEvent.keyboard("{ArrowLeft}");
+    await act(async () => {
+      chart.focus();
+    });
+    // Keyboard navigation updates internal state asynchronously via React
+    // effects; wrapping the interaction in `act` keeps React Test Utils aware
+    // of those updates and removes the warnings emitted by Testing Library.
+    await act(async () => {
+      await userEvent.keyboard("{ArrowLeft}");
+    });
 
     const detailPanel = screen.getByTestId("finance-chart-details");
     expect(detailPanel).toHaveTextContent(/170\.00/);
 
-    await userEvent.keyboard("{End}");
+    await act(async () => {
+      await userEvent.keyboard("{End}");
+    });
     expect(detailPanel).toHaveTextContent(/174\.00/);
   });
 

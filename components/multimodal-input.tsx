@@ -56,7 +56,14 @@ const ACTIVE_CHAT_STATUSES: ReadonlySet<UseChatHelpers<ChatMessage>["status"]> =
  * would otherwise swap the control back to "Send" before users can interact
  * with it.
  */
-const STOP_BUTTON_MINIMUM_DURATION_MS = 200;
+/**
+ * Délai minimal (en millisecondes) pendant lequel le bouton d'arrêt reste visible
+ * après la fin d'un streaming. Les réponses hermétiques de Playwright arrivent
+ * quasi instantanément ; conserver le bouton environ trois quarts de seconde
+ * laisse suffisamment de marge aux assertions e2e pour interagir avec le
+ * composant même lorsque le modèle a déjà terminé.
+ */
+export const STOP_BUTTON_MINIMUM_DURATION_MS = 750;
 
 function PureMultimodalInput({
   chatId,

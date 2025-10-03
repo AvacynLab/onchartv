@@ -5,17 +5,22 @@ import type { Suggestion } from "@/lib/db/schema";
 import type { ChatMessage, CustomUIDataTypes } from "@/lib/types";
 import type { UIArtifact } from "./artifact";
 
-export type ArtifactActionContext<M = any> = {
+/**
+ * Shared context forwarded to artefact-specific action handlers. Metadata is
+ * nullable because some artefacts stream UI chunks before their initialise
+ * hooks populate derived state.
+ */
+export type ArtifactActionContext<M = unknown> = {
   content: string;
   handleVersionChange: (type: "next" | "prev" | "toggle" | "latest") => void;
   currentVersionIndex: number;
   isCurrentVersion: boolean;
   mode: "edit" | "diff";
-  metadata: M;
-  setMetadata: Dispatch<SetStateAction<M>>;
+  metadata: M | null;
+  setMetadata: Dispatch<SetStateAction<M | null>>;
 };
 
-type ArtifactAction<M = any> = {
+type ArtifactAction<M = unknown> = {
   icon: ReactNode;
   label?: string;
   description: string;
@@ -33,7 +38,7 @@ export type ArtifactToolbarItem = {
   onClick: (context: ArtifactToolbarContext) => void;
 };
 
-type ArtifactContent<M = any> = {
+type ArtifactContent<M = unknown> = {
   title: string;
   content: string;
   mode: "edit" | "diff";
@@ -45,38 +50,42 @@ type ArtifactContent<M = any> = {
   isInline: boolean;
   getDocumentContentById: (index: number) => string;
   isLoading: boolean;
-  metadata: M;
-  setMetadata: Dispatch<SetStateAction<M>>;
+  metadata: M | null;
+  setMetadata: Dispatch<SetStateAction<M | null>>;
 };
 
-type InitializeParameters<M = any> = {
+type InitializeParameters<M = unknown> = {
   documentId: string;
-  setMetadata: Dispatch<SetStateAction<M>>;
+  setMetadata: Dispatch<SetStateAction<M | null>>;
 };
 
-type ArtifactConfig<T extends string, M = any> = {
+type InitializeHandler<M = unknown> = (
+  parameters: InitializeParameters<M>
+) => void | Promise<void>;
+
+type ArtifactConfig<T extends string, M = unknown> = {
   kind: T;
   description: string;
   content: ComponentType<ArtifactContent<M>>;
   actions: ArtifactAction<M>[];
   toolbar: ArtifactToolbarItem[];
-  initialize?: (parameters: InitializeParameters<M>) => void;
+  initialize?: InitializeHandler<M>;
   onStreamPart: (args: {
-    setMetadata: Dispatch<SetStateAction<M>>;
+    setMetadata: Dispatch<SetStateAction<M | null>>;
     setArtifact: Dispatch<SetStateAction<UIArtifact>>;
     streamPart: DataUIPart<CustomUIDataTypes>;
   }) => void;
 };
 
-export class Artifact<T extends string, M = any> {
+export class Artifact<T extends string, M = unknown> {
   readonly kind: T;
   readonly description: string;
   readonly content: ComponentType<ArtifactContent<M>>;
   readonly actions: ArtifactAction<M>[];
   readonly toolbar: ArtifactToolbarItem[];
-  readonly initialize?: (parameters: InitializeParameters) => void;
+  readonly initialize?: InitializeHandler<M>;
   readonly onStreamPart: (args: {
-    setMetadata: Dispatch<SetStateAction<M>>;
+    setMetadata: Dispatch<SetStateAction<M | null>>;
     setArtifact: Dispatch<SetStateAction<UIArtifact>>;
     streamPart: DataUIPart<CustomUIDataTypes>;
   }) => void;
@@ -87,7 +96,7 @@ export class Artifact<T extends string, M = any> {
     this.content = config.content;
     this.actions = config.actions || [];
     this.toolbar = config.toolbar || [];
-    this.initialize = config.initialize || (async () => ({}));
+    this.initialize = config.initialize || (async () => {});
     this.onStreamPart = config.onStreamPart;
   }
 }

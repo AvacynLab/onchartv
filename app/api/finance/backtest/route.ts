@@ -18,6 +18,7 @@ import {
   upsertAsset,
 } from "@/lib/db/queries";
 import { ChatSDKError } from "@/lib/errors";
+import { logError } from "@/lib/logging";
 import { enforceRateLimit } from "@/lib/ratelimit";
 import type { BacktestParameters } from "@/lib/finance/types";
 
@@ -223,7 +224,7 @@ export async function POST(request: Request): Promise<Response> {
       return error.toResponse();
     }
 
-    console.error("[api:finance.backtest] unexpected error", error);
+    logError("api:finance.backtest", error, { clientKey });
     return Response.json(
       {
         error: {

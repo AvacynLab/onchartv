@@ -3,6 +3,7 @@ import { z } from "zod";
 import { assertSupportedSymbol, logRouteLatency, now, resolveClientKey } from "@/lib/finance/api-utils";
 import { NEWS_ITEMS } from "@/lib/finance/mock-data";
 import { ChatSDKError } from "@/lib/errors";
+import { logError } from "@/lib/logging";
 import { enforceRateLimit } from "@/lib/ratelimit";
 
 const querySchema = z.object({
@@ -19,6 +20,8 @@ const querySchema = z.object({
 export async function GET(request: Request): Promise<Response> {
   const startedAt = now();
   const clientKey = resolveClientKey(request);
+  let symbol: string | undefined;
+  let limit: number | undefined;
 
   try {
     const rateLimit = enforceRateLimit({
@@ -36,7 +39,21 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     const metadata = assertSupportedSymbol(parsed.data.symbol);
-    const limit = parsed.data.limit ? Number.parseInt(parsed.data.limit, 10) : 10;
+    symbol = metadata.symbol;
+
+    /**
+     * Normalise the optional `limit` query and reject non-integer payloads so
+     * Playwright assertions remain stable across environments.
+     */
+    const rawLimit = parsed.data.limit?.trim();
+    if (rawLimit && !/^\d+$/.test(rawLimit)) {
+      throw new ChatSDKError(
+        "bad_request:api",
+        "Parameter 'limit' must be a positive integer when provided."
+      );
+    }
+
+    limit = rawLimit ? Number.parseInt(rawLimit, 10) : 10;
 
     if (Number.isNaN(limit) || limit <= 0) {
       throw new ChatSDKError(
@@ -65,7 +82,7 @@ export async function GET(request: Request): Promise<Response> {
       return error.toResponse();
     }
 
-    console.error("[api:finance.news] unexpected error", error);
+    logError("api:finance.news", error, { clientKey, symbol, limit });
     return Response.json(
       {
         error: {

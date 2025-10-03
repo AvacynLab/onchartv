@@ -8,6 +8,7 @@ import {
   FINANCE_ASSET_CATALOG,
   type FinanceAssetMetadata,
 } from "@/lib/finance/catalog";
+import { logError, logWarning } from "../logging";
 
 /**
  * Canonical set of assets inserted during local development and CI.
@@ -28,8 +29,9 @@ const normaliseCurrency = (value: string) => value.trim().toUpperCase();
  */
 export async function seedDatabase(): Promise<void> {
   if (!process.env.POSTGRES_URL) {
-    console.warn(
-      "[db:seed] POSTGRES_URL is undefined – skipping finance seed execution."
+    logWarning(
+      "db:seed",
+      "POSTGRES_URL is undefined – skipping finance seed execution."
     );
     return;
   }
@@ -77,11 +79,15 @@ export async function seedDatabase(): Promise<void> {
       `[db:seed] Inserted ${SEED_ASSETS.length} finance assets into the catalogue.`
     );
   } catch (error) {
-    console.error("[db:seed] Failed to seed finance assets", error);
+    logError("db:seed", error, {
+      message: "Failed to seed finance assets",
+    });
     throw error;
   } finally {
     await client.end({ timeout: 5 }).catch((closeError) => {
-      console.warn("[db:seed] Failed to close Postgres connection", closeError);
+      logWarning("db:seed", "Failed to close Postgres connection", {
+        error: closeError,
+      });
     });
   }
 }
@@ -92,7 +98,7 @@ const invokedDirectly =
 
 if (invokedDirectly) {
   seedDatabase().catch((error) => {
-    console.error("[db:seed] Seed script failed", error);
+    logError("db:seed", error, { message: "Seed script failed" });
     process.exitCode = 1;
   });
 }

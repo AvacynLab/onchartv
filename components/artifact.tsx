@@ -3,6 +3,7 @@ import { formatDistance } from "date-fns";
 import equal from "fast-deep-equal";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  type ComponentProps,
   type Dispatch,
   memo,
   type SetStateAction,
@@ -254,14 +255,18 @@ function PureArtifact({
     throw new Error("Artifact definition not found!");
   }
 
+  type ContentProps = ComponentProps<typeof artifactDefinition.content>;
+  const metadataForContent = metadata as ContentProps["metadata"];
+  const setMetadataForContent = setMetadata as ContentProps["setMetadata"];
+
   useEffect(() => {
     if (artifact.documentId !== "init" && artifactDefinition.initialize) {
       artifactDefinition.initialize({
         documentId: artifact.documentId,
-        setMetadata,
+        setMetadata: setMetadataForContent,
       });
     }
-  }, [artifact.documentId, artifactDefinition, setMetadata]);
+  }, [artifact.documentId, artifactDefinition, setMetadataForContent]);
 
   return (
     <AnimatePresence>
@@ -454,9 +459,9 @@ function PureArtifact({
                 currentVersionIndex={currentVersionIndex}
                 handleVersionChange={handleVersionChange}
                 isCurrentVersion={isCurrentVersion}
-                metadata={metadata}
+                metadata={metadataForContent}
                 mode={mode}
-                setMetadata={setMetadata}
+                setMetadata={setMetadataForContent}
               />
             </div>
 
@@ -472,10 +477,10 @@ function PureArtifact({
                 isCurrentVersion={isCurrentVersion}
                 isInline={false}
                 isLoading={isDocumentsFetching && !artifact.content}
-                metadata={metadata}
+                metadata={metadataForContent}
                 mode={mode}
                 onSaveContent={saveContent}
-                setMetadata={setMetadata}
+                setMetadata={setMetadataForContent}
                 status={artifact.status}
                 suggestions={[]}
                 title={artifact.title}

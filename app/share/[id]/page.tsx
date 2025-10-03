@@ -22,7 +22,7 @@ export default async function Page(props: { params: Promise<{ id: string }> }) {
 
   if (!session) {
     const redirectUrl = encodeURIComponent(`/share/${id}`);
-    redirect(`/api/auth/guest?redirectUrl=${redirectUrl}`);
+    redirect(`/login?callbackUrl=${redirectUrl}`);
   }
 
   const messagesFromDb = await getMessagesByChatId({

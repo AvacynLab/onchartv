@@ -25,7 +25,7 @@
 - [AI SDK](https://ai-sdk.dev/docs/introduction)
   - Unified API for generating text, structured objects, and tool calls with LLMs
   - Hooks for building dynamic chat and generative user interfaces
-  - Supports xAI (default), OpenAI, Fireworks, and other model providers
+  - Supports OpenAI out of the box, with easy swaps for xAI, Fireworks, and other providers
 - [shadcn/ui](https://ui.shadcn.com)
   - Styling with [Tailwind CSS](https://tailwindcss.com)
   - Component primitives from [Radix UI](https://radix-ui.com) for accessibility and flexibility
@@ -37,15 +37,9 @@
 
 ## Model Providers
 
-This template uses the [Vercel AI Gateway](https://vercel.com/docs/ai-gateway) to access multiple AI models through a unified interface. The default configuration includes [xAI](https://x.ai) models (`grok-2-vision-1212`, `grok-3-mini`) routed through the gateway.
+This template connects directly to OpenAI via the official AI SDK provider. Define `OPENAI_API_KEY` and the relevant model identifiers (`OPENAI_MODEL_ID`, `OPENAI_REASONING_MODEL_ID`, `OPENAI_TITLE_MODEL_ID`, `OPENAI_ARTIFACT_MODEL_ID`) in your environment to unlock chat, reasoning traces, summarisation, and artefact generation. You can further customise transport behaviour with the optional `OPENAI_BASE_URL`, `OPENAI_ORGANIZATION`, and `OPENAI_PROJECT` environment variables when targeting self-hosted gateways or scoped organisation/project quotas.
 
-### AI Gateway Authentication
-
-**For Vercel deployments**: Authentication is handled automatically via OIDC tokens.
-
-**For non-Vercel deployments**: You need to provide an AI Gateway API key by setting the `AI_GATEWAY_API_KEY` environment variable in your `.env.local` file.
-
-With the [AI SDK](https://ai-sdk.dev/docs/introduction), you can also switch to direct LLM providers like [OpenAI](https://openai.com), [Anthropic](https://anthropic.com), [Cohere](https://cohere.com/), and [many more](https://ai-sdk.dev/providers/ai-sdk-providers) with just a few lines of code.
+With the [AI SDK](https://ai-sdk.dev/docs/introduction), you can also switch to alternative LLM vendors such as [Anthropic](https://anthropic.com), [Cohere](https://cohere.com/), or [xAI](https://x.ai) by swapping the provider initialisation in [`lib/ai/providers.ts`](lib/ai/providers.ts) and adjusting the associated environment variables.
 
 ## Deploy Your Own
 
@@ -69,6 +63,29 @@ pnpm dev
 ```
 
 Your app template should now be running on [localhost:3000](http://localhost:3000).
+
+## Tests & e2e reliability
+
+- The finance feature set is gated behind the `FEATURE_FINANCE` flag. Enable it
+  locally by adding `FEATURE_FINANCE=true` to your `.env.local` before running
+  the dev server or any tests.
+- The Playwright suites run fully offline. Network requests to `/api/finance/*`
+  are intercepted with deterministic fixtures and the browser clock is frozen
+  to `2025-03-01T12:00:00Z`. Set `PLAYWRIGHT=true` when invoking scripts so the
+  rate limiter expands accordingly.
+- Unit tests run with Vitest via `pnpm test`. End-to-end coverage lives under
+  `tests/e2e` and can be executed with `pnpm exec playwright test`.
+
+### Résolution des tests e2e
+
+1. Install the Playwright browser binaries once via `pnpm exec playwright install`.
+2. Start the development server with `FEATURE_FINANCE=true pnpm dev`.
+3. In another shell, execute `PLAYWRIGHT=true FEATURE_FINANCE=true pnpm exec playwright test`.
+4. The Playwright auth bootstrap registers and reuses a **regular** account
+   (option B). If you need to reset the credentials, remove `tests/.auth` and
+   rerun the setup script.
+5. Traces are stored under `artifacts/` when a scenario fails; open them with
+   `pnpm exec playwright show-trace <trace.zip>` to inspect the run.
 
 ## Avertissements / Usage responsable
 
@@ -105,7 +122,7 @@ Each shortcut still runs through the offline datasets and carries the same non-a
 
 Deployments on Vercel (or any long-lived environment) must provide the same hermetic guarantees as local development. Before pushing a new build, double-check the following configuration:
 
-- **Environment variables**: define `AUTH_SECRET`, `OPENAI_API_KEY`, `OPENAI_MODEL_ID`, `POSTGRES_URL`, and `BLOB_READ_WRITE_TOKEN`. The finance artefacts also rely on optional mocks that can source external providers if you later enable them—set `MARKET_DATA_API_KEY`, `MARKET_DATA_API_BASE_URL`, and `NEWS_API_KEY` if you connect to live feeds. Flip `FEATURE_USE_REAL_DATA=true` to activate the HTTP adapter.
+- **Environment variables**: define `AUTH_SECRET`, `OPENAI_API_KEY`, `OPENAI_MODEL_ID`, `POSTGRES_URL`, and `BLOB_READ_WRITE_TOKEN`. Override `OPENAI_REASONING_MODEL_ID`, `OPENAI_TITLE_MODEL_ID`, and `OPENAI_ARTIFACT_MODEL_ID` if you want to target specialised models per capability. Provide `OPENAI_BASE_URL`, `OPENAI_ORGANIZATION`, and `OPENAI_PROJECT` if you route traffic through a proxy or scoped workspace. The finance artefacts also rely on optional mocks that can source external providers if you later enable them—set `MARKET_DATA_API_KEY`, `MARKET_DATA_API_BASE_URL`, and `NEWS_API_KEY` if you connect to live feeds. Flip `FEATURE_USE_REAL_DATA=true` to activate the HTTP adapter.
 - **Feature flags**: keep `FEATURE_FINANCE=true` to enable charting, fundamentals, and backtesting endpoints alongside the system prompt updates documented above.
 - **Database readiness**: the build pipeline (and the provided GitHub Actions workflow) runs `pnpm db:migrate` followed by `pnpm db:seed` before executing `pnpm build`. Reproduce that order locally when preparing environment snapshots.
 - **Health check**: expose a lightweight probe by hitting [`/api/finance/quote?symbol=BTCUSD`](app/api/finance/quote/route.ts). The endpoint serves deterministic offline data when external APIs are unavailable, making it safe for uptime monitors.

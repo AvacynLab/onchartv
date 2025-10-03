@@ -2,8 +2,9 @@
 
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { motion } from "framer-motion";
-import { memo } from "react";
+import React, { memo } from "react";
 import type { ChatMessage } from "@/lib/types";
+import { isFinanceFeatureEnabledClient } from "@/lib/feature-flags";
 import { Suggestion } from "./elements/suggestion";
 import type { VisibilityType } from "./visibility-selector";
 
@@ -20,13 +21,32 @@ function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
    * you can ship fast!" response while the remaining entries highlight the new
    * finance shortcuts.
    */
-  const suggestedActions = [
-    "What are the advantages of using Next.js?",
+  const financeFeatureEnabled = isFinanceFeatureEnabledClient();
+
+  /**
+   * Keep a core onboarding suggestion regardless of feature flags so the chat
+   * regression suite continues to assert the deterministic Next.js welcome
+   * response.
+   */
+  const baselineSuggestions = ["What are the advantages of using Next.js?"];
+  const financeSuggestions = [
     "/chart BTCUSD 1D",
     "/backtest AAPL 2018-01-01 2020-12-31 50 200",
     "Summarise NVDA fundamentals using the finance artefacts",
     "Toggle the finance news preference and explain what changes",
   ];
+  /**
+   * Provide non-finance alternatives when the feature flag is disabled so the
+   * UI still exposes a diverse set of quick-start prompts.
+   */
+  const productivitySuggestions = [
+    "Draft a stand-up update for a frontend engineer",
+    "Summarise the latest conversation in three bullet points",
+  ];
+
+  const suggestedActions = financeFeatureEnabled
+    ? [...baselineSuggestions, ...financeSuggestions]
+    : [...baselineSuggestions, ...productivitySuggestions];
 
   return (
     <div

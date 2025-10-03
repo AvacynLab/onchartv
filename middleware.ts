@@ -40,10 +40,7 @@ export async function middleware(request: NextRequest) {
 
   if (!token) {
     if (isSharePath) {
-      const redirectUrl = encodeURIComponent(request.nextUrl.href);
-      return NextResponse.redirect(
-        new URL(`/api/auth/guest?redirectUrl=${redirectUrl}`, request.url)
-      );
+      return NextResponse.redirect(buildLoginRedirect(request));
     }
 
     if (isAuthPage) {

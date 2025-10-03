@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { FinanceBacktestArtifact } from "@/lib/finance/types";
 
+/** Nombre d'entrées affichées par page dans le journal des trades. */
 const TRADES_PER_PAGE = 8;
 
 /**
@@ -168,8 +169,25 @@ export function BacktestReportArtifact({
 
   const retestFormId = useId();
   const formErrorId = useId();
+  const tableId = useId();
 
-  const trades = artifact.trades;
+  /**
+   * Les artefacts sont générés côté serveur ou par l'assistant. Nous défendons
+   * donc l'accès aux métriques et au journal pour éviter les crashs lorsque des
+   * champs sont manquants ou mal typés.
+   */
+  const metrics = (artifact.metrics ?? {}) as Partial<
+    FinanceBacktestArtifact["metrics"]
+  >;
+  const trades = Array.isArray(artifact.trades)
+    ? [...artifact.trades]
+    : [];
+
+  const totalTrades =
+    typeof metrics?.trades === "number" && Number.isFinite(metrics.trades)
+      ? metrics.trades
+      : trades.length;
+
   const pageCount = Math.max(Math.ceil(trades.length / TRADES_PER_PAGE), 1);
   const paginatedTrades = useMemo(() => {
     const start = pageIndex * TRADES_PER_PAGE;
@@ -268,6 +286,12 @@ export function BacktestReportArtifact({
         <Button
           aria-controls={retestFormId}
           aria-expanded={isRetestOpen}
+          /**
+           * Stable hook for Playwright. Using a test id avoids brittle text-based
+           * lookups when the copy changes while preserving the accessible name
+           * exposed to end users.
+           */
+          data-testid="finance-backtest-retest-toggle"
           onClick={handleRetestToggle}
           size="sm"
           type="button"
@@ -434,13 +458,21 @@ export function BacktestReportArtifact({
       </section>
 
       <section className="grid gap-4 md:grid-cols-3">
-        {METRICS.map((metric) => (
-          <Card key={metric.id} data-testid={`metric-${metric.id}`}>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="flex items-center gap-2 text-sm font-medium">
-                <BarChart3 className="size-4 text-muted-foreground" />
-                {metric.label}
-              </CardTitle>
+        {METRICS.map((metric) => {
+          const rawValue = metrics?.[metric.id];
+          const formattedValue = metric.formatter(
+            typeof rawValue === "number" ? rawValue : Number.NaN
+          );
+          const hasValue =
+            typeof rawValue === "number" && Number.isFinite(rawValue);
+
+          return (
+            <Card key={metric.id} data-testid={`metric-${metric.id}`}>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                  <BarChart3 className="size-4 text-muted-foreground" />
+                  {metric.label}
+                </CardTitle>
               {metric.tooltip ? (
                 <Badge
                   title={metric.tooltip}
@@ -450,18 +482,26 @@ export function BacktestReportArtifact({
                 </Badge>
               ) : null}
             </CardHeader>
-            <CardContent>
-              <p className="text-2xl font-semibold">
-                {metric.formatter(artifact.metrics[metric.id])}
-              </p>
-              <p className="text-muted-foreground text-xs">
-                {metric.id === "winRate"
-                  ? `${artifact.metrics.trades} trades` 
-                  : "Synthèse calculée sur l'échantillon backtesté."}
-              </p>
-            </CardContent>
-          </Card>
-        ))}
+              <CardContent>
+                <p
+                  className="text-2xl font-semibold"
+                  data-testid={`metric-${metric.id}-value`}
+                >
+                  {formattedValue}
+                </p>
+                <p className="text-muted-foreground text-xs">
+                  {metric.id === "winRate"
+                    ? hasValue
+                      ? `${totalTrades} trades`
+                      : "Nombre de trades indisponible."
+                    : hasValue
+                      ? "Synthèse calculée sur l'échantillon backtesté."
+                      : "Donnée indisponible pour cette simulation."}
+                </p>
+              </CardContent>
+            </Card>
+          );
+        })}
       </section>
 
       <section aria-labelledby="equity-curve-heading">
@@ -503,11 +543,12 @@ export function BacktestReportArtifact({
           <h4 className="font-semibold text-base" id="trade-journal-heading">
             Journal des trades
           </h4>
-          <Badge variant="secondary">{artifact.trades.length} positions</Badge>
+          <Badge variant="secondary">{trades.length} positions</Badge>
         </div>
         <div className="overflow-x-auto">
           <table
             aria-describedby="trade-journal-caption"
+            id={tableId}
             className="min-w-full text-left text-sm"
           >
             <caption
@@ -557,6 +598,7 @@ export function BacktestReportArtifact({
         </div>
         <div className="flex items-center justify-end gap-2">
           <Button
+            aria-controls={tableId}
             disabled={pageIndex === 0}
             onClick={() => setPageIndex((index) => Math.max(index - 1, 0))}
             size="sm"
@@ -566,10 +608,15 @@ export function BacktestReportArtifact({
           >
             Précédent
           </Button>
-          <span className="text-muted-foreground text-xs">
+          <span
+            aria-live="polite"
+            className="text-muted-foreground text-xs"
+            data-testid="trade-pagination"
+          >
             Page {pageIndex + 1} / {pageCount}
           </span>
           <Button
+            aria-controls={tableId}
             disabled={pageIndex >= pageCount - 1}
             onClick={() => setPageIndex((index) => Math.min(index + 1, pageCount - 1))}
             size="sm"

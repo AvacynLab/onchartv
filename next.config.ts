@@ -4,6 +4,25 @@ const nextConfig: NextConfig = {
   experimental: {
     ppr: true,
   },
+  /**
+   * Turbopack struggles to resolve the React Query ESM bundle when the project
+   * runs under pnpm because the package lives behind the `.pnpm` symlink. Adding
+   * it to `transpilePackages` ensures Next.js hoists the dependency into the
+   * application bundle so both the dev server and the Playwright harness can
+   * import `@tanstack/react-query` without crashing during warmup.
+   */
+  transpilePackages: ["@tanstack/react-query"],
+  env: {
+    /**
+     * Mirror the server-side finance flag to the client bundle so interactive
+     * components can short-circuit when the feature is disabled without
+     * reaching for runtime fetches.
+     */
+    NEXT_PUBLIC_FEATURE_FINANCE:
+      process.env.NEXT_PUBLIC_FEATURE_FINANCE ??
+      process.env.FEATURE_FINANCE ??
+      "true",
+  },
   images: {
     remotePatterns: [
       {

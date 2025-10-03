@@ -22,38 +22,60 @@ export type FinanceSymbol = (typeof FINANCE_SYMBOLS)[number];
  * candles with a mild up-trend so technical indicators and the backtest engine
  * have realistic data to chew on while keeping the runtime fully hermetic.
  */
+/**
+ * Daily candles need to cover both the historical backtests exercised by the
+ * Playwright suite (2018 → 2020) and the more recent chart requests showcased in
+ * the UI (2024 → 2025). Starting the synthetic catalogue on 2018‑01‑01 and
+ * generating roughly eight years of data guarantees both windows are available
+ * without introducing flaky, time-dependent behaviour.
+ */
+const SERIES_START_TIMESTAMP = Date.UTC(2018, 0, 1) / 1000;
+
+/**
+ * Eight years of daily candles (~2 920 entries) rounded up to 3 000 to leave a
+ * small buffer for extended test ranges.
+ */
+const SERIES_CANDLE_COUNT = 3_000;
+
 export const FINANCE_SERIES: Record<FinanceSymbol, CandleSeries> = {
   AAPL: generateMockSeries({
-    startTimestamp: 1_700_000_000,
-    candles: 720,
+    startTimestamp: SERIES_START_TIMESTAMP,
+    candles: SERIES_CANDLE_COUNT,
     basePrice: 170,
-    amplitude: 3,
-    trendPerCandle: 0.12,
+    /**
+     * L'amplitude accrue et la pente très douce garantissent plusieurs
+     * croisements des moyennes mobiles 50/200 sur la fenêtre 2018-2020.
+     * Les suites d'accessibilité Playwright vérifient que le bouton
+     * « Suivant » du journal des trades reste focusable; sans au moins deux
+     * pages de résultats, le bouton est désactivé et l'assertion échoue.
+     */
+    amplitude: 20,
+    trendPerCandle: 0.02,
   }),
   NVDA: generateMockSeries({
-    startTimestamp: 1_700_000_000,
-    candles: 720,
+    startTimestamp: SERIES_START_TIMESTAMP,
+    candles: SERIES_CANDLE_COUNT,
     basePrice: 450,
     amplitude: 6,
     trendPerCandle: 0.3,
   }),
   BTCUSD: generateMockSeries({
-    startTimestamp: 1_700_000_000,
-    candles: 720,
+    startTimestamp: SERIES_START_TIMESTAMP,
+    candles: SERIES_CANDLE_COUNT,
     basePrice: 30_000,
     amplitude: 1_200,
     trendPerCandle: 25,
   }),
   ETHUSD: generateMockSeries({
-    startTimestamp: 1_700_000_000,
-    candles: 720,
+    startTimestamp: SERIES_START_TIMESTAMP,
+    candles: SERIES_CANDLE_COUNT,
     basePrice: 1_800,
     amplitude: 90,
     trendPerCandle: 1.5,
   }),
   EURUSD: generateMockSeries({
-    startTimestamp: 1_700_000_000,
-    candles: 720,
+    startTimestamp: SERIES_START_TIMESTAMP,
+    candles: SERIES_CANDLE_COUNT,
     basePrice: 1.08,
     amplitude: 0.01,
     trendPerCandle: 0.0001,

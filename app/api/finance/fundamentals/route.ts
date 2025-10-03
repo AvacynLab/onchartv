@@ -3,6 +3,7 @@ import { z } from "zod";
 import { assertSupportedSymbol, logRouteLatency, now, resolveClientKey } from "@/lib/finance/api-utils";
 import { FUNDAMENTAL_SNAPSHOTS } from "@/lib/finance/mock-data";
 import { ChatSDKError } from "@/lib/errors";
+import { logError } from "@/lib/logging";
 import { enforceRateLimit } from "@/lib/ratelimit";
 
 /** Query validation used by the fundamentals endpoint. */
@@ -20,6 +21,7 @@ const querySchema = z.object({
 export async function GET(request: Request): Promise<Response> {
   const startedAt = now();
   const clientKey = resolveClientKey(request);
+  let symbol: string | undefined;
 
   try {
     const rateLimit = enforceRateLimit({
@@ -37,6 +39,7 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     const metadata = assertSupportedSymbol(parsed.data.symbol);
+    symbol = metadata.symbol;
     const snapshot = FUNDAMENTAL_SNAPSHOTS[metadata.symbol];
 
     if (!snapshot) {
@@ -59,7 +62,7 @@ export async function GET(request: Request): Promise<Response> {
       return error.toResponse();
     }
 
-    console.error("[api:finance.fundamentals] unexpected error", error);
+    logError("api:finance.fundamentals", error, { clientKey, symbol });
     return Response.json(
       {
         error: {

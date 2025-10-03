@@ -1,7 +1,7 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import equal from "fast-deep-equal";
 import { ArrowDownIcon } from "lucide-react";
-import { memo, useEffect } from "react";
+import React, { memo, useEffect, useRef } from "react";
 import { useMessages } from "@/hooks/use-messages";
 import type { Vote } from "@/lib/db/schema";
 import type { ChatMessage } from "@/lib/types";
@@ -13,13 +13,21 @@ import { PreviewMessage, ThinkingMessage } from "./message";
 type MessagesProps = {
   chatId: string;
   status: UseChatHelpers<ChatMessage>["status"];
-  votes: Vote[] | undefined;
-  messages: ChatMessage[];
+  votes?: Vote[] | null;
+  messages?: ChatMessage[] | null;
   setMessages: UseChatHelpers<ChatMessage>["setMessages"];
   regenerate: UseChatHelpers<ChatMessage>["regenerate"];
   isReadonly: boolean;
   isArtifactVisible: boolean;
   selectedModelId: string;
+};
+
+const isRenderableMessage = (value: ChatMessage | null | undefined): value is ChatMessage => {
+  return (
+    Boolean(value) &&
+    typeof value?.id === "string" &&
+    Array.isArray(value.parts)
+  );
 };
 
 function PureMessages({
@@ -42,57 +50,100 @@ function PureMessages({
     status,
   });
 
+  const safeMessages = Array.isArray(messages) ? messages : [];
+  const safeVotes = Array.isArray(votes) ? votes : [];
+
+  /**
+   * Track the previous message count and the viewport stickiness so we can
+   * decide whether the UI should auto-scroll. The value is stored in a ref to
+   * avoid triggering additional renders while still giving us the latest
+   * information inside effects.
+   */
+  const previousMessageCountRef = useRef(safeMessages.length);
+  const wasAtBottomRef = useRef(true);
+
   useDataStream();
 
   useEffect(() => {
-    if (status === "submitted") {
-      requestAnimationFrame(() => {
-        const container = messagesContainerRef.current;
-        if (container) {
-          container.scrollTo({
-            top: container.scrollHeight,
-            behavior: "smooth",
-          });
-        }
-      });
+    wasAtBottomRef.current = isAtBottom;
+  }, [isAtBottom]);
+
+  useEffect(() => {
+    const previousCount = previousMessageCountRef.current;
+    previousMessageCountRef.current = safeMessages.length;
+
+    if (safeMessages.length === 0) {
+      return;
     }
-  }, [status, messagesContainerRef]);
+
+    const hasNewMessage = safeMessages.length > previousCount;
+    const shouldAutoScroll =
+      hasNewMessage && (wasAtBottomRef.current || status === "submitted");
+
+    if (!shouldAutoScroll) {
+      return;
+    }
+
+    /**
+     * Defer the actual scroll to the hook so the intent is centralised. The
+     * hook performs the imperative `scrollTo` call on the next frame which
+     * keeps the behaviour deterministic between the browser and the test
+     * environment.
+     */
+    scrollToBottom("smooth");
+  }, [safeMessages, scrollToBottom, status]);
 
   return (
     <div
-      className="overscroll-behavior-contain -webkit-overflow-scrolling-touch flex-1 touch-pan-y overflow-y-scroll"
+      className="overscroll-behavior-contain -webkit-overflow-scrolling-touch relative flex-1 touch-pan-y overflow-y-scroll"
       ref={messagesContainerRef}
       style={{ overflowAnchor: "none" }}
     >
       <Conversation className="mx-auto flex min-w-0 max-w-4xl flex-col gap-4 md:gap-6">
         <ConversationContent className="flex flex-col gap-4 px-2 py-4 md:gap-6 md:px-4">
-          {messages.length === 0 && <Greeting />}
+          {safeMessages.length === 0 && <Greeting />}
 
-          {messages.map((message, index) => (
-            <PreviewMessage
-              chatId={chatId}
-              isLoading={
-                status === "streaming" && messages.length - 1 === index
-              }
-              isReadonly={isReadonly}
-              key={message.id}
-              message={message}
-              regenerate={regenerate}
-              requiresScrollPadding={
-                hasSentMessage && index === messages.length - 1
-              }
-              setMessages={setMessages}
-              vote={
-                votes
-                  ? votes.find((vote) => vote.messageId === message.id)
-                  : undefined
-              }
-            />
-          ))}
+          {safeMessages.map((message, index) => {
+            if (!isRenderableMessage(message)) {
+              console.warn("[Messages] message payload is malformed", message);
+              return (
+                <div
+                  className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive"
+                  data-testid="chat-message-fallback"
+                  key={`message-fallback-${index}`}
+                  role="status"
+                >
+                  Message indisponible : le contenu fourni est invalide.
+                </div>
+              );
+            }
+
+            const matchingVote = safeVotes.find(
+              (vote) => vote.messageId === message.id
+            );
+
+            return (
+              <PreviewMessage
+                chatId={chatId}
+                isLoading={
+                  status === "streaming" && safeMessages.length - 1 === index
+                }
+                isReadonly={isReadonly}
+                key={message.id}
+                message={message}
+                regenerate={regenerate}
+                requiresScrollPadding={
+                  hasSentMessage && index === safeMessages.length - 1
+                }
+                setMessages={setMessages}
+                vote={matchingVote}
+              />
+            );
+          })}
 
           {status === "submitted" &&
-            messages.length > 0 &&
-            messages.at(-1)?.role === "user" &&
+            safeMessages.length > 0 &&
+            safeMessages.at(-1)?.role === "user" &&
             selectedModelId !== "chat-model-reasoning" && <ThinkingMessage />}
 
           <div
@@ -106,6 +157,7 @@ function PureMessages({
         <button
           aria-label="Scroll to bottom"
           className="-translate-x-1/2 absolute bottom-40 left-1/2 z-10 rounded-full border bg-background p-2 shadow-lg transition-colors hover:bg-muted"
+          data-testid="scroll-to-bottom-button"
           onClick={() => scrollToBottom("smooth")}
           type="button"
         >
@@ -127,13 +179,17 @@ export const Messages = memo(PureMessages, (prevProps, nextProps) => {
   if (prevProps.selectedModelId !== nextProps.selectedModelId) {
     return false;
   }
-  if (prevProps.messages.length !== nextProps.messages.length) {
+  const prevMessages = prevProps.messages ?? [];
+  const nextMessages = nextProps.messages ?? [];
+  if (prevMessages.length !== nextMessages.length) {
     return false;
   }
-  if (!equal(prevProps.messages, nextProps.messages)) {
+  if (!equal(prevMessages, nextMessages)) {
     return false;
   }
-  if (!equal(prevProps.votes, nextProps.votes)) {
+  const prevVotes = prevProps.votes ?? [];
+  const nextVotes = nextProps.votes ?? [];
+  if (!equal(prevVotes, nextVotes)) {
     return false;
   }
 

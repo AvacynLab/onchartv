@@ -36,6 +36,15 @@ const buckets = new Map<string, RateLimitBucket>();
 export function enforceRateLimit(options: RateLimitOptions): RateLimitResult {
   const { key, limit, windowMs, now = Date.now() } = options;
 
+  /**
+   * End-to-end suites set `PLAYWRIGHT=true` to signal that deterministic mocks
+   * are in effect. Relax the limiter by a generous multiplier so tests can hit
+   * the same route repeatedly without tripping 429s while keeping production
+   * behaviour intact.
+   */
+  const limitMultiplier = process.env.PLAYWRIGHT === "true" ? 100 : 1;
+  const effectiveLimit = limit * limitMultiplier;
+
   if (limit <= 0 || windowMs <= 0) {
     throw new Error("Rate limit options must be positive.");
   }
@@ -48,10 +57,13 @@ export function enforceRateLimit(options: RateLimitOptions): RateLimitResult {
       expiresAt: now + windowMs,
     };
     buckets.set(key, bucket);
-    return { remaining: Math.max(limit - 1, 0), reset: bucket.expiresAt };
+    return {
+      remaining: Math.max(effectiveLimit - 1, 0),
+      reset: bucket.expiresAt,
+    };
   }
 
-  if (existing.count >= limit) {
+  if (existing.count >= effectiveLimit) {
     throw new ChatSDKError(
       "rate_limit:api",
       `Rate limit exceeded for key '${key}'.`
@@ -59,7 +71,10 @@ export function enforceRateLimit(options: RateLimitOptions): RateLimitResult {
   }
 
   existing.count += 1;
-  return { remaining: Math.max(limit - existing.count, 0), reset: existing.expiresAt };
+  return {
+    remaining: Math.max(effectiveLimit - existing.count, 0),
+    reset: existing.expiresAt,
+  };
 }
 
 /**
