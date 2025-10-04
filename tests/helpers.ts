@@ -40,30 +40,95 @@ export async function createAuthenticatedContext({
   }
 
   const storageFile = path.join(directory, `${name}.json`);
+  const credentialsFile = path.join(directory, `${name}.credentials.json`);
 
   const context = await browser.newContext();
   const page = await context.newPage();
 
   const email = `test-${name}@playwright.com`;
-  const password = generateId();
+  let password: string | null = null;
+
+  if (fs.existsSync(credentialsFile)) {
+    try {
+      const raw = fs.readFileSync(credentialsFile, "utf-8");
+      const parsed = JSON.parse(raw) as { password?: string } | null;
+      if (parsed?.password) {
+        password = parsed.password;
+      }
+    } catch (error) {
+      console.warn(
+        "Failed to parse cached Playwright credentials, generating a fresh password",
+        error
+      );
+    }
+  }
+
+  if (!password) {
+    /**
+     * Persist the generated password on disk so reusing the same logical user
+     * across retries (share/read-only scenarios) does not leave the account
+     * stuck with an unknown secret.
+     */
+    password = generateId();
+    const payload = JSON.stringify({ email, password }, null, 2);
+    fs.writeFileSync(credentialsFile, payload);
+  }
+
+  const resolvedPassword = password;
 
   const baseURL =
     process.env.PLAYWRIGHT_TEST_BASE_URL ??
     `http://localhost:${process.env.PORT ?? 3100}`;
 
   // Point the registration flow at the same origin Playwright uses for the
-  // rest of the suite. The test web server now defaults to port 3100 so we
-  // avoid hard-coding 3000 and breaking manual runs.
-  await page.goto(`${baseURL}/register`);
-  await page.getByPlaceholder("user@acme.com").click();
-  await page.getByPlaceholder("user@acme.com").fill(email);
-  await page.getByLabel("Password").click();
-  await page.getByLabel("Password").fill(password);
+  // rest of the suite. Waiting for DOM readiness avoids flakiness when the dev
+  // server streams the shell before every asset loads.
+  await page.goto(`${baseURL}/register`, { waitUntil: "domcontentloaded" });
+
+  const emailInput = page.getByPlaceholder("user@acme.com");
+  await emailInput.waitFor({ state: "visible", timeout: 60_000 });
+  await emailInput.fill(email);
+
+  const passwordInput = page.getByLabel("Password");
+  await passwordInput.waitFor({ state: "visible", timeout: 60_000 });
+  await passwordInput.fill(resolvedPassword);
   await page.getByRole("button", { name: "Sign Up" }).click();
 
-  await expect(page.getByTestId("toast")).toContainText(
-    "Account created successfully!"
-  );
+  const toast = page.getByTestId("toast");
+  await expect(toast).toContainText("Account", { timeout: 30_000 });
+
+  const toastMessage = (await toast.textContent()) ?? "";
+
+  if (toastMessage.includes("Account already exists!")) {
+    /**
+     * Rejoindre le formulaire de connexion avec les identifiants persistés
+     * permet de récupérer la session lorsque la configuration Playwright
+     * réutilise le même utilisateur logique sur plusieurs tentatives.
+     */
+    await page.goto(`${baseURL}/login`, { waitUntil: "domcontentloaded" });
+
+    const loginEmail = page.getByPlaceholder("user@acme.com");
+    await loginEmail.waitFor({ state: "visible", timeout: 60_000 });
+    await loginEmail.fill(email);
+
+    const loginPassword = page.getByLabel("Password");
+    await loginPassword.waitFor({ state: "visible", timeout: 60_000 });
+    await loginPassword.fill(resolvedPassword);
+
+    const signInButton = page.getByRole("button", { name: "Sign in" });
+
+    await Promise.all([
+      page.waitForURL((url) => !url.pathname.endsWith("/login"), {
+        timeout: 20_000,
+        waitUntil: "commit",
+      }),
+      signInButton.click(),
+    ]);
+  } else if (!toastMessage.includes("Account created successfully!")) {
+    throw new Error(
+      `Unexpected register toast content: "${toastMessage.trim()}"`
+    );
+  }
 
   const chatPage = new ChatPage(page);
   await chatPage.createNewChat();
@@ -91,6 +156,7 @@ export async function createAuthenticatedContext({
   await page.waitForTimeout(1000);
   await context.storageState({ path: storageFile });
   await page.close();
+  await context.close();
 
   const newContext = await browser.newContext({ storageState: storageFile });
   const newPage = await newContext.newPage();

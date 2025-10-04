@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { runBacktest } from "../../../lib/finance/backtest/engine";
 import { generateMockSeries } from "../../../lib/finance/data-adapter";
 import type { BacktestParameters } from "../../../lib/finance/types";
+import { FINANCE_SERIES } from "../../../lib/finance/mock-data";
 
 const START = 1_700_000_000;
 
@@ -162,5 +163,33 @@ describe("runBacktest", () => {
     expect(penalised.metrics.profitFactor).toBeLessThanOrEqual(
       baseline.metrics.profitFactor
     );
+  });
+
+  it("keeps the canonical AAPL backtest deterministic across the e2e window", () => {
+    /**
+     * Les scénarios Playwright demandent un backtest SMA(50/200) sur AAPL entre
+     * 2018 et 2020. Ce test garantit que la série synthétique conserve un
+     * journal multi-pages pour les contrôles d'accessibilité et que les
+     * métriques exposées (rendement, CAGR, win rate) restent stables malgré les
+     * ajustements apportés au générateur.
+     */
+    const candles = FINANCE_SERIES.AAPL.filter(
+      (candle) =>
+        candle.timestamp >= Date.UTC(2018, 0, 1) / 1000 &&
+        candle.timestamp <= Date.UTC(2020, 11, 31) / 1000
+    );
+
+    const result = runBacktest(candles, {
+      strategy: {
+        type: "sma-crossover",
+        params: { fastPeriod: 50, slowPeriod: 200 },
+      },
+      risk: { initialCapital: 10_000 },
+    });
+
+    expect(result.trades.length).toBeGreaterThan(8);
+    expect(result.metrics.totalReturn).toBeLessThan(0);
+    expect(result.metrics.cagr).toBeLessThan(0);
+    expect(result.metrics.winRate).toBe(0);
   });
 });
