@@ -30,6 +30,67 @@ export type UserContext = {
 type AuthRoute = "/login" | "/register";
 
 /**
+ * Attempt to bootstrap a new Playwright context from a previously persisted
+ * storage state. When the saved session matches the expected user email we can
+ * reuse it instead of navigating through the authentication forms again – a
+ * significant time saver for the multi-user reasoning and share suites.
+ */
+export async function tryRestoreSessionFromStorage({
+  baseURL,
+  browser,
+  expectedEmail,
+  storageStatePath,
+}: {
+  baseURL: string;
+  browser: Browser;
+  expectedEmail: string;
+  storageStatePath: string;
+}): Promise<UserContext | null> {
+  if (!fs.existsSync(storageStatePath)) {
+    return null;
+  }
+
+  let context: BrowserContext | null = null;
+
+  try {
+    context = await browser.newContext({ storageState: storageStatePath });
+
+    const sessionResponse = await context.request.get(
+      `${baseURL}/api/auth/session`
+    );
+
+    if (!sessionResponse.ok()) {
+      throw new Error("Stored session response was not successful");
+    }
+
+    const session = (await sessionResponse.json()) as {
+      user?: { email?: string | null };
+    } | null;
+
+    if (session?.user?.email !== expectedEmail) {
+      throw new Error(
+        `Stored session belongs to "${session?.user?.email ?? "unknown"}"`
+      );
+    }
+
+    const page = await context.newPage();
+
+    return {
+      context,
+      page,
+      request: context.request,
+    } satisfies UserContext;
+  } catch (error) {
+    await context?.close();
+    console.warn(
+      "Failed to reuse stored Playwright session, falling back to UI auth",
+      error
+    );
+    return null;
+  }
+}
+
+/**
  * Navigate to the requested authentication route and wait for the email and
  * password inputs to hydrate. Turbopack occasionally streams the surrounding
  * shell before the form renders, so we retry a handful of times instead of
@@ -96,10 +157,22 @@ export async function createAuthenticatedContext({
   const storageFile = path.join(directory, `${name}.json`);
   const credentialsFile = path.join(directory, `${name}.credentials.json`);
 
-  const context = await browser.newContext();
-  const page = await context.newPage();
-
   const email = `test-${name}@playwright.com`;
+  const baseURL =
+    process.env.PLAYWRIGHT_TEST_BASE_URL ??
+    `http://localhost:${process.env.PORT ?? 3100}`;
+
+  const restoredSession = await tryRestoreSessionFromStorage({
+    baseURL,
+    browser,
+    expectedEmail: email,
+    storageStatePath: storageFile,
+  });
+
+  if (restoredSession) {
+    return restoredSession;
+  }
+
   let password: string | null = null;
 
   if (fs.existsSync(credentialsFile)) {
@@ -130,9 +203,8 @@ export async function createAuthenticatedContext({
 
   const resolvedPassword = password;
 
-  const baseURL =
-    process.env.PLAYWRIGHT_TEST_BASE_URL ??
-    `http://localhost:${process.env.PORT ?? 3100}`;
+  const context = await browser.newContext();
+  const page = await context.newPage();
 
   const { email: registerEmail, password: registerPassword } =
     await loadAuthForm({
