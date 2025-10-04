@@ -45,6 +45,11 @@ describe("shouldFetchTokenlensCatalog", () => {
   it("keeps the catalog fetch enabled in production environments", () => {
     const env = createTokenlensEnvironment({
       PLAYWRIGHT: "false",
+      // CI injects `CI_PLAYWRIGHT=true` to enable hermetic runs by default. We
+      // explicitly reset the flag here so the snapshot mirrors a production
+      // deployment where Playwright is not active and the catalog should be
+      // retrieved from the network.
+      CI_PLAYWRIGHT: "false",
       PLAYWRIGHT_TEST_BASE_URL: undefined,
       NEXT_PUBLIC_PLAYWRIGHT: undefined,
     });
