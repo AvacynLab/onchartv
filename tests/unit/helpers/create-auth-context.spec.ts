@@ -1,7 +1,10 @@
-import type { Browser } from "@playwright/test";
+import type { Browser, BrowserContext } from "@playwright/test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { tryRestoreSessionFromStorage } from "../../helpers";
+import {
+  signInPlaywrightUser,
+  tryRestoreSessionFromStorage,
+} from "../../helpers";
 
 const fsMocks = vi.hoisted(() => ({
   existsSync: vi.fn(),
@@ -105,5 +108,112 @@ describe("tryRestoreSessionFromStorage", () => {
 
     expect(restored).toBeNull();
     expect(browser.newContext).not.toHaveBeenCalled();
+  });
+});
+
+describe("signInPlaywrightUser", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const baseURL = "http://127.0.0.1:3100";
+  const email = "playwright@example.com";
+  const password = "secret";
+
+  it("performs a credentials sign-in and waits for the session", async () => {
+    const post = vi.fn().mockResolvedValue({
+      status: () => 200,
+      text: async () => "",
+    });
+
+    const get = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: () => true,
+        json: async () => ({ csrfToken: "token" }),
+      })
+      .mockResolvedValueOnce({
+        ok: () => true,
+        json: async () => ({ user: { email } }),
+      });
+
+    const context = {
+      request: { get, post },
+    } as unknown as BrowserContext;
+
+    await signInPlaywrightUser({
+      baseURL,
+      context,
+      email,
+      password,
+      sessionPollIntervalMs: 1,
+      sessionPollTimeoutMs: 25,
+    });
+
+    expect(post).toHaveBeenCalledWith(
+      `${baseURL}/api/auth/callback/credentials`,
+      expect.objectContaining({
+        form: expect.objectContaining({ email, password }),
+      })
+    );
+
+    expect(get).toHaveBeenLastCalledWith(`${baseURL}/api/auth/session`);
+  });
+
+  it("throws when the CSRF endpoint fails", async () => {
+    const context = {
+      request: {
+        get: vi.fn().mockResolvedValue({
+          ok: () => false,
+          status: () => 500,
+          text: async () => "no csrf",
+        }),
+        post: vi.fn(),
+      },
+    } as unknown as BrowserContext;
+
+    await expect(
+      signInPlaywrightUser({
+        baseURL,
+        context,
+        email,
+        password,
+        sessionPollIntervalMs: 1,
+        sessionPollTimeoutMs: 5,
+      })
+    ).rejects.toThrow(/Failed to retrieve CSRF token/);
+  });
+
+  it("times out when the session never matches the target email", async () => {
+    const post = vi.fn().mockResolvedValue({
+      status: () => 200,
+      text: async () => "",
+    });
+
+    const get = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: () => true,
+        json: async () => ({ csrfToken: "token" }),
+      })
+      .mockResolvedValue({
+        ok: () => true,
+        json: async () => ({ user: { email: "someone-else@example.com" } }),
+      });
+
+    const context = {
+      request: { get, post },
+    } as unknown as BrowserContext;
+
+    await expect(
+      signInPlaywrightUser({
+        baseURL,
+        context,
+        email,
+        password,
+        sessionPollIntervalMs: 1,
+        sessionPollTimeoutMs: 5,
+      })
+    ).rejects.toThrow(/Timed out waiting/);
   });
 });

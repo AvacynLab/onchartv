@@ -5,7 +5,6 @@ import {
   type Browser,
   type BrowserContext,
   expect,
-  type Locator,
   type Page,
 } from "@playwright/test";
 import { generateId } from "ai";
@@ -26,8 +25,6 @@ export type UserContext = {
   page: Page;
   request: APIRequestContext;
 };
-
-type AuthRoute = "/login" | "/register";
 
 /**
  * Attempt to bootstrap a new Playwright context from a previously persisted
@@ -91,67 +88,96 @@ export async function tryRestoreSessionFromStorage({
 }
 
 /**
- * Navigate to the requested authentication route and wait for the email and
- * password inputs to hydrate. Turbopack occasionally streams the surrounding
- * shell before the form renders, so we retry a handful of times instead of
- * timing out immediately and failing unrelated Playwright flows.
+ * Maximum amount of time we are willing to wait for automation-focused auth
+ * calls to settle. The generous window keeps hermetic Playwright runs stable
+ * during slow cold starts without masking legitimate hangs in the stack.
  */
-/**
- * Maximum amount of time we are willing to wait for the authentication form
- * controls to hydrate. The initial Turbopack compilation on CI can easily take
- * more than a handful of seconds, so we give the runtime a generous window
- * before retrying.
- */
-const AUTH_FORM_WAIT_TIMEOUT_MS = 45_000;
+const AUTH_SESSION_WAIT_TIMEOUT_MS = 45_000;
 
 /**
- * Try to load and hydrate the requested authentication route. We reattempt the
- * navigation a few times to account for dev-server cold starts while keeping a
- * deterministic ceiling on how long Playwright blocks.
+ * Perform a credentials sign-in entirely via the NextAuth API. Driving the
+ * request layer instead of the UI removes the dependency on the `/login`
+ * component hydrating in time – the main source of the flaky `toBeEditable`
+ * timeouts we were observing on CI. The helper verifies the resulting session
+ * by polling the `/api/auth/session` endpoint before returning control to the
+ * caller.
  */
-async function loadAuthForm({
+export async function signInPlaywrightUser({
   baseURL,
-  page,
-  route,
-  attempts = 5,
+  context,
+  email,
+  password,
+  sessionPollIntervalMs = 250,
+  sessionPollTimeoutMs = AUTH_SESSION_WAIT_TIMEOUT_MS,
 }: {
   baseURL: string;
-  page: Page;
-  route: AuthRoute;
-  attempts?: number;
-}): Promise<{ email: Locator; password: Locator }> {
-  let lastError: unknown;
+  context: BrowserContext;
+  email: string;
+  password: string;
+  sessionPollIntervalMs?: number;
+  sessionPollTimeoutMs?: number;
+}) {
+  const csrfResponse = await context.request.get(`${baseURL}/api/auth/csrf`);
 
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    try {
-      await page.goto(`${baseURL}${route}`, { waitUntil: "networkidle" });
-
-      const email = page.getByPlaceholder("user@acme.com");
-      const password = page.getByLabel("Password");
-
-      await Promise.all([
-        expect(email).toBeEditable({ timeout: AUTH_FORM_WAIT_TIMEOUT_MS }),
-        expect(password).toBeEditable({ timeout: AUTH_FORM_WAIT_TIMEOUT_MS }),
-      ]);
-
-      return { email, password };
-    } catch (error) {
-      lastError = error;
-
-      console.warn(
-        `Failed to load ${route} form on attempt ${attempt}/${attempts}, retrying`,
-        error
-      );
-
-      if (attempt < attempts) {
-        await page.waitForTimeout(500 * attempt);
-      }
-    }
+  if (!csrfResponse.ok()) {
+    throw new Error(
+      `Failed to retrieve CSRF token: ${csrfResponse.status()} ${await csrfResponse.text()}`
+    );
   }
 
-  throw lastError instanceof Error
-    ? lastError
-    : new Error("Unable to load authentication form");
+  const csrfPayload = (await csrfResponse.json()) as {
+    csrfToken?: string | null;
+  } | null;
+
+  const csrfToken = csrfPayload?.csrfToken;
+
+  if (!csrfToken) {
+    throw new Error("Playwright auth helper received an empty CSRF token");
+  }
+
+  const signInResponse = await context.request.post(
+    `${baseURL}/api/auth/callback/credentials`,
+    {
+      form: {
+        csrfToken,
+        email,
+        password,
+        callbackUrl: `${baseURL}/`,
+      },
+    }
+  );
+
+  const status = signInResponse.status();
+
+  if (status >= 400) {
+    throw new Error(
+      `Playwright credentials sign-in failed with status ${status}: ${await signInResponse.text()}`
+    );
+  }
+
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < sessionPollTimeoutMs) {
+    const sessionResponse = await context.request.get(
+      `${baseURL}/api/auth/session`
+    );
+
+    if (sessionResponse.ok()) {
+      const session = (await sessionResponse.json()) as
+        | { user?: { email?: string | null } | null }
+        | null;
+
+      if (session?.user?.email === email) {
+        return;
+      }
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, sessionPollIntervalMs));
+  }
+
+  throw new Error(
+    "Timed out waiting for the Playwright credentials session to become active"
+  );
 }
 
 export async function createAuthenticatedContext({
@@ -217,7 +243,6 @@ export async function createAuthenticatedContext({
   const resolvedPassword = password;
 
   const context = await browser.newContext();
-  const page = await context.newPage();
 
   /**
    * Provision the deterministic Playwright account via the dedicated testing
@@ -237,25 +262,14 @@ export async function createAuthenticatedContext({
     );
   }
 
-  const { email: loginEmail, password: loginPassword } = await loadAuthForm({
+  await signInPlaywrightUser({
     baseURL,
-    page,
-    route: "/login",
+    context,
+    email,
+    password: resolvedPassword,
   });
 
-  await loginEmail.fill(email);
-  await loginPassword.fill(resolvedPassword);
-
-  const signInButton = page.getByRole("button", { name: "Sign in" });
-
-  await Promise.all([
-    page.waitForURL((url) => !url.pathname.endsWith("/login"), {
-      timeout: AUTH_FORM_WAIT_TIMEOUT_MS,
-      waitUntil: "commit",
-    }),
-    signInButton.click(),
-  ]);
-
+  const page = await context.newPage();
   const chatPage = new ChatPage(page);
   await chatPage.createNewChat();
 
