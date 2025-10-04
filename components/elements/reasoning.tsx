@@ -152,18 +152,42 @@ export type ReasoningContentProps = ComponentProps<
 };
 
 export const ReasoningContent = memo(
-  ({ className, children, ...props }: ReasoningContentProps) => (
-    <CollapsibleContent
-      className={cn(
-        "mt-2 text-muted-foreground text-xs",
-        "data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 outline-hidden data-[state=closed]:animate-out data-[state=open]:animate-in",
-        className
-      )}
-      {...props}
-    >
-      <Response className="grid gap-2">{children}</Response>
-    </CollapsibleContent>
-  )
+  ({ className, children, ...props }: ReasoningContentProps) => {
+    const { isOpen } = useReasoning();
+    const isClosed = !isOpen;
+
+    return (
+      <CollapsibleContent
+        aria-hidden={isClosed}
+        className={cn(
+          "mt-2 text-muted-foreground text-xs",
+          /**
+           * When the accordion auto-closes we need to physically hide the panel so
+           * Playwright’s visibility checks stop seeing it as rendered. The
+           * `data-[state=closed]:hidden` utility collapses the content once the
+           * exit animation finishes while keeping the enter/exit transitions
+           * intact for interactive users. We also toggle `visibility` via an
+           * inline style so browsers immediately mark the content as hidden,
+           * keeping Playwright’s `.toBeVisible()` expectations in sync with the
+           * actual runtime state.
+           */
+          "data-[state=closed]:hidden data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 outline-hidden data-[state=closed]:animate-out data-[state=open]:animate-in",
+          className
+        )}
+        style={
+          isClosed
+            ? {
+                visibility: "hidden",
+                pointerEvents: "none",
+              }
+            : undefined
+        }
+        {...props}
+      >
+        <Response className="grid gap-2">{children}</Response>
+      </CollapsibleContent>
+    );
+  }
 );
 
 Reasoning.displayName = "Reasoning";

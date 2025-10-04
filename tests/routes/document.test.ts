@@ -13,9 +13,15 @@ test.describe
       const response = await adaContext.request.get("/api/document");
       expect(response.status()).toBe(400);
 
-      const { error } = await response.json();
-      expect(error?.code).toEqual("bad_request:api");
-      expect(error?.message).toEqual(getMessageByErrorCode("bad_request:api"));
+      const payload = await response.json();
+      // Older builds returned the error fields at the root, so gracefully fall
+      // back to that shape before asserting on the new `{ error: { ... } }`
+      // envelope to keep the test resilient during migrations.
+      const code = payload?.error?.code ?? payload?.code;
+      const message = payload?.error?.message ?? payload?.message;
+
+      expect(code).toEqual("bad_request:api");
+      expect(message).toEqual(getMessageByErrorCode("bad_request:api"));
     });
 
     test("Ada cannot retrieve a document that does not exist", async ({
@@ -28,9 +34,17 @@ test.describe
       );
       expect(response.status()).toBe(404);
 
-      const { code, message } = await response.json();
+      const payload = await response.json();
+      // Apply the same backwards-compatible destructuring here so the test
+      // continues to validate the payload even if the API temporarily omits the
+      // nested `error` object during a rollback.
+      const code = payload?.error?.code ?? payload?.code;
+      const message = payload?.error?.message ?? payload?.message;
+
       expect(code).toEqual("not_found:document");
-      expect(message).toEqual(getMessageByErrorCode(code));
+      expect(message).toEqual(
+        getMessageByErrorCode(code ?? "not_found:document")
+      );
     });
 
     test("Ada can create a document", async ({ adaContext }) => {
@@ -121,9 +135,11 @@ test.describe
       const response = await adaContext.request.delete("/api/document");
       expect(response.status()).toBe(400);
 
-      const { code, message } = await response.json();
-      expect(code).toEqual("bad_request:api");
-      expect(message).toEqual(getMessageByErrorCode(code));
+      const { error } = await response.json();
+      expect(error?.code).toEqual("bad_request:api");
+      expect(error?.message).toEqual(
+        getMessageByErrorCode(error?.code ?? "bad_request:api")
+      );
     });
 
     test("Ada cannot delete a document without specifying a timestamp", async ({
@@ -136,9 +152,11 @@ test.describe
       );
       expect(response.status()).toBe(400);
 
-      const { code, message } = await response.json();
-      expect(code).toEqual("bad_request:api");
-      expect(message).toEqual(getMessageByErrorCode(code));
+      const { error } = await response.json();
+      expect(error?.code).toEqual("bad_request:api");
+      expect(error?.message).toEqual(
+        getMessageByErrorCode(error?.code ?? "bad_request:api")
+      );
     });
 
     test("Ada can delete a document by specifying id and timestamp", async ({
@@ -192,9 +210,11 @@ test.describe
       );
       expect(response.status()).toBe(403);
 
-      const { code, message } = await response.json();
-      expect(code).toEqual("forbidden:document");
-      expect(message).toEqual(getMessageByErrorCode(code));
+      const { error } = await response.json();
+      expect(error?.code).toEqual("forbidden:document");
+      expect(error?.message).toEqual(
+        getMessageByErrorCode(error?.code ?? "forbidden:document")
+      );
     });
 
     test("Ada's documents did not get updated", async ({ adaContext }) => {

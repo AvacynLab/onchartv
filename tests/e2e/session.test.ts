@@ -3,14 +3,26 @@ import { expect, test } from "../fixtures";
 import { generateRandomTestUser } from "../helpers";
 import { AuthPage } from "../pages/auth";
 
-const waitForChatDashboard = (page: Page) =>
-  page.waitForFunction(
+const waitForChatDashboard = async (page: Page) => {
+  /**
+   * Successful logins trigger a client-side redirect to either `/` or the
+   * latest `/chat/:id`. Waiting on the browser location first gives the router
+   * enough time to settle before we assert on the hydrated composer textarea.
+   */
+  await page.waitForFunction(
     () =>
       window.location.pathname === "/" ||
       window.location.pathname.startsWith("/chat/"),
     null,
     { timeout: 60_000 }
   );
+
+  const composer = page.getByPlaceholder("Send a message...");
+
+  // Once the textarea is rendered ensure the Playwright assertion API also
+  // sees it as visible so downstream tests can safely interact with it.
+  await expect(composer).toBeVisible({ timeout: 60_000 });
+};
 
 test.describe("Access Control", () => {
   test.beforeEach(async ({ page }) => {

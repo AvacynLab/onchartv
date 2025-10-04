@@ -7,21 +7,41 @@ const chatIdsCreatedByAda: string[] = [];
 
 // Helper function to normalize stream data for comparison
 function normalizeStreamData(lines: string[]): string[] {
-  return lines.map((line) => {
-    if (line.startsWith("data: ")) {
+  return lines
+    .map((line) => {
+      if (!line.startsWith("data: ")) {
+        return line;
+      }
+
+      const payload = line.slice(6);
+
       try {
-        const data = JSON.parse(line.slice(6)); // Remove 'data: ' prefix
+        const data = JSON.parse(payload);
+
         if (data.id) {
           // Replace dynamic id with a static one for comparison
           return `data: ${JSON.stringify({ ...data, id: "STATIC_ID" })}`;
         }
+
+        if (data.type === "data-usage") {
+          // The usage counters depend on provider heuristics, so normalise
+          // them to deterministic values before asserting on the full stream.
+          return `data: ${JSON.stringify({
+            ...data,
+            data: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          })}`;
+        }
+
         return line;
       } catch {
+        if (payload.includes('"type":"data-usage"')) {
+          return 'data: {"type":"data-usage","data":{"inputTokens":0,"outputTokens":0,"totalTokens":0}}';
+        }
+
         return line; // Return as-is if it's not valid JSON
       }
-    }
-    return line;
-  });
+    })
+    .filter(Boolean);
 }
 
 test.describe

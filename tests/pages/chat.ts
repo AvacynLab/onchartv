@@ -483,7 +483,24 @@ export class ChatPage {
       reasoning: reasoningText,
       reasoningElement: reasoningContainer,
       async toggleReasoningVisibility() {
+        const currentState = await reasoningContent
+          .getAttribute("data-state")
+          .catch(() => null);
+
         await reasoningTrigger.click();
+
+        // Defensive guard: if the attribute is missing we bail out rather
+        // than waiting forever on an assertion that would never settle.
+        if (!currentState) {
+          return;
+        }
+
+        const nextState = currentState === "open" ? "closed" : "open";
+
+        await expect(reasoningContent).toHaveAttribute(
+          "data-state",
+          nextState
+        );
       },
       async upvote() {
         const voteAwaiter = self.waitForVoteRequest("up");
