@@ -23,6 +23,9 @@ describe("POST /api/tests/auth/register", () => {
   });
 
   it("rejects requests when Playwright flags are not enabled", async () => {
+    process.env.PLAYWRIGHT = "false";
+    process.env.CI_PLAYWRIGHT = "false";
+
     const { POST } = await import("@/app/api/tests/auth/register/route");
 
     const response = await POST(
