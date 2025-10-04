@@ -96,11 +96,24 @@ export async function tryRestoreSessionFromStorage({
  * shell before the form renders, so we retry a handful of times instead of
  * timing out immediately and failing unrelated Playwright flows.
  */
+/**
+ * Maximum amount of time we are willing to wait for the authentication form
+ * controls to hydrate. The initial Turbopack compilation on CI can easily take
+ * more than a handful of seconds, so we give the runtime a generous window
+ * before retrying.
+ */
+const AUTH_FORM_WAIT_TIMEOUT_MS = 45_000;
+
+/**
+ * Try to load and hydrate the requested authentication route. We reattempt the
+ * navigation a few times to account for dev-server cold starts while keeping a
+ * deterministic ceiling on how long Playwright blocks.
+ */
 async function loadAuthForm({
   baseURL,
   page,
   route,
-  attempts = 3,
+  attempts = 5,
 }: {
   baseURL: string;
   page: Page;
@@ -111,14 +124,14 @@ async function loadAuthForm({
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
-      await page.goto(`${baseURL}${route}`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${baseURL}${route}`, { waitUntil: "networkidle" });
 
       const email = page.getByPlaceholder("user@acme.com");
       const password = page.getByLabel("Password");
 
       await Promise.all([
-        email.waitFor({ state: "visible", timeout: 20_000 }),
-        password.waitFor({ state: "visible", timeout: 20_000 }),
+        expect(email).toBeEditable({ timeout: AUTH_FORM_WAIT_TIMEOUT_MS }),
+        expect(password).toBeEditable({ timeout: AUTH_FORM_WAIT_TIMEOUT_MS }),
       ]);
 
       return { email, password };
