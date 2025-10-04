@@ -24,6 +24,10 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  if (pathname.startsWith("/api/tests/")) {
+    return NextResponse.next();
+  }
+
   const token = await getToken({
     req: request,
     /**

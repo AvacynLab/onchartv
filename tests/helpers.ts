@@ -219,53 +219,42 @@ export async function createAuthenticatedContext({
   const context = await browser.newContext();
   const page = await context.newPage();
 
-  const { email: registerEmail, password: registerPassword } =
-    await loadAuthForm({
-      baseURL,
-      page,
-      route: "/register",
-    });
+  /**
+   * Provision the deterministic Playwright account via the dedicated testing
+   * endpoint so we can jump straight to the login form regardless of how long
+   * the registration UI takes to hydrate under cold starts.
+   */
+  const ensureUserResponse = await context.request.post(
+    `${baseURL}/api/tests/auth/register`,
+    {
+      data: { email, password: resolvedPassword },
+    }
+  );
 
-  await registerEmail.fill(email);
-  await registerPassword.fill(resolvedPassword);
-
-  const signUpButton = page.getByRole("button", { name: "Sign Up" });
-  await signUpButton.click();
-
-  const toast = page.getByTestId("toast");
-  await expect(toast).toContainText("Account", { timeout: 30_000 });
-
-  const toastMessage = (await toast.textContent()) ?? "";
-
-  if (toastMessage.includes("Account already exists!")) {
-    /**
-     * Rejoindre le formulaire de connexion avec les identifiants persistés
-     * permet de récupérer la session lorsque la configuration Playwright
-     * réutilise le même utilisateur logique sur plusieurs tentatives.
-     */
-    const { email: loginEmail, password: loginPassword } = await loadAuthForm({
-      baseURL,
-      page,
-      route: "/login",
-    });
-
-    await loginEmail.fill(email);
-    await loginPassword.fill(resolvedPassword);
-
-    const signInButton = page.getByRole("button", { name: "Sign in" });
-
-    await Promise.all([
-      page.waitForURL((url) => !url.pathname.endsWith("/login"), {
-        timeout: 20_000,
-        waitUntil: "commit",
-      }),
-      signInButton.click(),
-    ]);
-  } else if (!toastMessage.includes("Account created successfully!")) {
+  if (!ensureUserResponse.ok()) {
     throw new Error(
-      `Unexpected register toast content: "${toastMessage.trim()}"`
+      `Failed to provision Playwright test user: ${await ensureUserResponse.text()}`
     );
   }
+
+  const { email: loginEmail, password: loginPassword } = await loadAuthForm({
+    baseURL,
+    page,
+    route: "/login",
+  });
+
+  await loginEmail.fill(email);
+  await loginPassword.fill(resolvedPassword);
+
+  const signInButton = page.getByRole("button", { name: "Sign in" });
+
+  await Promise.all([
+    page.waitForURL((url) => !url.pathname.endsWith("/login"), {
+      timeout: AUTH_FORM_WAIT_TIMEOUT_MS,
+      waitUntil: "commit",
+    }),
+    signInButton.click(),
+  ]);
 
   const chatPage = new ChatPage(page);
   await chatPage.createNewChat();
