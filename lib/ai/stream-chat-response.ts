@@ -8,7 +8,13 @@ import { logWarning } from "@/lib/logging";
  * Subset of the AI SDK `streamText` options excluding the model configuration,
  * which is supplied internally depending on the selected provider.
  */
-export type StreamTextOptions = Omit<Parameters<typeof streamText>[0], "model">;
+type StreamTextBaseOptions = Parameters<typeof streamText>[0];
+
+// The helper always works with structured chat messages, so forbid callers from
+// passing the raw `prompt` shape and require `messages` instead. This mirrors
+// what the route already supplies and keeps the AI SDK contract explicit.
+export type StreamTextOptions = Omit<StreamTextBaseOptions, "model" | "prompt"> &
+  Pick<Required<StreamTextBaseOptions>, "messages"> & { prompt?: undefined };
 
 /**
  * Detects network-related failures that occur when the primary AI provider is

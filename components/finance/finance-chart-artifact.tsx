@@ -25,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import type {
   FinanceChartAnnotationsArtifact,
   FinanceChartArtifact as FinanceChartArtifactPayload,
+  FinanceOverlaySeriesPoint,
 } from "@/lib/finance/types";
 import { cn } from "@/lib/utils";
 import { ChartAnnotationsPanel } from "./chart-annotations-panel";
@@ -717,12 +718,19 @@ export const FinanceChartArtifact = memo(
           priceScaleId: "right",
           title: `${overlay.type.toUpperCase()} (${overlay.length})`,
         });
-        const lineData = overlay.values
-          .filter((point) => point && point.v !== null && typeof point.t === "number")
-          .map((point) => ({
-            time: point.t as UTCTimestamp,
-            value: point.v as number,
-          }));
+          const lineData = overlay.values
+            .filter((point: FinanceOverlaySeriesPoint | null | undefined): point is FinanceOverlaySeriesPoint => {
+              return (
+                point !== null &&
+                point !== undefined &&
+                point.v !== null &&
+                typeof point.t === "number"
+              );
+            })
+            .map((point: FinanceOverlaySeriesPoint) => ({
+              time: point.t as UTCTimestamp,
+              value: point.v as number,
+            }));
         series.setData(lineData);
         overlaySeriesRef.current.set(overlayId(overlay), series);
       });

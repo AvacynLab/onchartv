@@ -93,13 +93,16 @@ export function DocumentPreview({
     }
 
     if (args) {
-      return (
-        <DocumentToolCall
-          args={{ title: args.title, kind: args.kind }}
-          isReadonly={isReadonly}
-          type="create"
-        />
-      );
+        return (
+          <DocumentToolCall
+            args={{
+              title: args.title ?? "",
+              kind: args.kind ?? artifact.kind,
+            }}
+            isReadonly={isReadonly}
+            type="create"
+          />
+        );
     }
   }
 

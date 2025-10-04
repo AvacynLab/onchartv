@@ -13,6 +13,8 @@ import {
 import type { ModelCatalog } from "tokenlens/core";
 import { fetchModels } from "tokenlens/fetch";
 import { getUsage } from "tokenlens/helpers";
+import type { Session } from "next-auth";
+
 import { auth, type UserType } from "@/app/(auth)/auth";
 import { assertRegularChatUser } from "@/lib/chat/authorization";
 import type { VisibilityType } from "@/components/visibility-selector";
@@ -185,9 +187,13 @@ export async function POST(request: Request) {
      * avoids leaking whether a chat exists to guests.
      */
     let sessionUser: ReturnType<typeof assertRegularChatUser>;
+    let ensuredSession: Session;
 
     try {
       sessionUser = assertRegularChatUser(session);
+      // The assertion above guarantees a populated session; narrow the type so
+      // downstream tooling integrations receive the full session contract.
+      ensuredSession = session as Session;
     } catch (error) {
       if (error instanceof ChatSDKError) {
         return error.toResponse();
@@ -251,9 +257,13 @@ export async function POST(request: Request) {
       request
     );
 
+    // The prompt helper expects the same string-based coordinate shape that
+    // `@vercel/functions` exposes. Convert numeric values to strings so the
+    // type contract remains intact while keeping `undefined` for missing data.
     const requestHints: RequestHints = {
-      longitude,
-      latitude,
+      longitude:
+        typeof longitude === "number" ? String(longitude) : undefined,
+      latitude: typeof latitude === "number" ? String(latitude) : undefined,
       city,
       country,
     };
@@ -360,10 +370,16 @@ export async function POST(request: Request) {
           experimental_transform: smoothStream({ chunking: "word" }),
           tools: {
             getWeather,
-            createDocument: createDocument({ session, dataStream }),
-            updateDocument: updateDocument({ session, dataStream }),
+            createDocument: createDocument({
+              session: ensuredSession,
+              dataStream,
+            }),
+            updateDocument: updateDocument({
+              session: ensuredSession,
+              dataStream,
+            }),
             requestSuggestions: requestSuggestions({
-              session,
+              session: ensuredSession,
               dataStream,
             }),
             "tool.finance.chart.fetch": financeTools.chartFetch,

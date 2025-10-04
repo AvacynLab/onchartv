@@ -103,8 +103,10 @@ const PureSpreadsheetEditor = ({ content, saveContent }: SheetEditorProps) => {
     setLocalRows(initialRows);
   }, [initialRows]);
 
-  const generateCsv = (data: ReadonlyArray<ReadonlyArray<string>>) =>
-    unparse(data);
+  const generateCsv = (data: ReadonlyArray<ReadonlyArray<string>>) => {
+    const mutableRows = data.map((row) => [...row]);
+    return unparse(mutableRows);
+  };
 
   const handleRowsChange = (newRows: SheetRow[]) => {
     setLocalRows(newRows);

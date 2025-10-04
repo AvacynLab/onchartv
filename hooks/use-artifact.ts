@@ -88,7 +88,7 @@ export function useArtifact() {
       if (typeof value === "function") {
         const updater = value as (current: unknown | null) => unknown | null;
         void (setLocalArtifactMetadata as KeyedMutator<unknown | null>)(
-          (current) => updater(current ?? null),
+          (current: unknown | null) => updater(current ?? null),
           false
         );
         return;

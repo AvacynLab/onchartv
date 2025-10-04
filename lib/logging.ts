@@ -86,12 +86,16 @@ export function sanitizeForLogging(value: unknown, seen = new WeakSet()): unknow
         .join("\n");
     }
 
+    // Capture any custom fields the error instance exposes so we can iterate
+    // over them without violating TypeScript's structural expectations.
+    const extraProperties = value as unknown as Record<string, unknown>;
+
     for (const key of Object.getOwnPropertyNames(value)) {
       if (key === "name" || key === "message" || key === "stack") {
         continue;
       }
 
-      const propertyValue = (value as Record<string, unknown>)[key];
+      const propertyValue = extraProperties[key];
 
       base[key] = shouldRedactKey(key)
         ? REDACTED_VALUE

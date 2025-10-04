@@ -726,12 +726,31 @@ export class ChatPage {
 
           let diagnostic = "";
           try {
+            // Normalise Playwright's optional `failure()` accessor so the
+            // helper can surface the original network error text without
+            // tripping strict type checks in the Vitest environment.
+            const failureFn =
+              candidate &&
+              typeof candidate === "object" &&
+              "failure" in candidate &&
+              typeof (candidate as { failure?: unknown }).failure === "function"
+                ? (candidate as { failure: () => unknown }).failure
+                : null;
+
             const failureDetails = await Promise.resolve(
-              typeof candidate.failure === "function"
-                ? candidate.failure()
-                : null
+              failureFn ? failureFn() : null
             );
-            const failureText = failureDetails?.errorText?.trim();
+            // Some runtimes expose richer error payloads (Chromium) while
+            // others only emit bare network codes. Gate access through a
+            // structural check so we stay compatible everywhere.
+            const failureText =
+              failureDetails &&
+              typeof failureDetails === "object" &&
+              "errorText" in failureDetails &&
+              typeof (failureDetails as { errorText?: unknown }).errorText ===
+                "string"
+                ? (failureDetails as { errorText: string }).errorText.trim()
+                : "";
             diagnostic = failureText ? ` – ${failureText}` : "";
           } catch {
             diagnostic = "";

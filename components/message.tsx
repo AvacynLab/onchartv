@@ -334,10 +334,18 @@ const PurePreviewMessage = ({
                 );
               }
 
+              const previewArgs = part.output
+                ? {
+                    ...part.output,
+                    kind: part.output.kind ?? "text",
+                    isUpdate: true,
+                  }
+                : null;
+
               return (
                 <div className="relative" key={toolCallId}>
                   <DocumentPreview
-                    args={{ ...part.output, isUpdate: true }}
+                    args={previewArgs}
                     isReadonly={isReadonly}
                     result={part.output}
                   />
