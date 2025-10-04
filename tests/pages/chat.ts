@@ -443,16 +443,36 @@ export class ChatPage {
       .then((value) => value?.trim() ?? "")
       .catch(() => "");
 
-    const reasoningElement = await lastMessageElement
-      .getByTestId("message-reasoning")
-      .isVisible()
-      .then(async (visible) =>
-        visible
-          ? await lastMessageElement
-              .getByTestId("message-reasoning")
-              .innerText()
-          : null
-      )
+    const reasoningContainer = lastMessageElement.getByTestId(
+      "message-reasoning"
+    );
+    const reasoningTrigger = lastMessageElement.getByTestId(
+      "message-reasoning-trigger"
+    );
+    const reasoningContent = lastMessageElement.getByTestId(
+      "message-reasoning-content"
+    );
+
+    const reasoningText = await reasoningContent
+      .waitFor({ state: "attached", timeout: 5_000 })
+      .then(async () => {
+        const isVisible = await reasoningContent
+          .isVisible()
+          .catch(() => false);
+
+        if (!isVisible) {
+          // Auto-close animations hide the reasoning snippet almost
+          // immediately after streaming finishes. Re-open the accordion so we
+          // can capture the full explanation before returning it to callers.
+          await reasoningTrigger.click();
+          await reasoningContent.waitFor({ state: "visible", timeout: 5_000 });
+        }
+
+        return reasoningContent
+          .innerText()
+          .then((value) => value?.trim() ?? "")
+          .catch(() => null);
+      })
       .catch(() => null);
 
     const self = this;
@@ -460,11 +480,10 @@ export class ChatPage {
     return {
       element: lastMessageElement,
       content,
-      reasoning: reasoningElement,
+      reasoning: reasoningText,
+      reasoningElement: reasoningContainer,
       async toggleReasoningVisibility() {
-        await lastMessageElement
-          .getByTestId("message-reasoning-toggle")
-          .click();
+        await reasoningTrigger.click();
       },
       async upvote() {
         const voteAwaiter = self.waitForVoteRequest("up");

@@ -52,16 +52,30 @@ export class ArtifactPage {
       .innerText()
       .catch(() => null);
 
-    const reasoningElement = await lastMessageElement
-      .getByTestId("message-reasoning")
-      .isVisible()
-      .then(async (visible) =>
-        visible
-          ? await lastMessageElement
-              .getByTestId("message-reasoning")
-              .innerText()
-          : null
-      )
+    const reasoningTrigger = lastMessageElement.getByTestId(
+      "message-reasoning-trigger"
+    );
+    const reasoningContent = lastMessageElement.getByTestId(
+      "message-reasoning-content"
+    );
+
+    const reasoningElement = await reasoningContent
+      .waitFor({ state: "attached", timeout: 5_000 })
+      .then(async () => {
+        const isVisible = await reasoningContent
+          .isVisible()
+          .catch(() => false);
+
+        if (!isVisible) {
+          await reasoningTrigger.click();
+          await reasoningContent.waitFor({ state: "visible", timeout: 5_000 });
+        }
+
+        return reasoningContent
+          .innerText()
+          .then((value) => value?.trim() ?? "")
+          .catch(() => null);
+      })
       .catch(() => null);
 
     return {
@@ -69,9 +83,7 @@ export class ArtifactPage {
       content,
       reasoning: reasoningElement,
       async toggleReasoningVisibility() {
-        await lastMessageElement
-          .getByTestId("message-reasoning-toggle")
-          .click();
+        await reasoningTrigger.click();
       },
     };
   }

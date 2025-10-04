@@ -40,8 +40,17 @@ export class AuthPage {
 
   async logout(email: string, password: string) {
     await this.login(email, password);
-    // The dashboard navigation is a client-side transition.
-    await this.page.waitForURL("/", { waitUntil: "commit" });
+    // The dashboard navigation is a client-side transition that rewrites the
+    // location to `/chat/:id`. Poll the browser location rather than waiting
+    // for a specific static URL so the helper stays resilient to the history
+    // updates performed by the chat shell.
+    await this.page.waitForFunction(
+      () =>
+        window.location.pathname === "/" ||
+        window.location.pathname.startsWith("/chat/"),
+      null,
+      { timeout: 60_000 }
+    );
 
     await this.openSidebar();
 

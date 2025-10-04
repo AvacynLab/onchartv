@@ -13,9 +13,9 @@ test.describe
       const response = await adaContext.request.get("/api/document");
       expect(response.status()).toBe(400);
 
-      const { code, message } = await response.json();
-      expect(code).toEqual("bad_request:api");
-      expect(message).toEqual(getMessageByErrorCode(code));
+      const { error } = await response.json();
+      expect(error?.code).toEqual("bad_request:api");
+      expect(error?.message).toEqual(getMessageByErrorCode("bad_request:api"));
     });
 
     test("Ada cannot retrieve a document that does not exist", async ({

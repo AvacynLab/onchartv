@@ -1,6 +1,16 @@
-﻿import { expect, test } from "../fixtures";
+import type { Page } from "@playwright/test";
+import { expect, test } from "../fixtures";
 import { generateRandomTestUser } from "../helpers";
 import { AuthPage } from "../pages/auth";
+
+const waitForChatDashboard = (page: Page) =>
+  page.waitForFunction(
+    () =>
+      window.location.pathname === "/" ||
+      window.location.pathname.startsWith("/chat/"),
+    null,
+    { timeout: 60_000 }
+  );
 
 test.describe("Access Control", () => {
   test.beforeEach(async ({ page }) => {
@@ -55,16 +65,14 @@ test.describe.serial("Login and Registration", () => {
   test("Log into account that exists", async ({ page }) => {
     await authPage.login(testUser.email, testUser.password);
 
-    // Client-side navigation does not trigger a full reload, so wait for the
-    // router to commit the SPA transition instead of the default load event.
-    await page.waitForURL("/", { waitUntil: "commit" });
+    await waitForChatDashboard(page);
     await expect(page.getByPlaceholder("Send a message...")).toBeVisible();
   });
 
   test("Display user email in user menu", async ({ page }) => {
     await authPage.login(testUser.email, testUser.password);
 
-    await page.waitForURL("/", { waitUntil: "commit" });
+    await waitForChatDashboard(page);
     await expect(page.getByPlaceholder("Send a message...")).toBeVisible();
 
     const userEmail = await page.getByTestId("user-email");
@@ -79,18 +87,18 @@ test.describe.serial("Login and Registration", () => {
     page,
   }) => {
     await authPage.login(testUser.email, testUser.password);
-    await page.waitForURL("/", { waitUntil: "commit" });
+    await waitForChatDashboard(page);
 
     await page.goto("/register");
-    await expect(page).toHaveURL("/");
+    await expect(page).toHaveURL(/\/(chat\/[^/]+)?$/);
   });
 
   test("Do not navigate to /login for authenticated users", async ({ page }) => {
     await authPage.login(testUser.email, testUser.password);
-    await page.waitForURL("/", { waitUntil: "commit" });
+    await waitForChatDashboard(page);
 
     await page.goto("/login");
-    await expect(page).toHaveURL("/");
+    await expect(page).toHaveURL(/\/(chat\/[^/]+)?$/);
   });
 });
 

@@ -34,9 +34,11 @@ test.describe
       });
       expect(response.status()).toBe(400);
 
-      const { code, message } = await response.json();
-      expect(code).toEqual("bad_request:api");
-      expect(message).toEqual(getMessageByErrorCode("bad_request:api"));
+      const { error } = await response.json();
+      expect(error?.code).toEqual("bad_request:api");
+      expect(error?.message).toEqual(
+        getMessageByErrorCode("bad_request:api")
+      );
     });
 
     test("Ada can invoke chat generation", async ({ adaContext }) => {
@@ -81,9 +83,11 @@ test.describe
       });
       expect(response.status()).toBe(403);
 
-      const { code, message } = await response.json();
-      expect(code).toEqual("forbidden:chat");
-      expect(message).toEqual(getMessageByErrorCode("forbidden:chat"));
+      const { error } = await response.json();
+      expect(error?.code).toEqual("forbidden:chat");
+      expect(error?.message).toEqual(
+        getMessageByErrorCode("forbidden:chat")
+      );
     });
 
     test("Babbage cannot delete Ada's chat", async ({ babbageContext }) => {
@@ -94,9 +98,11 @@ test.describe
       );
       expect(response.status()).toBe(403);
 
-      const { code, message } = await response.json();
-      expect(code).toEqual("forbidden:chat");
-      expect(message).toEqual(getMessageByErrorCode("forbidden:chat"));
+      const { error } = await response.json();
+      expect(error?.code).toEqual("forbidden:chat");
+      expect(error?.message).toEqual(
+        getMessageByErrorCode("forbidden:chat")
+      );
     });
 
     test("Ada can delete her own chat", async ({ adaContext }) => {
