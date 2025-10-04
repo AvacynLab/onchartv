@@ -273,6 +273,12 @@ export async function createAuthenticatedContext({
   const chatPage = new ChatPage(page);
   await chatPage.createNewChat();
 
+  const modelSelector = page.getByTestId("model-selector");
+
+  // Allow the chat shell to hydrate before interacting with the selector.
+  await expect(modelSelector).toBeVisible({ timeout: 60_000 });
+  await expect(modelSelector).toBeEnabled();
+
   /**
    * Resolve the human-readable label for the reasoning model directly from the
    * shared chat model catalog. The product copy recently changed from the
