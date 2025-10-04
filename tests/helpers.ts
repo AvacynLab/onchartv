@@ -273,6 +273,17 @@ export async function createAuthenticatedContext({
   const chatPage = new ChatPage(page);
   await chatPage.createNewChat();
 
+  const composerInput = page.getByPlaceholder("Send a message...");
+
+  /**
+   * Wait for the chat composer to hydrate before touching the model selector.
+   * When the dev server cold starts (notably in CI), the chat shell streams in
+   * chunks and the selector is rendered near the end of the payload. Guarding on
+   * the shared textarea gives us a reliable hydration signal even when the
+   * model selector itself is still loading.
+   */
+  await expect(composerInput).toBeVisible({ timeout: 60_000 });
+
   const modelSelector = page.getByTestId("model-selector");
 
   // Allow the chat shell to hydrate before interacting with the selector.
