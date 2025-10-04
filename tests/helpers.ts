@@ -5,6 +5,7 @@ import {
   type Browser,
   type BrowserContext,
   expect,
+  type Locator,
   type Page,
 } from "@playwright/test";
 import { generateId } from "ai";
@@ -25,6 +26,59 @@ export type UserContext = {
   page: Page;
   request: APIRequestContext;
 };
+
+type AuthRoute = "/login" | "/register";
+
+/**
+ * Navigate to the requested authentication route and wait for the email and
+ * password inputs to hydrate. Turbopack occasionally streams the surrounding
+ * shell before the form renders, so we retry a handful of times instead of
+ * timing out immediately and failing unrelated Playwright flows.
+ */
+async function loadAuthForm({
+  baseURL,
+  page,
+  route,
+  attempts = 3,
+}: {
+  baseURL: string;
+  page: Page;
+  route: AuthRoute;
+  attempts?: number;
+}): Promise<{ email: Locator; password: Locator }> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      await page.goto(`${baseURL}${route}`, { waitUntil: "domcontentloaded" });
+
+      const email = page.getByPlaceholder("user@acme.com");
+      const password = page.getByLabel("Password");
+
+      await Promise.all([
+        email.waitFor({ state: "visible", timeout: 20_000 }),
+        password.waitFor({ state: "visible", timeout: 20_000 }),
+      ]);
+
+      return { email, password };
+    } catch (error) {
+      lastError = error;
+
+      console.warn(
+        `Failed to load ${route} form on attempt ${attempt}/${attempts}, retrying`,
+        error
+      );
+
+      if (attempt < attempts) {
+        await page.waitForTimeout(500 * attempt);
+      }
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Unable to load authentication form");
+}
 
 export async function createAuthenticatedContext({
   browser,
@@ -80,19 +134,18 @@ export async function createAuthenticatedContext({
     process.env.PLAYWRIGHT_TEST_BASE_URL ??
     `http://localhost:${process.env.PORT ?? 3100}`;
 
-  // Point the registration flow at the same origin Playwright uses for the
-  // rest of the suite. Waiting for DOM readiness avoids flakiness when the dev
-  // server streams the shell before every asset loads.
-  await page.goto(`${baseURL}/register`, { waitUntil: "domcontentloaded" });
+  const { email: registerEmail, password: registerPassword } =
+    await loadAuthForm({
+      baseURL,
+      page,
+      route: "/register",
+    });
 
-  const emailInput = page.getByPlaceholder("user@acme.com");
-  await emailInput.waitFor({ state: "visible", timeout: 60_000 });
-  await emailInput.fill(email);
+  await registerEmail.fill(email);
+  await registerPassword.fill(resolvedPassword);
 
-  const passwordInput = page.getByLabel("Password");
-  await passwordInput.waitFor({ state: "visible", timeout: 60_000 });
-  await passwordInput.fill(resolvedPassword);
-  await page.getByRole("button", { name: "Sign Up" }).click();
+  const signUpButton = page.getByRole("button", { name: "Sign Up" });
+  await signUpButton.click();
 
   const toast = page.getByTestId("toast");
   await expect(toast).toContainText("Account", { timeout: 30_000 });
@@ -105,14 +158,13 @@ export async function createAuthenticatedContext({
      * permet de récupérer la session lorsque la configuration Playwright
      * réutilise le même utilisateur logique sur plusieurs tentatives.
      */
-    await page.goto(`${baseURL}/login`, { waitUntil: "domcontentloaded" });
+    const { email: loginEmail, password: loginPassword } = await loadAuthForm({
+      baseURL,
+      page,
+      route: "/login",
+    });
 
-    const loginEmail = page.getByPlaceholder("user@acme.com");
-    await loginEmail.waitFor({ state: "visible", timeout: 60_000 });
     await loginEmail.fill(email);
-
-    const loginPassword = page.getByLabel("Password");
-    await loginPassword.waitFor({ state: "visible", timeout: 60_000 });
     await loginPassword.fill(resolvedPassword);
 
     const signInButton = page.getByRole("button", { name: "Sign in" });
