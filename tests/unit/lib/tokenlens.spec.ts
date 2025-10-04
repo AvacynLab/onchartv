@@ -51,6 +51,18 @@ describe("shouldFetchTokenlensCatalog", () => {
 
     expect(shouldFetchTokenlensCatalog(env)).toBe(true);
   });
+
+  it("lets tests override CI Playwright markers back to production mode", () => {
+    process.env.CI_PLAYWRIGHT = "true";
+
+    const env = createTokenlensEnvironment({
+      CI_PLAYWRIGHT: "false",
+      PLAYWRIGHT: "false",
+      PLAYWRIGHT_TEST_BASE_URL: undefined,
+    });
+
+    expect(shouldFetchTokenlensCatalog(env)).toBe(true);
+  });
 });
 
 describe("createTokenlensEnvironment", () => {
