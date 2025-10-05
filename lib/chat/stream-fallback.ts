@@ -28,6 +28,13 @@ async function resolveRecentAssistantMessage(
 ) {
   for (let attempt = 0; attempt < FALLBACK_LOOKUP_ATTEMPTS; attempt += 1) {
     const messages = await getMessages({ id: chatId });
+    if (messages.length === 0) {
+      // The chat has never received a reply, so there is nothing to replay and
+      // no reason to keep polling. Returning early avoids a pointless wait in
+      // resume flows triggered before the first assistant message is created.
+      return null;
+    }
+
     const mostRecentMessage = messages.at(-1);
 
     if (mostRecentMessage?.role === "assistant") {
