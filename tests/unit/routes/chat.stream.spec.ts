@@ -90,6 +90,31 @@ describe("chat stream fallback", () => {
     expect(payload).toContain("Here is the latest insight");
   });
 
+  it("reconstructs text replies that only persisted streaming deltas", async () => {
+    mockedGetMessagesByChatId.mockResolvedValue([
+      {
+        id: "msg-3",
+        chatId,
+        role: "assistant",
+        parts: [
+          { type: "text-delta", delta: "Streaming " },
+          { type: "text-delta", delta: "response " },
+          { type: "text-delta", delta: "content" },
+        ],
+        createdAt: new Date(resumeRequestedAt.getTime() - 2_000).toISOString(),
+        updatedAt: new Date(resumeRequestedAt.getTime() - 2_000).toISOString(),
+      } as any,
+    ]);
+
+    const response = await buildFallbackStreamResponse(chatId, resumeRequestedAt);
+
+    expect(response.status).toBe(200);
+
+    const payload = await readStream(response.body);
+    expect(payload).toContain("data-appendMessage");
+    expect(payload).toContain("Streaming response content");
+  });
+
   it("exposes the empty stream helper for defensive use", () => {
     const emptyStream = createEmptyStream();
     expect(emptyStream).toBeInstanceOf(ReadableStream);

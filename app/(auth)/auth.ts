@@ -3,7 +3,12 @@ import type { DefaultJWT } from "next-auth/jwt";
 import Credentials from "next-auth/providers/credentials";
 import { resolveAuthSecret } from "@/lib/auth/secret";
 import { resolveCredentialsUser } from "@/lib/auth/credentials-verify";
-import { createGuestUser, createUser, getUser } from "@/lib/db/queries";
+import {
+  createGuestUser,
+  createUser,
+  getTestUserPlaintextPassword,
+  getUser,
+} from "@/lib/db/queries";
 import { authConfig } from "./auth.config";
 
 export type UserType = "guest" | "regular";
@@ -49,7 +54,19 @@ export const {
     Credentials({
       credentials: {},
       async authorize({ email, password }: any) {
-        const resolvedUser = await resolveCredentialsUser(email, password);
+        /**
+         * Always pass the live query helpers so the credentials resolver reuses
+         * the same in-memory store instance that the server actions populate
+         * during Playwright runs. Without these overrides Turbopack can load a
+         * fresh module graph for the NextAuth handler which previously caused
+         * logins to fail because the newly imported queries module could not
+         * see the user created during registration.
+         */
+        const resolvedUser = await resolveCredentialsUser(email, password, {
+          getUser,
+          createUser,
+          getTestUserPlaintextPassword,
+        });
 
         if (!resolvedUser) {
           return null;

@@ -67,3 +67,34 @@ test("resolveCredentialsUser returns null when plaintext fallback does not match
 
   assert.equal(result, null);
 });
+
+test("resolveCredentialsUser prefers the provided dependency overrides", async () => {
+  const email = "override@example.com";
+  const password = "secret";
+  const hash = generateHashedPassword(password);
+
+  let getUserCalls = 0;
+  let createUserCalls = 0;
+  let plaintextLookupCalls = 0;
+
+  const overrides = {
+    getUser: async () => {
+      getUserCalls += 1;
+      return [{ id: "user-id", email, password: hash } as any];
+    },
+    createUser: async () => {
+      createUserCalls += 1;
+    },
+    getTestUserPlaintextPassword: () => {
+      plaintextLookupCalls += 1;
+      return undefined;
+    },
+  };
+
+  const result = await resolveCredentialsUser(email, password, overrides);
+
+  assert.equal(result?.email, email);
+  assert.equal(getUserCalls, 1);
+  assert.equal(createUserCalls, 0);
+  assert.equal(plaintextLookupCalls, 0);
+});

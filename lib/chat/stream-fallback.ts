@@ -21,6 +21,78 @@ const delay = (ms: number) =>
     setTimeout(resolve, ms);
   });
 
+function ensureAssistantText(
+  message: any
+): typeof message {
+  if (!message || typeof message !== "object") {
+    return message;
+  }
+
+  const parts = Array.isArray(message.parts) ? [...message.parts] : [];
+
+  const hasRichTextPart = parts.some(
+    (part) =>
+      part &&
+      typeof part === "object" &&
+      part.type === "text" &&
+      typeof part.text === "string" &&
+      part.text.trim().length > 0
+  );
+
+  if (hasRichTextPart) {
+    return message;
+  }
+
+  const aggregatedText = parts
+    .map((part) => {
+      if (!part || typeof part !== "object") {
+        return "";
+      }
+
+      if (typeof part.text === "string") {
+        return part.text;
+      }
+
+      if (typeof (part as { delta?: unknown }).delta === "string") {
+        return (part as { delta: string }).delta;
+      }
+
+      if (typeof (part as { message?: unknown }).message === "string") {
+        return (part as { message: string }).message;
+      }
+
+      return "";
+    })
+    .join("")
+    .trim();
+
+  const fallbackText =
+    aggregatedText.length > 0
+      ? aggregatedText
+      : typeof (message as { content?: unknown }).content === "string"
+        ? (message as { content: string }).content.trim()
+        : "";
+
+  if (!fallbackText) {
+    return message;
+  }
+
+  const normalisedParts = parts.filter(
+    (part) =>
+      !part ||
+      typeof part !== "object" ||
+      (part.type !== "text-delta" && part.type !== "appendMessage")
+  );
+
+  return {
+    ...message,
+    parts: [
+      ...normalisedParts,
+      { type: "text", text: fallbackText } satisfies ChatMessage["parts"][number],
+    ],
+  };
+}
+
 async function resolveRecentAssistantMessage(
   chatId: string,
   resumeRequestedAt: Date,
@@ -41,7 +113,7 @@ async function resolveRecentAssistantMessage(
       const messageCreatedAt = new Date(mostRecentMessage.createdAt);
 
       if (differenceInSeconds(resumeRequestedAt, messageCreatedAt) <= 15) {
-        return mostRecentMessage;
+        return ensureAssistantText(mostRecentMessage);
       }
 
       return null;
