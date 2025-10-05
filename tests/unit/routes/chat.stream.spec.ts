@@ -115,6 +115,42 @@ describe("chat stream fallback", () => {
     expect(payload).toContain("Streaming response content");
   });
 
+  it("overwrites empty text placeholders when rebuilding replies", async () => {
+    mockedGetMessagesByChatId.mockResolvedValue([
+      {
+        id: "msg-4",
+        chatId,
+        role: "assistant",
+        parts: [
+          { type: "text", text: "" },
+          { type: "text-delta", delta: "Rebuilt " },
+          { type: "text-delta", delta: "text" },
+        ],
+        createdAt: new Date(resumeRequestedAt.getTime() - 1_000).toISOString(),
+        updatedAt: new Date(resumeRequestedAt.getTime() - 1_000).toISOString(),
+      } as any,
+    ]);
+
+    const response = await buildFallbackStreamResponse(chatId, resumeRequestedAt);
+
+    expect(response.status).toBe(200);
+
+    const payload = await readStream(response.body);
+    const appendLine = payload
+      .split("\n")
+      .find((line) => line.includes('"type":"data-appendMessage"'));
+
+    expect(appendLine, "missing append message event").toBeTruthy();
+
+    const appendPayload = JSON.parse(appendLine!.slice(6));
+    const resumedMessage = JSON.parse(appendPayload.data);
+    const resumedTextPart = Array.isArray(resumedMessage.parts)
+      ? resumedMessage.parts.find((part: any) => part?.type === "text")
+      : null;
+
+    expect(resumedTextPart?.text).toBe("Rebuilt text");
+  });
+
   it("exposes the empty stream helper for defensive use", () => {
     const emptyStream = createEmptyStream();
     expect(emptyStream).toBeInstanceOf(ReadableStream);

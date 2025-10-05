@@ -77,19 +77,54 @@ function ensureAssistantText(
     return message;
   }
 
-  const normalisedParts = parts.filter(
-    (part) =>
-      !part ||
-      typeof part !== "object" ||
-      (part.type !== "text-delta" && part.type !== "appendMessage")
+  const normalisedParts = parts.filter((part) => {
+    if (!part || typeof part !== "object") {
+      return true;
+    }
+
+    if (
+      part.type === "text-delta" ||
+      part.type === "appendMessage" ||
+      part.type === "append-message"
+    ) {
+      return false;
+    }
+
+    if (
+      part.type === "text" &&
+      typeof (part as { text?: unknown }).text === "string" &&
+      (part as { text: string }).text.trim().length === 0
+    ) {
+      return false;
+    }
+
+    return true;
+  });
+
+  const textPart: ChatMessage["parts"][number] = {
+    type: "text",
+    text: fallbackText,
+  };
+
+  const existingTextIndex = normalisedParts.findIndex(
+    (part) => part && typeof part === "object" && part.type === "text"
   );
+
+  const mergedParts = [...normalisedParts];
+
+  if (existingTextIndex >= 0) {
+    const existingPart = mergedParts[existingTextIndex];
+    mergedParts[existingTextIndex] = {
+      ...existingPart,
+      ...textPart,
+    };
+  } else {
+    mergedParts.push(textPart);
+  }
 
   return {
     ...message,
-    parts: [
-      ...normalisedParts,
-      { type: "text", text: fallbackText } satisfies ChatMessage["parts"][number],
-    ],
+    parts: mergedParts,
   };
 }
 

@@ -54,6 +54,15 @@ export const {
     Credentials({
       credentials: {},
       async authorize({ email, password }: any) {
+        const normalisedEmail =
+          typeof email === "string" ? email.trim() : "";
+        const candidatePassword =
+          typeof password === "string" ? password : "";
+
+        if (!normalisedEmail || !candidatePassword) {
+          return null;
+        }
+
         /**
          * Always pass the live query helpers so the credentials resolver reuses
          * the same in-memory store instance that the server actions populate
@@ -62,17 +71,33 @@ export const {
          * logins to fail because the newly imported queries module could not
          * see the user created during registration.
          */
-        const resolvedUser = await resolveCredentialsUser(email, password, {
-          getUser,
-          createUser,
-          getTestUserPlaintextPassword,
-        });
+        const resolvedUser = await resolveCredentialsUser(
+          normalisedEmail,
+          candidatePassword,
+          {
+            getUser,
+            createUser,
+            getTestUserPlaintextPassword,
+          }
+        );
 
-        if (!resolvedUser) {
+        if (!resolvedUser?.id) {
           return null;
         }
 
-        return { ...resolvedUser, type: "regular" };
+        const safeEmail = resolvedUser.email ?? normalisedEmail;
+
+        /**
+         * Strip sensitive columns such as the hashed password before handing
+         * the object back to NextAuth. Only the identifier, email and the
+         * custom user type are required downstream during session enrichment.
+         */
+        return {
+          id: resolvedUser.id,
+          email: safeEmail,
+          type: "regular" as const,
+          name: safeEmail,
+        };
       },
     }),
     Credentials({
