@@ -1,32 +1,10 @@
-import { compare } from "bcrypt-ts";
 import NextAuth, { type DefaultSession } from "next-auth";
 import type { DefaultJWT } from "next-auth/jwt";
 import Credentials from "next-auth/providers/credentials";
 import { resolveAuthSecret } from "@/lib/auth/secret";
-import { DUMMY_PASSWORD } from "@/lib/constants";
-import {
-  createGuestUser,
-  createUser,
-  getTestUserPlaintextPassword,
-  getUser,
-} from "@/lib/db/queries";
+import { resolveCredentialsUser } from "@/lib/auth/credentials-verify";
+import { createGuestUser, createUser, getUser } from "@/lib/db/queries";
 import { authConfig } from "./auth.config";
-
-async function verifyPassword(
-  password: string,
-  hashedPassword: string
-): Promise<boolean> {
-  /**
-   * Always rely on the asynchronous bcrypt comparison so the hermetic
-   * Playwright environment and the production runtime share the exact same
-   * hashing semantics. The slower synchronous branch occasionally diverged
-   * when Turbopack reloaded modules mid-test which left the in-memory hashes
-   * stale. Using the promise-based helper ensures fresh comparisons while the
-   * lighter salt rounds configured for tests keep the performance impact
-   * negligible.
-   */
-  return compare(password, hashedPassword);
-}
 
 export type UserType = "guest" | "regular";
 
@@ -71,35 +49,13 @@ export const {
     Credentials({
       credentials: {},
       async authorize({ email, password }: any) {
-        const users = await getUser(email);
-        if (users.length === 0) {
-          await compare(password, DUMMY_PASSWORD);
+        const resolvedUser = await resolveCredentialsUser(email, password);
+
+        if (!resolvedUser) {
           return null;
         }
 
-        const [user] = users;
-
-        if (!user.password) {
-          await verifyPassword(password, DUMMY_PASSWORD);
-          return null;
-        }
-
-        let passwordsMatch = await verifyPassword(password, user.password);
-
-        if (!passwordsMatch) {
-          const plaintextPassword = getTestUserPlaintextPassword(email);
-
-          if (plaintextPassword && plaintextPassword === password) {
-            await createUser(email, password);
-            passwordsMatch = true;
-          }
-        }
-
-        if (!passwordsMatch) {
-          return null;
-        }
-
-        return { ...user, type: "regular" };
+        return { ...resolvedUser, type: "regular" };
       },
     }),
     Credentials({

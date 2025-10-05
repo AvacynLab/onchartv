@@ -1,10 +1,19 @@
 import { createUIMessageStream, JsonToSseTransformStream } from "ai";
 import { differenceInSeconds } from "date-fns";
 
-import { getMessagesByChatId } from "@/lib/db/queries";
 import type { ChatMessage } from "@/lib/types";
 
-const FALLBACK_LOOKUP_ATTEMPTS = 20;
+type GetMessagesByChatId = typeof import("@/lib/db/queries")["getMessagesByChatId"];
+
+/**
+ * Allow a generous polling window for the persistence layer to flush the
+ * assistant response. Hermetic Playwright runs exercise the resume endpoint
+ * immediately after sending a message, and Turbopack occasionally delays the
+ * message persistence by a few seconds while modules warm up. Extending the
+ * retry budget keeps the resume flow deterministic without affecting the
+ * production Redis-backed implementation.
+ */
+const FALLBACK_LOOKUP_ATTEMPTS = 60;
 const FALLBACK_LOOKUP_DELAY_MS = 100;
 
 const delay = (ms: number) =>
@@ -14,10 +23,11 @@ const delay = (ms: number) =>
 
 async function resolveRecentAssistantMessage(
   chatId: string,
-  resumeRequestedAt: Date
+  resumeRequestedAt: Date,
+  getMessages: GetMessagesByChatId
 ) {
   for (let attempt = 0; attempt < FALLBACK_LOOKUP_ATTEMPTS; attempt += 1) {
-    const messages = await getMessagesByChatId({ id: chatId });
+    const messages = await getMessages({ id: chatId });
     const mostRecentMessage = messages.at(-1);
 
     if (mostRecentMessage?.role === "assistant") {
@@ -47,6 +57,17 @@ export function createEmptyStream() {
   }).pipeThrough(new JsonToSseTransformStream());
 }
 
+async function resolveGetMessagesByChatId(
+  override?: GetMessagesByChatId
+): Promise<GetMessagesByChatId> {
+  if (override) {
+    return override;
+  }
+
+  const queries = await import("@/lib/db/queries");
+  return queries.getMessagesByChatId;
+}
+
 /**
  * Generates a resumable stream response when Redis-backed streams are unavailable.
  *
@@ -56,13 +77,21 @@ export function createEmptyStream() {
  */
 export async function buildFallbackStreamResponse(
   chatId: string,
-  resumeRequestedAt: Date
+  resumeRequestedAt: Date,
+  overrides?: {
+    getMessagesByChatId?: GetMessagesByChatId;
+  }
 ) {
   const emptyDataStream = createEmptyStream();
 
+  const getMessages = await resolveGetMessagesByChatId(
+    overrides?.getMessagesByChatId
+  );
+
   const mostRecentMessage = await resolveRecentAssistantMessage(
     chatId,
-    resumeRequestedAt
+    resumeRequestedAt,
+    getMessages
   );
 
   if (!mostRecentMessage) {
@@ -84,3 +113,8 @@ export async function buildFallbackStreamResponse(
     { status: 200 }
   );
 }
+
+export const __test = {
+  FALLBACK_LOOKUP_ATTEMPTS,
+  FALLBACK_LOOKUP_DELAY_MS,
+};
