@@ -26,6 +26,10 @@ jobs:
       NEWS_API_KEY: test-news-key
       PLAYWRIGHT: "true"
       CI_PLAYWRIGHT: "true"
+      # Keep the client/server finance feature flag in sync during CI so the
+      # dev server spawned for Playwright mirrors the behaviour of production
+      # builds and continues exercising the offline fixtures.
+      NEXT_PUBLIC_FEATURE_FINANCE: "true"
     services:
       postgres:
         image: postgres:16
@@ -70,6 +74,12 @@ jobs:
       - name: Run unit tests
         run: pnpm test
 
+      - name: Run Playwright suite
+        run: pnpm e2e
+        env:
+          # Ensure the Playwright server binding matches the GitHub Actions environment.
+          PLAYWRIGHT_TEST_BASE_URL: http://127.0.0.1:3100
+
       # Persist machine-readable outputs for CI dashboards and flaky test triage.
       - name: Upload Vitest coverage report
         if: always()
@@ -86,12 +96,6 @@ jobs:
           name: vitest-junit
           path: coverage/junit.xml
           if-no-files-found: warn
-
-      - name: Run Playwright suite
-        run: pnpm e2e
-        env:
-          # Ensure the Playwright server binding matches the GitHub Actions environment.
-          PLAYWRIGHT_TEST_BASE_URL: http://127.0.0.1:3100
 
       - name: Upload Playwright traces and reports
         if: always()

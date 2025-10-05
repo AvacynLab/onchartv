@@ -1,5 +1,6 @@
 "use client";
 
+import React from "react";
 import equal from "fast-deep-equal";
 import {
   type MouseEvent,
@@ -22,10 +23,32 @@ import { ImageEditor } from "./image-editor";
 import { SpreadsheetEditor } from "./sheet-editor";
 import { Editor } from "./text-editor";
 
+/**
+ * Minimal subset of the persisted document returned by the tool execution.
+ */
+type DocumentPreviewResult = {
+  id: string;
+  title: string;
+  kind: ArtifactKind;
+};
+
+/**
+ * Shape of the tool-call arguments we care about while the document is still
+ * streaming. Some properties are optional because the assistant may omit them
+ * when the run fails early.
+ */
+type DocumentPreviewArgs = {
+  kind: ArtifactKind;
+  title?: string;
+  id?: string;
+  description?: string;
+  isUpdate?: boolean;
+};
+
 type DocumentPreviewProps = {
   isReadonly: boolean;
-  result?: any;
-  args?: any;
+  result?: DocumentPreviewResult | null;
+  args?: DocumentPreviewArgs | null;
 };
 
 export function DocumentPreview({
@@ -70,18 +93,25 @@ export function DocumentPreview({
     }
 
     if (args) {
-      return (
-        <DocumentToolCall
-          args={{ title: args.title, kind: args.kind }}
-          isReadonly={isReadonly}
-          type="create"
-        />
-      );
+        return (
+          <DocumentToolCall
+            args={{
+              title: args.title ?? "",
+              kind: args.kind ?? artifact.kind,
+            }}
+            isReadonly={isReadonly}
+            type="create"
+          />
+        );
     }
   }
 
   if (isDocumentsFetching) {
-    return <LoadingSkeleton artifactKind={result.kind ?? args.kind} />;
+    return (
+      <LoadingSkeleton
+        artifactKind={result?.kind ?? args?.kind ?? artifact.kind}
+      />
+    );
   }
 
   const document: Document | null = previewDocument
@@ -105,7 +135,7 @@ export function DocumentPreview({
     <div className="relative w-full cursor-pointer">
       <HitboxLayer
         hitboxRef={hitboxRef}
-        result={result}
+        result={result ?? null}
         setArtifact={setArtifact}
       />
       <DocumentHeader
@@ -149,7 +179,7 @@ const PureHitboxLayer = ({
   setArtifact,
 }: {
   hitboxRef: React.RefObject<HTMLDivElement>;
-  result: any;
+  result: DocumentPreviewResult | null;
   setArtifact: (
     updaterFn: UIArtifact | ((currentArtifact: UIArtifact) => UIArtifact)
   ) => void;
@@ -158,23 +188,27 @@ const PureHitboxLayer = ({
     (event: MouseEvent<HTMLElement>) => {
       const boundingBox = event.currentTarget.getBoundingClientRect();
 
-      setArtifact((artifact) =>
-        artifact.status === "streaming"
-          ? { ...artifact, isVisible: true }
-          : {
-              ...artifact,
-              title: result.title,
-              documentId: result.id,
-              kind: result.kind,
-              isVisible: true,
-              boundingBox: {
-                left: boundingBox.x,
-                top: boundingBox.y,
-                width: boundingBox.width,
-                height: boundingBox.height,
-              },
-            }
-      );
+      setArtifact((artifact) => {
+        if (artifact.status === "streaming" || !result) {
+          // Ensure the preview overlay opens even while the assistant is still
+          // streaming the document payload.
+          return { ...artifact, isVisible: true };
+        }
+
+        return {
+          ...artifact,
+          title: result.title,
+          documentId: result.id,
+          kind: result.kind,
+          isVisible: true,
+          boundingBox: {
+            left: boundingBox.x,
+            top: boundingBox.y,
+            width: boundingBox.width,
+            height: boundingBox.height,
+          },
+        };
+      });
     },
     [setArtifact, result]
   );

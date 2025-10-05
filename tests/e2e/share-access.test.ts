@@ -3,10 +3,10 @@ import { createAuthenticatedContext } from "../helpers";
 import { generateUUID } from "@/lib/utils";
 
 /**
- * End-to-end coverage ensuring the middleware grants guest-only access to
- * shared chats while still protecting the rest of the application.
+ * End-to-end coverage verifying public share links remain read-only while the
+ * application enforces the regular-authentication flow for access.
  */
-test.describe.serial("Guest share access control", () => {
+test.describe.serial("Share access control", () => {
   let publicChatId: string;
   const sharedMessageText = "Sharing is caring!";
 
@@ -42,53 +42,61 @@ test.describe.serial("Guest share access control", () => {
     }
   });
 
-  test("Guests receive scoped access when opening a share link", async ({ page }) => {
+  test("Unauthenticated visitors are redirected to the login flow", async ({ page }) => {
     await page.context().clearCookies();
 
     await page.goto(`/share/${publicChatId}`);
-    await expect(page).toHaveURL(`/share/${publicChatId}`);
-
-    const sharedUserMessage = page.getByTestId("message-user").last();
-    await expect(sharedUserMessage).toContainText(sharedMessageText);
-
-    const sessionCookies = await page.context().cookies();
-    // The presence of a NextAuth session cookie confirms the middleware issued
-    // a scoped guest credential instead of forcing a full login.
-    const hasNextAuthCookie = sessionCookies.some((cookie) =>
-      cookie.name.includes("next-auth.session-token")
-    );
-    expect(hasNextAuthCookie).toBe(true);
-
-    await page.goto("/");
     await page.waitForURL(/\/login\?callbackUrl=/);
-    expect(page.url()).toContain("/login?callbackUrl=");
+    expect(page.url()).toContain(encodeURIComponent(`/share/${publicChatId}`));
   });
 
-  test("Guest share sessions cannot call protected APIs", async ({ page }) => {
-    await page.context().clearCookies();
-
-    await page.goto(`/share/${publicChatId}`);
-    await expect(page).toHaveURL(`/share/${publicChatId}`);
-
-    // Attempting to reuse the guest session for a protected API should fail.
-    const forbiddenResponse = await page.request.post("/api/chat", {
-      data: {
-        id: publicChatId,
-        message: {
-          id: generateUUID(),
-          role: "user",
-          createdAt: new Date().toISOString(),
-          content: "Should not work",
-          parts: [{ type: "text", text: "Should not work" }],
-        },
-        selectedChatModel: "chat-model",
-        selectedVisibilityType: "public",
-      },
+  test("Authenticated users can view shared chats in read-only mode", async ({ browser }) => {
+    const viewer = await createAuthenticatedContext({
+      browser,
+      name: `share-viewer-${Date.now()}`,
     });
 
-    expect(forbiddenResponse.status()).toBe(403);
+    try {
+      await viewer.page.goto(`/share/${publicChatId}`);
+      await viewer.page.waitForURL(`/share/${publicChatId}`);
 
-    const responseBody = await forbiddenResponse.json();
-    expect(responseBody).toMatchObject({ code: "forbidden:chat" });
+      const sharedUserMessage = viewer.page.getByTestId("message-user").last();
+      await expect(sharedUserMessage).toContainText(sharedMessageText);
+    } finally {
+      await viewer.context.close();
+    }
+  });
+
+  test("Shared chats cannot be mutated by other regular accounts", async ({ browser }) => {
+    const viewer = await createAuthenticatedContext({
+      browser,
+      name: `share-readonly-${Date.now()}`,
+    });
+
+    try {
+      const forbiddenResponse = await viewer.request.post("/api/chat", {
+        data: {
+          id: publicChatId,
+          message: {
+            id: generateUUID(),
+            role: "user",
+            createdAt: new Date().toISOString(),
+            content: "Should not work",
+            parts: [{ type: "text", text: "Should not work" }],
+          },
+          selectedChatModel: "chat-model",
+          selectedVisibilityType: "public",
+        },
+      });
+
+      expect(forbiddenResponse.status()).toBe(403);
+
+      const responseBody = await forbiddenResponse.json();
+      expect(responseBody).toMatchObject({
+        error: { code: "forbidden:chat" },
+      });
+    } finally {
+      await viewer.context.close();
+    }
   });
 });

@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, type SetStateAction } from "react";
 import useSWR from "swr";
+import type { KeyedMutator } from "swr";
 import type { UIArtifact } from "@/components/artifact";
 
 export const initialArtifactData: UIArtifact = {
@@ -68,7 +69,7 @@ export function useArtifact() {
   );
 
   const { data: localArtifactMetadata, mutate: setLocalArtifactMetadata } =
-    useSWR<any>(
+    useSWR<unknown | null>(
       () =>
         artifact.documentId ? `artifact-metadata-${artifact.documentId}` : null,
       null,
@@ -77,13 +78,37 @@ export function useArtifact() {
       }
     );
 
+  /**
+   * Normalises the SWR mutator so it mirrors React's `setState` contract. This
+   * keeps artefact metadata setters fully typed without leaking SWR specifics
+   * through the component tree.
+   */
+  const updateMetadata = useCallback(
+    (value: SetStateAction<unknown | null>) => {
+      if (typeof value === "function") {
+        const updater = value as (current: unknown | null) => unknown | null;
+        void (setLocalArtifactMetadata as KeyedMutator<unknown | null>)(
+          (current: unknown | null) => updater(current ?? null),
+          false
+        );
+        return;
+      }
+
+      void (setLocalArtifactMetadata as KeyedMutator<unknown | null>)(
+        value ?? null,
+        false
+      );
+    },
+    [setLocalArtifactMetadata]
+  );
+
   return useMemo(
     () => ({
       artifact,
       setArtifact,
       metadata: localArtifactMetadata,
-      setMetadata: setLocalArtifactMetadata,
+      setMetadata: updateMetadata,
     }),
-    [artifact, setArtifact, localArtifactMetadata, setLocalArtifactMetadata]
+    [artifact, setArtifact, localArtifactMetadata, updateMetadata]
   );
 }

@@ -15,6 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "@/components/toast";
+import { isFinanceFeatureEnabledClient } from "@/lib/feature-flags";
 import {
   FINANCE_EXPLANATION_LEVELS,
   FINANCE_MARKET_OPTIONS,
@@ -181,6 +182,29 @@ const deepEqualPreferences = (
 };
 
 export function FinanceSettings(): JSX.Element {
+  const financeFeatureEnabled = isFinanceFeatureEnabledClient();
+
+  if (!financeFeatureEnabled) {
+    /**
+     * Avoid mounting the React Query stack when the finance feature flag is
+     * disabled. Returning early keeps the component tree light and prevents
+     * accidental requests to `/api/finance/preferences` in restricted
+     * environments.
+     */
+    return (
+      <Card data-testid="finance-settings-disabled-flag" role="status">
+        <CardHeader>
+          <CardTitle>Préférences indisponibles</CardTitle>
+          <CardDescription>
+            La fonctionnalité finance est désactivée pour cet environnement.
+            Activez la variable d’environnement <code>FEATURE_FINANCE</code> pour
+            configurer les marchés suivis et les indicateurs par défaut.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+
   const [state, setState] = useState<MutablePreferences | null>(null);
   const [initialState, setInitialState] = useState<MutablePreferences | null>(
     null

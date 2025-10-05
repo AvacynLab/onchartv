@@ -1,6 +1,6 @@
 import React from "react";
 import "@testing-library/jest-dom/vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { UIMessage } from "ai";
 
@@ -22,7 +22,10 @@ vi.mock("@/lib/ai/providers", () => ({
   },
 }));
 
-import { MultimodalInput } from "@/components/multimodal-input";
+import {
+  MultimodalInput,
+  STOP_BUTTON_MINIMUM_DURATION_MS,
+} from "@/components/multimodal-input";
 
 const baseProps: React.ComponentProps<typeof MultimodalInput> = {
   chatId: "chat_1",
@@ -60,5 +63,40 @@ describe("MultimodalInput", () => {
     );
 
     await waitFor(() => expect(screen.getByTestId("multimodal-input")).toHaveFocus());
+  });
+
+  it("maintient le bouton d'arrêt visible pendant le délai de refroidissement", async () => {
+    vi.useFakeTimers();
+
+    try {
+      const { rerender } = render(
+        <MultimodalInput
+          {...baseProps}
+          status="submitted"
+        />
+      );
+
+      const stopButton = screen.getByTestId("stop-button");
+      expect(stopButton).toBeVisible();
+
+      rerender(<MultimodalInput {...baseProps} status="ready" />);
+
+      /**
+       * Tant que nous n'avons pas dépassé la fenêtre de grâce, le bouton d'arrêt
+       * doit rester présent afin que Playwright puisse le cliquer au besoin.
+       */
+      await act(async () => {
+        vi.advanceTimersByTime(STOP_BUTTON_MINIMUM_DURATION_MS - 50);
+      });
+      expect(screen.getByTestId("stop-button")).toBeVisible();
+
+      await act(async () => {
+        vi.advanceTimersByTime(100);
+      });
+
+      expect(screen.queryByTestId("stop-button")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -12,6 +12,7 @@ import {
 import { FINANCE_SERIES } from "@/lib/finance/mock-data";
 import { getMarketDataAdapter } from "@/lib/finance/server-adapter";
 import { ChatSDKError } from "@/lib/errors";
+import { logError } from "@/lib/logging";
 import { enforceRateLimit } from "@/lib/ratelimit";
 
 const MAX_CANDLES = 5_000;
@@ -36,6 +37,11 @@ const querySchema = z.object({
 export async function GET(request: Request): Promise<Response> {
   const startedAt = now();
   const clientKey = resolveClientKey(request);
+  let symbol: string | undefined;
+  let timeframe: string | undefined;
+  let limit: number | undefined;
+  let fromEpoch: number | undefined;
+  let toEpoch: number | undefined;
 
   try {
     const rateLimit = enforceRateLimit({
@@ -53,7 +59,8 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     const metadata = assertSupportedSymbol(parsed.data.symbol);
-    const timeframe = (parsed.data.timeframe ?? "1D").trim().toUpperCase();
+    symbol = metadata.symbol;
+    timeframe = (parsed.data.timeframe ?? "1D").trim().toUpperCase();
 
     if (!SUPPORTED_TIMEFRAMES.includes(timeframe as (typeof SUPPORTED_TIMEFRAMES)[number])) {
       throw new ChatSDKError(
@@ -63,18 +70,29 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     const series = FINANCE_SERIES[metadata.symbol];
-    const fromEpoch = parsed.data.from
+    fromEpoch = parsed.data.from
       ? parseIsoToEpochSeconds(parsed.data.from, "from")
       : undefined;
-    const toEpoch = parsed.data.to
+    toEpoch = parsed.data.to
       ? parseIsoToEpochSeconds(parsed.data.to, "to")
       : undefined;
 
     const range = resolveRange(series, fromEpoch, toEpoch);
 
-    const limit = parsed.data.limit
-      ? Number.parseInt(parsed.data.limit, 10)
-      : undefined;
+    /**
+     * Guard against `Number.parseInt` accepting mixed inputs like "5 candles" by
+     * explicitly requiring a digit-only payload before parsing. This keeps the
+     * API feedback deterministic for both the UI and the offline tests.
+     */
+    const rawLimit = parsed.data.limit?.trim();
+    if (rawLimit && !/^\d+$/.test(rawLimit)) {
+      throw new ChatSDKError(
+        "bad_request:api",
+        "Parameter 'limit' must be a positive integer when provided."
+      );
+    }
+
+    limit = rawLimit ? Number.parseInt(rawLimit, 10) : undefined;
 
     if (limit !== undefined && (Number.isNaN(limit) || limit <= 0)) {
       throw new ChatSDKError(
@@ -129,7 +147,14 @@ export async function GET(request: Request): Promise<Response> {
       return error.toResponse();
     }
 
-    console.error("[api:finance.history] unexpected error", error);
+    logError("api:finance.history", error, {
+      clientKey,
+      symbol,
+      timeframe,
+      limit,
+      from: fromEpoch,
+      to: toEpoch,
+    });
     return Response.json(
       {
         error: {

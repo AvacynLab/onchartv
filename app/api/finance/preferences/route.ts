@@ -14,6 +14,7 @@ import {
   upsertFinancePreferences,
 } from "@/lib/db/queries";
 import { ChatSDKError } from "@/lib/errors";
+import { logError } from "@/lib/logging";
 import { enforceRateLimit } from "@/lib/ratelimit";
 
 const patchSchema = financePreferencesSchema;
@@ -58,6 +59,7 @@ const toResponsePayload = (
 export async function GET(request: Request): Promise<Response> {
   const startedAt = now();
   const clientKey = resolveClientKey(request);
+  let userId: string | undefined;
 
   try {
     const rateLimit = enforceRateLimit({
@@ -75,8 +77,9 @@ export async function GET(request: Request): Promise<Response> {
       );
     }
 
+    userId = session.user.id;
     const record = await getFinancePreferencesByUserId({
-      userId: session.user.id,
+      userId,
     });
     const payload = toResponsePayload(record);
 
@@ -90,7 +93,7 @@ export async function GET(request: Request): Promise<Response> {
       return error.toResponse();
     }
 
-    console.error("[api:finance.preferences] unexpected error", error);
+    logError("api:finance.preferences:get", error, { clientKey, userId });
     return Response.json(
       {
         error: {
@@ -113,6 +116,7 @@ export async function GET(request: Request): Promise<Response> {
 export async function PATCH(request: Request): Promise<Response> {
   const startedAt = now();
   const clientKey = resolveClientKey(request);
+  let userId: string | undefined;
 
   try {
     const rateLimit = enforceRateLimit({
@@ -130,6 +134,7 @@ export async function PATCH(request: Request): Promise<Response> {
       );
     }
 
+    userId = session.user.id;
     let json: unknown;
 
     try {
@@ -150,7 +155,7 @@ export async function PATCH(request: Request): Promise<Response> {
 
     const preferences = parsed.data;
     const record = await upsertFinancePreferences({
-      userId: session.user.id,
+      userId,
       markets: preferences.markets,
       defaultIndicators: preferences.defaultIndicators,
       explanationLevel: preferences.explanationLevel,
@@ -169,7 +174,7 @@ export async function PATCH(request: Request): Promise<Response> {
       return error.toResponse();
     }
 
-    console.error("[api:finance.preferences] unexpected error", error);
+    logError("api:finance.preferences:patch", error, { clientKey, userId });
     return Response.json(
       {
         error: {

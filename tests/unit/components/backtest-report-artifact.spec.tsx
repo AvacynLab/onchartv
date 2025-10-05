@@ -61,10 +61,13 @@ describe("BacktestReportArtifact", () => {
       name: /re-tester avec ces paramètres/i,
     });
     expect(retestButton).toHaveAttribute("aria-expanded", "false");
+    expect(retestButton).toHaveAttribute("aria-controls");
     expect(
       screen.getByText(/La courbe représente l’évolution du capital net/i)
     ).toBeInTheDocument();
-    expect(screen.getByText(/Page 1 /)).toBeInTheDocument();
+    const pagination = screen.getByTestId("trade-pagination");
+    expect(pagination).toHaveAttribute("aria-live", "polite");
+    expect(pagination).toHaveTextContent(/Page 1 \/ 2/);
   });
 
   it("validates the retest form before dispatching", async () => {
@@ -165,7 +168,10 @@ describe("BacktestReportArtifact", () => {
     });
     expect(within(table).getAllByRole("row")).toHaveLength(9);
 
-    await user.click(screen.getByRole("button", { name: /page suivante/i }));
+    const nextButton = screen.getByRole("button", { name: /page suivante/i });
+    expect(nextButton).toHaveAttribute("aria-controls", table.id);
+
+    await user.click(nextButton);
 
     const rows = within(table).getAllByRole("row");
     expect(rows).toHaveLength(2);
@@ -174,6 +180,28 @@ describe("BacktestReportArtifact", () => {
     await user.click(screen.getByRole("button", { name: /page précédente/i }));
     expect(
       within(table).getByText(baseArtifact.trades[0]!.entryPrice.toString())
+    ).toBeInTheDocument();
+  });
+
+  it("affiche des fallbacks lorsque les métriques ou trades sont absents", () => {
+    const incomplete = {
+      ...baseArtifact,
+      metrics: {
+        // Cast volontaire : on simule un payload malformé renvoyé par une IA.
+      } as unknown as FinanceBacktestArtifact["metrics"],
+      trades: [] as unknown as FinanceBacktestArtifact["trades"],
+    } satisfies FinanceBacktestArtifact;
+
+    render(<BacktestReportArtifact artifact={incomplete} />);
+
+    expect(
+      screen.getByTestId("metric-totalReturn-value")
+    ).toHaveTextContent("—");
+    expect(
+      screen.getAllByText(/Donnée indisponible pour cette simulation./i).length
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getByText(/Aucun trade n'a été simulé sur cette période./i)
     ).toBeInTheDocument();
   });
 });

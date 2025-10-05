@@ -81,6 +81,17 @@ describe("/api/finance/screen", () => {
     );
 
     expect(response.status).toBe(400);
+
+    const error = await response.json();
+    expect(error).toEqual(
+      expect.objectContaining({
+        error: expect.objectContaining({
+          code: "bad_request:api",
+          message: expect.stringContaining("request couldn't be processed"),
+          cause: expect.stringContaining("must be zero or greater"),
+        }),
+      })
+    );
   });
 
   it("defaults to an unfiltered catalogue when no body is provided", async () => {

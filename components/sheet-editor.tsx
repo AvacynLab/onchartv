@@ -3,7 +3,7 @@
 import { useTheme } from "next-themes";
 import { parse, unparse } from "papaparse";
 import { memo, useEffect, useMemo, useState } from "react";
-import DataGrid, { textEditor } from "react-data-grid";
+import DataGrid, { textEditor, type Column } from "react-data-grid";
 import { cn } from "@/lib/utils";
 
 import "react-data-grid/lib/styles.css";
@@ -18,6 +18,16 @@ type SheetEditorProps = {
 
 const MIN_ROWS = 50;
 const MIN_COLS = 26;
+
+/**
+ * Lightweight representation of a spreadsheet row. Column values are stored as
+ * strings so we can serialise the grid back into CSV form without additional
+ * parsing steps.
+ */
+type SheetRow = {
+  id: number;
+  rowNumber: number;
+} & Record<string, string | number>;
 
 const PureSpreadsheetEditor = ({ content, saveContent }: SheetEditorProps) => {
   const { resolvedTheme } = useTheme();
@@ -43,8 +53,8 @@ const PureSpreadsheetEditor = ({ content, saveContent }: SheetEditorProps) => {
     return paddedData;
   }, [content]);
 
-  const columns = useMemo(() => {
-    const rowNumberColumn = {
+  const columns = useMemo<Column<SheetRow>[]>(() => {
+    const rowNumberColumn: Column<SheetRow> = {
       key: "rowNumber",
       name: "",
       frozen: true,
@@ -54,12 +64,14 @@ const PureSpreadsheetEditor = ({ content, saveContent }: SheetEditorProps) => {
       headerCellClass: "border-t border-r dark:bg-zinc-900 dark:text-zinc-50",
     };
 
-    const dataColumns = Array.from({ length: MIN_COLS }, (_, i) => ({
-      key: i.toString(),
-      name: String.fromCharCode(65 + i),
-      renderEditCell: textEditor,
-      width: 120,
-      cellClass: cn("border-t dark:bg-zinc-950 dark:text-zinc-50", {
+    const dataColumns: Column<SheetRow>[] = Array.from(
+      { length: MIN_COLS },
+      (_, i) => ({
+        key: i.toString(),
+        name: String.fromCharCode(65 + i),
+        renderEditCell: textEditor,
+        width: 120,
+        cellClass: cn("border-t dark:bg-zinc-950 dark:text-zinc-50", {
         "border-l": i !== 0,
       }),
       headerCellClass: cn("border-t dark:bg-zinc-900 dark:text-zinc-50", {
@@ -70,9 +82,9 @@ const PureSpreadsheetEditor = ({ content, saveContent }: SheetEditorProps) => {
     return [rowNumberColumn, ...dataColumns];
   }, []);
 
-  const initialRows = useMemo(() => {
+  const initialRows = useMemo<SheetRow[]>(() => {
     return parseData.map((row, rowIndex) => {
-      const rowData: any = {
+      const rowData: SheetRow = {
         id: rowIndex,
         rowNumber: rowIndex + 1,
       };
@@ -85,22 +97,23 @@ const PureSpreadsheetEditor = ({ content, saveContent }: SheetEditorProps) => {
     });
   }, [parseData, columns]);
 
-  const [localRows, setLocalRows] = useState(initialRows);
+  const [localRows, setLocalRows] = useState<SheetRow[]>(initialRows);
 
   useEffect(() => {
     setLocalRows(initialRows);
   }, [initialRows]);
 
-  const generateCsv = (data: any[][]) => {
-    return unparse(data);
+  const generateCsv = (data: ReadonlyArray<ReadonlyArray<string>>) => {
+    const mutableRows = data.map((row) => [...row]);
+    return unparse(mutableRows);
   };
 
-  const handleRowsChange = (newRows: any[]) => {
+  const handleRowsChange = (newRows: SheetRow[]) => {
     setLocalRows(newRows);
 
-    const updatedData = newRows.map((row) => {
-      return columns.slice(1).map((col) => row[col.key] || "");
-    });
+    const updatedData = newRows.map((row) =>
+      columns.slice(1).map((col) => String(row[col.key] ?? ""))
+    );
 
     const newCsvContent = generateCsv(updatedData);
     saveContent(newCsvContent, true);

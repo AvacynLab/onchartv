@@ -12,6 +12,7 @@ import { FinanceChartArtifact as FinanceChartView } from "./finance/finance-char
 import { FundamentalsCard } from "./finance/fundamentals-card";
 import { NewsList } from "./finance/news-list";
 import { ScreenResultsCard } from "./finance/screen-results-card";
+import { isFinanceFeatureEnabledClient } from "@/lib/feature-flags";
 
 export interface ArtifactRendererProps {
   readonly artifact: FinanceArtifact;
@@ -48,6 +49,22 @@ export function ArtifactRenderer({
         role="alert"
       >
         Contenu indisponible : le format de l’artefact fourni est invalide.
+      </div>
+    );
+  }
+
+  const financeFeatureEnabled = isFinanceFeatureEnabledClient();
+
+  if (!financeFeatureEnabled && artifact.type.startsWith("finance.")) {
+    return (
+      <div
+        className="rounded-lg border border-muted bg-muted/40 p-4 text-sm text-muted-foreground"
+        data-testid="artifact-renderer-finance-disabled"
+        role="status"
+      >
+        Les artefacts finance sont désactivés. Activez la variable
+        d’environnement
+        <code className="mx-1">FEATURE_FINANCE</code> pour afficher ce contenu.
       </div>
     );
   }

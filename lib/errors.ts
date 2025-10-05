@@ -1,3 +1,5 @@
+import { logError } from "./logging";
+
 export type ErrorType =
   | "bad_request"
   | "unauthorized"
@@ -15,8 +17,7 @@ export type Surface =
   | "history"
   | "vote"
   | "document"
-  | "suggestions"
-  | "activate_gateway";
+  | "suggestions";
 
 export type ErrorCode = `${ErrorType}:${Surface}`;
 
@@ -32,7 +33,6 @@ export const visibilityBySurface: Record<Surface, ErrorVisibility> = {
   vote: "response",
   document: "response",
   suggestions: "response",
-  activate_gateway: "response",
 };
 
 export class ChatSDKError extends Error {
@@ -59,11 +59,7 @@ export class ChatSDKError extends Error {
     const { message, cause, statusCode } = this;
 
     if (visibility === "log") {
-      console.error({
-        code,
-        message,
-        cause,
-      });
+      logError("chat_sdk", { code, message, cause });
 
       return Response.json(
         {
@@ -100,13 +96,10 @@ export function getMessageByErrorCode(errorCode: ErrorCode): string {
     case "rate_limit:api":
       return "Too many finance requests were issued in a short period. Please slow down and retry in a minute.";
 
-    case "bad_request:activate_gateway":
-      return "AI Gateway requires a valid credit card on file to service requests. Please visit https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai%3Fmodal%3Dadd-credit-card to add a card and unlock your free credits.";
-
     case "unauthorized:auth":
       return "You need to sign in before continuing.";
     case "forbidden:auth":
-      return "Your account does not have access to this feature.";
+      return "A regular account is required to use this feature.";
 
     case "rate_limit:chat":
       return "You have exceeded your maximum number of messages for the day. Please try again later.";

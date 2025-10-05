@@ -2,6 +2,7 @@ import type { Geo } from "@vercel/functions";
 
 import { getFinanceManualPrompt } from "./system-prompts";
 import type { ArtifactKind } from "@/components/artifact";
+import { isFinanceFeatureEnabled } from "../feature-flags";
 
 export const artifactsPrompt = `
 Artifacts is a special user interface mode that helps users with writing, editing, and other content creation tasks. When artifact is open, it is on the right side of the screen, while the conversation is on the left side. When creating or updating documents, changes are reflected in real-time on the artifacts and visible to the user.
@@ -51,24 +52,6 @@ About the origin of user's request:
 - city: ${requestHints.city}
 - country: ${requestHints.country}
 `;
-
-const FINANCE_FLAG_KEYS = new Set(["true", "1", "on", "yes"]);
-
-/**
- * Determines whether the finance manual should be appended to the base system
- * prompt. The helper tolerates various truthy strings so deployments can use
- * platform-specific env conventions.
- */
-const isFinanceFeatureEnabled = () => {
-  const rawValue = process.env.FEATURE_FINANCE;
-
-  if (rawValue === undefined) {
-    // Finance is part of the product roadmap; default to on when unspecified.
-    return true;
-  }
-
-  return FINANCE_FLAG_KEYS.has(rawValue.toLowerCase());
-};
 
 export const systemPrompt = ({
   selectedChatModel,

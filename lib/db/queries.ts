@@ -18,6 +18,7 @@ import type { ArtifactKind } from "@/components/artifact";
 import type { VisibilityType } from "@/components/visibility-selector";
 import { isTestEnvironment } from "../constants";
 import { ChatSDKError } from "../errors";
+import { logWarning } from "../logging";
 import type { AppUsage } from "../usage";
 import { generateUUID } from "../utils";
 import {
@@ -952,7 +953,10 @@ export async function updateChatLastContextById({
       .set({ lastContext: context })
       .where(eq(chat.id, chatId));
   } catch (error) {
-    console.warn("Failed to update lastContext for chat", chatId, error);
+    logWarning("db:queries", "Failed to update lastContext for chat", {
+      chatId,
+      error,
+    });
     return;
   }
 }

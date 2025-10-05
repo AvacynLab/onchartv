@@ -1,7 +1,8 @@
 import { redirect } from "next/navigation";
 
-import { FinanceSettings } from "@/components/settings/finance-settings";
 import { auth } from "@/app/(auth)/auth";
+import { FinanceSettings } from "@/components/settings/finance-settings";
+import { isFinanceFeatureEnabled } from "@/lib/feature-flags";
 
 /**
  * Server-rendered entry point for the finance preferences form. The page reuses
@@ -9,6 +10,15 @@ import { auth } from "@/app/(auth)/auth";
  * artefact behaviour without navigating obscure URLs.
  */
 export default async function FinanceSettingsPage() {
+  if (!isFinanceFeatureEnabled()) {
+    /**
+     * Keep finance-specific settings hidden when the feature flag is off to
+     * avoid exposing incomplete UI shells. The generic settings dashboard
+     * remains available so users can continue configuring other options.
+     */
+    redirect("/settings");
+  }
+
   const session = await auth();
 
   if (!session?.user) {

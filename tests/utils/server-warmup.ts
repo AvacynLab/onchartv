@@ -40,6 +40,13 @@ const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_RETRY_DELAY_MS = 1_000;
 
 /**
+ * Maximum number of characters preserved from the response body when a warm-up
+ * request fails. Next.js overlay payloads can be very large; trimming them
+ * keeps the logged context actionable without overwhelming the test output.
+ */
+const RESPONSE_PREVIEW_MAX_LENGTH = 200;
+
+/**
  * Sleep helper that can be awaited inside retry loops.
  */
 function delay(ms: number) {
@@ -72,21 +79,140 @@ export async function warmupNextRoutes(
     for (let attempt = 1; attempt <= attempts; attempt++) {
       try {
         const response = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
+        const preview = await getResponsePreview(response);
 
         if (!response.ok) {
-          throw new Error(`Warmup request for ${url} failed with status ${response.status}`);
+          await drainResponse(response);
+          throw new WarmupResponseError({
+            url,
+            attempt,
+            attempts,
+            status: response.status,
+            preview,
+          });
         }
 
         // Drain the response stream so Node releases the underlying socket.
-        await response.arrayBuffer().catch(() => undefined);
+        await drainResponse(response);
         break;
       } catch (error) {
+        const description = describeFailure({
+          error,
+          url,
+          attempt,
+          attempts,
+        });
+
         if (attempt === attempts) {
-          throw new Error(`Failed to warm Next.js route: ${url}`, { cause: error });
+          throw new Error(
+            `Failed to warm Next.js route: ${url}. ${description.message}`,
+            description.cause ? { cause: description.cause } : undefined,
+          );
         }
+
+        console.warn(
+          `[warmup] ${description.message}. Retrying in ${retryDelayMs}ms (attempt ${attempt + 1}/${attempts}).`,
+        );
 
         await delay(retryDelayMs);
       }
     }
   }
+}
+
+/**
+ * Drain the response body to completion so Node.js can recycle the TCP socket
+ * for subsequent warm-up requests.
+ */
+async function drainResponse(response: Response) {
+  try {
+    await response.arrayBuffer();
+  } catch {
+    // The warm-up already failed, so there is no extra diagnostic value in
+    // surfacing the drain error to the caller.
+  }
+}
+
+/**
+ * Extract a trimmed preview of the response payload to aid debugging. We clone
+ * the response before reading so the original stream can still be consumed when
+ * we drain it.
+ */
+async function getResponsePreview(response: Response): Promise<string | null> {
+  try {
+    const text = await response.clone().text();
+    const normalised = normaliseWhitespace(text);
+
+    if (normalised.length === 0) {
+      return null;
+    }
+
+    if (normalised.length <= RESPONSE_PREVIEW_MAX_LENGTH) {
+      return normalised;
+    }
+
+    return `${normalised.slice(0, RESPONSE_PREVIEW_MAX_LENGTH)}…`;
+  } catch {
+    return null;
+  }
+}
+
+function normaliseWhitespace(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+class WarmupResponseError extends Error {
+  readonly status: number;
+  readonly preview: string | null;
+  readonly attempt: number;
+  readonly attempts: number;
+
+  constructor({
+    url,
+    attempt,
+    attempts,
+    status,
+    preview,
+  }: {
+    url: string;
+    attempt: number;
+    attempts: number;
+    status: number;
+    preview: string | null;
+  }) {
+    super(`Attempt ${attempt}/${attempts} for ${url} returned status ${status}`);
+    this.status = status;
+    this.preview = preview;
+    this.attempt = attempt;
+    this.attempts = attempts;
+  }
+}
+
+function describeFailure({
+  error,
+  url,
+  attempt,
+  attempts,
+}: {
+  error: unknown;
+  url: string;
+  attempt: number;
+  attempts: number;
+}): { message: string; cause?: Error } {
+  if (error instanceof WarmupResponseError) {
+    const preview = error.preview ? ` Preview: "${error.preview}".` : "";
+
+    return {
+      message: `Attempt ${error.attempt}/${error.attempts} for ${url} failed with status ${error.status}.${preview}`,
+      cause: error,
+    };
+  }
+
+  const fallbackMessage =
+    error instanceof Error ? error.message : `Unknown error: ${String(error)}`;
+
+  return {
+    message: `Attempt ${attempt}/${attempts} for ${url} failed with ${fallbackMessage}`,
+    cause: error instanceof Error ? error : undefined,
+  };
 }

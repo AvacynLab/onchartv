@@ -1,15 +1,25 @@
-import { createUIMessageStream, JsonToSseTransformStream } from "ai";
-import { differenceInSeconds } from "date-fns";
 import { auth } from "@/app/(auth)/auth";
-import {
-  getChatById,
-  getMessagesByChatId,
-  getStreamIdsByChatId,
-} from "@/lib/db/queries";
+import { JsonToSseTransformStream } from "ai";
+
+import { getChatById, getStreamIdsByChatId } from "@/lib/db/queries";
 import type { Chat } from "@/lib/db/schema";
 import { ChatSDKError } from "@/lib/errors";
-import type { ChatMessage } from "@/lib/types";
+import {
+  buildFallbackStreamResponse,
+  createEmptyStream,
+} from "@/lib/chat/stream-fallback";
 import { getStreamContext } from "../../route";
+
+/**
+ * Allow a brief window for concurrent chat creation requests to persist the
+ * record before the resume endpoint gives up. The e2e suite posts a message
+ * and immediately opens the stream, so a short polling loop keeps the flow
+ * deterministic without compromising on the eventual 404 for unknown chats.
+ */
+const CHAT_LOOKUP_ATTEMPTS = 5;
+const CHAT_LOOKUP_DELAY_MS = 100;
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function GET(
   _: Request,
@@ -19,10 +29,6 @@ export async function GET(
 
   const streamContext = getStreamContext();
   const resumeRequestedAt = new Date();
-
-  if (!streamContext) {
-    return new Response(null, { status: 204 });
-  }
 
   if (!chatId) {
     return new ChatSDKError("bad_request:api").toResponse();
@@ -38,12 +44,22 @@ export async function GET(
     return new ChatSDKError("forbidden:chat").toResponse();
   }
 
-  let chat: Chat | null;
+  let chat: Chat | null = null;
 
-  try {
-    chat = await getChatById({ id: chatId });
-  } catch {
-    return new ChatSDKError("not_found:chat").toResponse();
+  for (let attempt = 0; attempt < CHAT_LOOKUP_ATTEMPTS; attempt += 1) {
+    try {
+      chat = await getChatById({ id: chatId });
+    } catch {
+      if (attempt === CHAT_LOOKUP_ATTEMPTS - 1) {
+        return new ChatSDKError("not_found:chat").toResponse();
+      }
+    }
+
+    if (chat) {
+      break;
+    }
+
+    await delay(CHAT_LOOKUP_DELAY_MS);
   }
 
   if (!chat) {
@@ -54,25 +70,24 @@ export async function GET(
     return new ChatSDKError("forbidden:chat").toResponse();
   }
 
+  if (!streamContext) {
+    return buildFallbackStreamResponse(chatId, resumeRequestedAt);
+  }
+
   const streamIds = await getStreamIdsByChatId({ chatId });
 
   if (!streamIds.length) {
-    return new ChatSDKError("not_found:stream").toResponse();
+    return buildFallbackStreamResponse(chatId, resumeRequestedAt);
   }
 
   const recentStreamId = streamIds.at(-1);
 
   if (!recentStreamId) {
-    return new ChatSDKError("not_found:stream").toResponse();
+    return buildFallbackStreamResponse(chatId, resumeRequestedAt);
   }
 
-  const emptyDataStream = createUIMessageStream<ChatMessage>({
-    // biome-ignore lint/suspicious/noEmptyBlockStatements: "Needs to exist"
-    execute: () => {},
-  });
-
   const stream = await streamContext.resumableStream(recentStreamId, () =>
-    emptyDataStream.pipeThrough(new JsonToSseTransformStream())
+    createEmptyStream().pipeThrough(new JsonToSseTransformStream())
   );
 
   /*
@@ -80,37 +95,7 @@ export async function GET(
    * but the resumable stream has concluded at this point.
    */
   if (!stream) {
-    const messages = await getMessagesByChatId({ id: chatId });
-    const mostRecentMessage = messages.at(-1);
-
-    if (!mostRecentMessage) {
-      return new Response(emptyDataStream, { status: 200 });
-    }
-
-    if (mostRecentMessage.role !== "assistant") {
-      return new Response(emptyDataStream, { status: 200 });
-    }
-
-    const messageCreatedAt = new Date(mostRecentMessage.createdAt);
-
-    if (differenceInSeconds(resumeRequestedAt, messageCreatedAt) > 15) {
-      return new Response(emptyDataStream, { status: 200 });
-    }
-
-    const restoredStream = createUIMessageStream<ChatMessage>({
-      execute: ({ writer }) => {
-        writer.write({
-          type: "data-appendMessage",
-          data: JSON.stringify(mostRecentMessage),
-          transient: true,
-        });
-      },
-    });
-
-    return new Response(
-      restoredStream.pipeThrough(new JsonToSseTransformStream()),
-      { status: 200 }
-    );
+    return buildFallbackStreamResponse(chatId, resumeRequestedAt);
   }
 
   return new Response(stream, { status: 200 });

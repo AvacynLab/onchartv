@@ -71,7 +71,16 @@ async function ensureLoggedIn(
   if (page.url().endsWith("/login")) {
     await page.getByPlaceholder("user@acme.com").fill(creds.email);
     await page.getByLabel("Password").fill(creds.password);
-    await page.getByRole("button", { name: "Sign in" }).click();
+
+    const signInButton = page.getByRole("button", { name: "Sign in" });
+
+    await Promise.all([
+      page.waitForURL(
+        (url) => !url.pathname.endsWith("/login"),
+        { timeout: 15_000, waitUntil: "commit" }
+      ),
+      signInButton.click(),
+    ]);
 
     await expect
       .poll(async () => hasExistingSession(context), { timeout: 15_000 })
@@ -156,9 +165,33 @@ setup("authenticate", async ({ browser }) => {
     await page.goto(`${baseURL}/register`);
     await page.getByPlaceholder("user@acme.com").fill(credentials.email);
     await page.getByLabel("Password").fill(credentials.password);
-    await page.getByRole("button", { name: "Sign Up" }).click();
+    const signUpButton = page.getByRole("button", { name: "Sign Up" });
+    await signUpButton.click();
 
-    await expect(page.getByTestId("toast")).toContainText("Account");
+    const toast = page.getByTestId("toast");
+    await expect(toast).toContainText("Account");
+
+    const toastMessage = (await toast.textContent()) ?? "";
+
+    if (toastMessage.includes("Account created successfully!")) {
+      try {
+        await page.waitForURL(
+          (url) => url.pathname === "/" || url.pathname.startsWith("/chat"),
+          { timeout: 15_000, waitUntil: "commit" }
+        );
+      } catch (error) {
+        /**
+         * During cold starts the Turbopack dev server can take longer than 15s
+         * to stream the post-registration redirect. Rather than failing the
+         * setup we log and continue, letting `ensureLoggedIn` validate the
+         * credentials session explicitly.
+         */
+        console.warn("Playwright login warmup timed out waiting for redirect", {
+          cause: error,
+        });
+      }
+    }
+
     await ensureLoggedIn(page, baseURL, credentials);
 
     fs.mkdirSync(AUTH_DIR, { recursive: true });

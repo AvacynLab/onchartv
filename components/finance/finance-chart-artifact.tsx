@@ -3,6 +3,7 @@
 import React from "react";
 import {
   memo,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -24,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import type {
   FinanceChartAnnotationsArtifact,
   FinanceChartArtifact as FinanceChartArtifactPayload,
+  FinanceOverlaySeriesPoint,
 } from "@/lib/finance/types";
 import { cn } from "@/lib/utils";
 import { ChartAnnotationsPanel } from "./chart-annotations-panel";
@@ -78,12 +80,90 @@ type ThemePalette = {
 };
 
 /**
- * Lightweight Charts (the underlying finance renderer) only accepts CSS Level
- * 3 colour syntax for the `hsl()` helpers. Our design tokens use the more
- * modern whitespace-separated notation which triggers runtime "Cannot parse
- * color" errors. Normalising the tokens once keeps the component resilient on
- * both the server (during hydration) and the client (when Playwright toggles
- * themes mid-test).
+ * Clamp a numeric value into the inclusive [0, 1] interval. Lightweight Charts
+ * expects channel intensities and alpha components to respect this range so we
+ * coerce untrusted input before converting to RGB.
+ */
+const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
+
+const hueToDegrees = (raw: string) => {
+  const value = Number.parseFloat(raw);
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+
+  const lower = raw.toLowerCase();
+
+  if (lower.endsWith("rad")) {
+    return (((value * 180) / Math.PI) % 360 + 360) % 360;
+  }
+
+  if (lower.endsWith("turn")) {
+    return ((value * 360) % 360 + 360) % 360;
+  }
+
+  return ((value % 360) + 360) % 360;
+};
+
+const percentageToUnitInterval = (raw: string) => {
+  const lower = raw.toLowerCase();
+  const numeric = Number.parseFloat(lower);
+
+  if (!Number.isFinite(numeric)) {
+    return null;
+  }
+
+  if (lower.endsWith("%")) {
+    return clamp01(numeric / 100);
+  }
+
+  return clamp01(numeric);
+};
+
+const alphaToUnitInterval = (raw: string) => {
+  const lower = raw.trim().toLowerCase();
+
+  if (lower.endsWith("%")) {
+    const numeric = Number.parseFloat(lower);
+    return Number.isFinite(numeric) ? clamp01(numeric / 100) : null;
+  }
+
+  const numeric = Number.parseFloat(lower);
+  return Number.isFinite(numeric) ? clamp01(numeric) : null;
+};
+
+const hue2rgb = (p: number, q: number, t: number) => {
+  let temp = t;
+  if (temp < 0) temp += 1;
+  if (temp > 1) temp -= 1;
+  if (temp < 1 / 6) return p + (q - p) * 6 * temp;
+  if (temp < 1 / 2) return q;
+  if (temp < 2 / 3) return p + (q - p) * (2 / 3 - temp) * 6;
+  return p;
+};
+
+const hslToRgb = (h: number, s: number, l: number) => {
+  if (s === 0) {
+    return [l, l, l] as const;
+  }
+
+  const hue = h / 360;
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+
+  return [
+    hue2rgb(p, q, hue + 1 / 3),
+    hue2rgb(p, q, hue),
+    hue2rgb(p, q, hue - 1 / 3),
+  ] as const;
+};
+
+/**
+ * Lightweight Charts only supports RGB/RGBA strings. Our design tokens rely on
+ * CSS Color Module Level 4's whitespace-separated HSL notation which both
+ * breaks on the chart side and emits runtime "Cannot parse color" errors. The
+ * normaliser therefore converts HSL(A) inputs into deterministic RGBA strings
+ * while returning every other colour verbatim.
  */
 export function normalizeFinanceColor(color: string): string {
   const trimmed = color.trim();
@@ -93,26 +173,35 @@ export function normalizeFinanceColor(color: string): string {
     return trimmed;
   }
 
-  if (trimmed.includes(",")) {
-    return `${hslMatch[1].toLowerCase()}(${hslMatch[2]})`;
-  }
-
   const [, fnName, body] = hslMatch;
   const [rawMain, rawAlpha] = body.split("/").map((segment) => segment.trim());
   const components = rawMain.split(/\s+/).filter(Boolean);
 
   if (components.length < 3) {
-    return `${fnName.toLowerCase()}(${rawMain})`;
+    return trimmed;
   }
 
-  const normalisedMain = components.join(", ");
-  const fn = fnName.toLowerCase();
+  const hue = hueToDegrees(components[0]);
+  const saturation = percentageToUnitInterval(components[1]);
+  const lightness = percentageToUnitInterval(components[2]);
 
-  if (rawAlpha) {
-    return `${fn}(${normalisedMain}, ${rawAlpha})`;
+  if (hue === null || saturation === null || lightness === null) {
+    return trimmed;
   }
 
-  return `${fn}(${normalisedMain})`;
+  const [r, g, b] = hslToRgb(hue, saturation, lightness);
+  const alpha =
+    rawAlpha && fnName.toLowerCase() === "hsla"
+      ? alphaToUnitInterval(rawAlpha)
+      : null;
+  const resolvedAlpha = alpha ?? 1;
+
+  const toRgbChannel = (value: number) => Math.round(clamp01(value) * 255);
+  const alphaString = Number(resolvedAlpha.toFixed(3))
+    .toString()
+    .replace(/\.0+$/, "");
+
+  return `rgba(${toRgbChannel(r)}, ${toRgbChannel(g)}, ${toRgbChannel(b)}, ${alphaString})`;
 }
 
 /** Internal helper describing the visible time window accepted by the scale. */
@@ -280,6 +369,40 @@ export const FinanceChartArtifact = memo(
     );
     const paletteRef = useRef<ThemePalette>(FALLBACK_PALETTE);
 
+    /**
+     * Tears down the imperative chart instance while ensuring all
+     * subscriptions and series are removed before unmounting the DOM node. The
+     * callback is reused across effects so we keep it stable with `useCallback`.
+     */
+    const disposeChart = useCallback(() => {
+      const chart = chartRef.current;
+      if (!chart) {
+        return;
+      }
+
+      if (crosshairHandlerRef.current) {
+        chart.unsubscribeCrosshairMove(crosshairHandlerRef.current);
+      }
+      if (clickHandlerRef.current) {
+        chart.unsubscribeClick(clickHandlerRef.current);
+      }
+
+      overlaySeriesRef.current.forEach((series) => {
+        chart.removeSeries(series);
+      });
+      overlaySeriesRef.current.clear();
+
+      if (candleSeriesRef.current) {
+        chart.removeSeries(candleSeriesRef.current);
+      }
+
+      chart.remove();
+      chartRef.current = null;
+      candleSeriesRef.current = null;
+      crosshairHandlerRef.current = null;
+      clickHandlerRef.current = null;
+    }, []);
+
     const [overlayVisibility, setOverlayVisibility] = useState<
       OverlayVisibilityState
     >({});
@@ -300,16 +423,33 @@ export const FinanceChartArtifact = memo(
       [artifact.symbol, artifact.timeframe]
     );
 
+    /**
+     * Finance payloads are streamed from the AI runtime and can therefore miss
+     * fields in edge cases. Sanitising the OHLCV series defensively prevents
+     * `undefined` timestamps from reaching the chart instance which would
+     * otherwise throw synchronisation errors during hydration.
+     */
+    const sanitizedOhlcv = useMemo(() => {
+      if (!Array.isArray(artifact.ohlcv)) {
+        return [] as FinanceChartArtifactPayload["ohlcv"];
+      }
+
+      return artifact.ohlcv.filter(
+        (candle): candle is FinanceChartArtifactPayload["ohlcv"][number] =>
+          Boolean(candle) && typeof candle.t === "number"
+      );
+    }, [artifact.ohlcv]);
+
     const candlestickData = useMemo(
       () =>
-        artifact.ohlcv.map((candle) => ({
+        sanitizedOhlcv.map((candle) => ({
           time: candle.t as UTCTimestamp,
           open: candle.o,
           high: candle.h,
           low: candle.l,
           close: candle.c,
         } satisfies CandlestickData)),
-      [artifact.ohlcv]
+      [sanitizedOhlcv]
     );
 
     const candleSnapshots = useMemo(
@@ -322,6 +462,23 @@ export const FinanceChartArtifact = memo(
     );
 
     const latestSnapshot = candleSnapshots.at(-1) ?? null;
+
+    const sanitizedOverlays = useMemo(() => {
+      if (!Array.isArray(artifact.overlays)) {
+        return [] as FinanceChartArtifactPayload["overlays"];
+      }
+
+      return artifact.overlays.filter((overlay) => {
+        return (
+          Boolean(overlay) &&
+          typeof overlay.length === "number" &&
+          typeof overlay.type === "string" &&
+          Array.isArray(overlay.values)
+        );
+      });
+    }, [artifact.overlays]);
+
+    const hasCandles = candlestickData.length > 0;
 
     useEffect(() => {
       if (typeof window === "undefined") {
@@ -380,99 +537,152 @@ export const FinanceChartArtifact = memo(
     }, []);
 
     useEffect(() => {
-      if (!containerRef.current || chartRef.current) {
+      if (hasCandles) {
         return;
       }
 
-      const chart = createChart(containerRef.current, {
-        height: 360,
-        layout: {
-          textColor: paletteRef.current.text,
-          background: { color: "transparent" },
-        },
-        grid: {
-          horzLines: { color: paletteRef.current.grid },
-          vertLines: { color: paletteRef.current.grid },
-        },
-        crosshair: {
-          mode: CrosshairMode.Normal,
-        },
-      });
+      setHovered(null);
+      setSelected(null);
+      disposeChart();
+    }, [disposeChart, hasCandles]);
 
-      const candleSeries = chart.addCandlestickSeries({
-        priceScaleId: "right",
-        upColor: paletteRef.current.candleUp,
-        borderUpColor: paletteRef.current.candleUpBorder,
-        wickUpColor: paletteRef.current.candleUpWick,
-        downColor: paletteRef.current.candleDown,
-        borderDownColor: paletteRef.current.candleDownBorder,
-        wickDownColor: paletteRef.current.candleDownWick,
-      });
+    useEffect(() => {
+      if (!hasCandles) {
+        return;
+      }
 
-      const crosshairHandler = (param: MouseEventParams<Time>) => {
-        if (!param || !param.time || !param.seriesData) {
-          setHovered(null);
+      const container = containerRef.current;
+      if (!container || chartRef.current) {
+        return;
+      }
+
+      let isDisposed = false;
+      let resizeObserver: ResizeObserver | null = null;
+      let rafId: number | null = null;
+
+      const initialiseChart = () => {
+        if (
+          isDisposed ||
+          !containerRef.current ||
+          chartRef.current ||
+          !hasCandles
+        ) {
           return;
         }
-        const seriesData = param.seriesData.get(candleSeries) as
-          | CandlestickData
-          | undefined;
-        if (seriesData) {
-          setHovered({
-            candle: seriesData,
-            label: buildCandleLabel(artifact.symbol, seriesData),
-          });
-        }
+
+        const chart = createChart(containerRef.current, {
+          height: 360,
+          layout: {
+            textColor: paletteRef.current.text,
+            background: { color: "transparent" },
+          },
+          grid: {
+            horzLines: { color: paletteRef.current.grid },
+            vertLines: { color: paletteRef.current.grid },
+          },
+          crosshair: {
+            mode: CrosshairMode.Normal,
+          },
+        });
+
+        const candleSeries = chart.addCandlestickSeries({
+          priceScaleId: "right",
+          upColor: paletteRef.current.candleUp,
+          borderUpColor: paletteRef.current.candleUpBorder,
+          wickUpColor: paletteRef.current.candleUpWick,
+          downColor: paletteRef.current.candleDown,
+          borderDownColor: paletteRef.current.candleDownBorder,
+          wickDownColor: paletteRef.current.candleDownWick,
+        });
+
+        const crosshairHandler = (param: MouseEventParams<Time>) => {
+          if (!param || !param.time || !param.seriesData) {
+            setHovered(null);
+            return;
+          }
+
+          const seriesData = param.seriesData.get(candleSeries) as
+            | CandlestickData
+            | undefined;
+
+          if (seriesData) {
+            setHovered({
+              candle: seriesData,
+              label: buildCandleLabel(artifact.symbol, seriesData),
+            });
+          } else {
+            setHovered(null);
+          }
+        };
+
+        const clickHandler = (param: MouseEventParams<Time>) => {
+          if (!param || !param.time || !param.seriesData) {
+            return;
+          }
+
+          const seriesData = param.seriesData.get(candleSeries) as
+            | CandlestickData
+            | undefined;
+
+          if (seriesData) {
+            const snapshot = {
+              candle: seriesData,
+              label: buildCandleLabel(artifact.symbol, seriesData),
+            } satisfies CandleSnapshot;
+            setSelected(snapshot);
+          }
+        };
+
+        chart.subscribeCrosshairMove(crosshairHandler);
+        chart.subscribeClick(clickHandler);
+
+        candleSeriesRef.current = candleSeries;
+        chartRef.current = chart;
+        crosshairHandlerRef.current = crosshairHandler;
+        clickHandlerRef.current = clickHandler;
       };
 
-      const clickHandler = (param: MouseEventParams<Time>) => {
-        if (!param || !param.time || !param.seriesData) {
-          return;
-        }
-        const seriesData = param.seriesData.get(candleSeries) as
-          | CandlestickData
-          | undefined;
-        if (seriesData) {
-          const snapshot = {
-            candle: seriesData,
-            label: buildCandleLabel(artifact.symbol, seriesData),
-          };
-          setSelected(snapshot);
-        }
-      };
-
-      chart.subscribeCrosshairMove(crosshairHandler);
-      chart.subscribeClick(clickHandler);
-
-      candleSeriesRef.current = candleSeries;
-      chartRef.current = chart;
-      crosshairHandlerRef.current = crosshairHandler;
-      clickHandlerRef.current = clickHandler;
+      const { width, height } = container.getBoundingClientRect();
+      if (width > 0 && height > 0) {
+        initialiseChart();
+      } else if (typeof ResizeObserver !== "undefined") {
+        resizeObserver = new ResizeObserver((entries) => {
+          const entry = entries.at(0);
+          if (!entry) {
+            return;
+          }
+          const { width: observedWidth, height: observedHeight } =
+            entry.contentRect;
+          if (observedWidth > 0 && observedHeight > 0) {
+            resizeObserver?.disconnect();
+            initialiseChart();
+          }
+        });
+        resizeObserver.observe(container);
+      } else if (typeof requestAnimationFrame === "function") {
+        rafId = requestAnimationFrame(() => {
+          initialiseChart();
+        });
+      } else {
+        initialiseChart();
+      }
 
       return () => {
-        if (crosshairHandlerRef.current) {
-          chart.unsubscribeCrosshairMove(crosshairHandlerRef.current);
+        isDisposed = true;
+        if (resizeObserver) {
+          resizeObserver.disconnect();
         }
-        if (clickHandlerRef.current) {
-          chart.unsubscribeClick(clickHandlerRef.current);
+        if (rafId !== null && typeof cancelAnimationFrame === "function") {
+          cancelAnimationFrame(rafId);
         }
-        overlaySeriesRef.current.forEach((series) => {
-          chart.removeSeries(series);
-        });
-        overlaySeriesRef.current.clear();
-        chart.removeSeries(candleSeries);
-        chart.remove();
-        chartRef.current = null;
-        candleSeriesRef.current = null;
-        crosshairHandlerRef.current = null;
-        clickHandlerRef.current = null;
+        disposeChart();
       };
-    }, [artifact.symbol]);
+    }, [artifact.symbol, disposeChart, hasCandles]);
 
     useEffect(() => {
       const chart = chartRef.current;
       const candleSeries = candleSeriesRef.current;
-      if (!chart || !candleSeries) {
+      if (!chart || !candleSeries || !hasCandles) {
         return;
       }
 
@@ -480,11 +690,11 @@ export const FinanceChartArtifact = memo(
       chart.timeScale().fitContent();
       setSelected((current) => current ?? latestSnapshot);
       setHovered(null);
-    }, [candlestickData, latestSnapshot]);
+    }, [candlestickData, hasCandles, latestSnapshot]);
 
     useEffect(() => {
       const chart = chartRef.current;
-      if (!chart) {
+      if (!chart || !hasCandles) {
         return;
       }
 
@@ -493,7 +703,7 @@ export const FinanceChartArtifact = memo(
       });
       overlaySeriesRef.current.clear();
 
-      artifact.overlays.forEach((overlay) => {
+      sanitizedOverlays.forEach((overlay) => {
         /**
          * The palette ref keeps the latest themed colours so overlays blend
          * seamlessly with the surrounding UI in both light and dark contexts.
@@ -508,12 +718,19 @@ export const FinanceChartArtifact = memo(
           priceScaleId: "right",
           title: `${overlay.type.toUpperCase()} (${overlay.length})`,
         });
-        const lineData = overlay.values
-          .filter((point) => point.v !== null)
-          .map((point) => ({
-            time: point.t as UTCTimestamp,
-            value: point.v as number,
-          }));
+          const lineData = overlay.values
+            .filter((point: FinanceOverlaySeriesPoint | null | undefined): point is FinanceOverlaySeriesPoint => {
+              return (
+                point !== null &&
+                point !== undefined &&
+                point.v !== null &&
+                typeof point.t === "number"
+              );
+            })
+            .map((point: FinanceOverlaySeriesPoint) => ({
+              time: point.t as UTCTimestamp,
+              value: point.v as number,
+            }));
         series.setData(lineData);
         overlaySeriesRef.current.set(overlayId(overlay), series);
       });
@@ -521,7 +738,7 @@ export const FinanceChartArtifact = memo(
       setOverlayVisibility((prev) => {
         const next: OverlayVisibilityState = {};
         const stored = overlayPreferencesRef.current;
-        artifact.overlays.forEach((overlay) => {
+        sanitizedOverlays.forEach((overlay) => {
           const id = overlayId(overlay);
           const visible = stored?.[id] ?? prev[id] ?? true;
           next[id] = visible;
@@ -539,7 +756,7 @@ export const FinanceChartArtifact = memo(
         });
         overlaySeriesRef.current.clear();
       };
-    }, [artifact.overlays]);
+    }, [hasCandles, sanitizedOverlays]);
 
     useEffect(() => {
       overlayPreferencesRef.current = overlayVisibility;
@@ -600,7 +817,7 @@ export const FinanceChartArtifact = memo(
       });
 
       overlaySeriesRef.current.forEach((series, id) => {
-        const overlayDefinition = artifact.overlays.find(
+        const overlayDefinition = sanitizedOverlays.find(
           (candidate) => overlayId(candidate) === id
         );
         if (!overlayDefinition) {
@@ -613,7 +830,7 @@ export const FinanceChartArtifact = memo(
               : palette.overlayEma,
         });
       });
-    }, [palette, artifact.overlays]);
+    }, [palette, sanitizedOverlays]);
 
     const handleToggleOverlay = (id: string) => {
       setOverlayVisibility((prev) => {
@@ -636,8 +853,8 @@ export const FinanceChartArtifact = memo(
         chart.timeScale().fitContent();
         return;
       }
-      const last = artifact.ohlcv.at(-1);
-      const first = artifact.ohlcv.at(0);
+      const last = sanitizedOhlcv.at(-1);
+      const first = sanitizedOhlcv.at(0);
       if (!last || !first) {
         return;
       }
@@ -736,7 +953,9 @@ export const FinanceChartArtifact = memo(
       setHovered(snapshot);
     };
 
-    const activeSnapshot = hovered ?? selected ?? latestSnapshot;
+    const activeSnapshot = hasCandles
+      ? hovered ?? selected ?? latestSnapshot
+      : null;
 
     return (
       <div className="space-y-4" data-testid="finance-chart-artifact">
@@ -789,6 +1008,18 @@ export const FinanceChartArtifact = memo(
             aux extrêmes et Entrée pour lancer l'explication lorsqu'elle est
             disponible.
           </span>
+          {!hasCandles ? (
+            <div
+              className="flex h-60 flex-col items-center justify-center gap-2 text-center"
+              data-testid="finance-chart-empty-state"
+              role="status"
+            >
+              <p className="font-medium">Données indisponibles</p>
+              <p className="text-muted-foreground text-sm">
+                Ce graphique ne contient aucune bougie exploitable pour le moment.
+              </p>
+            </div>
+          ) : null}
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-4">
@@ -798,17 +1029,24 @@ export const FinanceChartArtifact = memo(
             className="flex min-w-0 flex-wrap items-center gap-2 border-0 p-0"
           >
             <legend className="sr-only">Indicateurs superposés</legend>
-            {artifact.overlays.length === 0 ? (
+            {sanitizedOverlays.length === 0 ? (
               <p className="text-muted-foreground text-sm">
                 Aucun indicateur superposé.
               </p>
             ) : (
-              artifact.overlays.map((overlay) => {
+              sanitizedOverlays.map((overlay) => {
                 const id = overlayId(overlay);
                 const isActive = overlayVisibility[id] ?? true;
                 return (
                   <Button
                     key={id}
+                    /**
+                     * Deterministic selector consumed by the Playwright suite. Relying on
+                     * a data-testid keeps the journey resilient against localisation and
+                     * design tweaks while still exposing the accessibility attributes for
+                     * screen readers.
+                     */
+                    data-testid={`finance-overlay-toggle-${id}`}
                     aria-pressed={isActive}
                     className={cn(
                       "border",

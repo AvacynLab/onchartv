@@ -24,7 +24,7 @@ test.describe("Finance artefacts accessibility", () => {
     await zoomPreset.focus();
     await expect(zoomPreset).toBeFocused();
 
-    const overlayToggle = page.getByRole("button", { name: "SMA (50)" });
+    const overlayToggle = page.getByTestId("finance-overlay-toggle-sma-50");
     await expect(overlayToggle).toBeVisible();
     await overlayToggle.focus();
     await expect(overlayToggle).toBeFocused();

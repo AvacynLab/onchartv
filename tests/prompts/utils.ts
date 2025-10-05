@@ -398,5 +398,23 @@ As we move forward, Silicon Valley continues to reinvent itself. While some pred
     ];
   }
 
-  return [{ id: "6", type: "text-delta", delta: "Unknown test prompt!" }];
+  const fallbackId = generateId();
+
+  /**
+   * Hermetic Playwright runs occasionally exercise prompts that do not yet
+   * have a deterministic script in our fixture catalog. Returning a fully
+   * formed text stream (start → delta → end → finish) keeps the chat UI state
+   * machine moving so the tests never hang waiting for a `finish` event that
+   * will never arrive.
+   */
+  return [
+    { id: fallbackId, type: "text-start" },
+    { id: fallbackId, type: "text-delta", delta: "Unknown test prompt!" },
+    { id: fallbackId, type: "text-end" },
+    {
+      type: "finish",
+      finishReason: "stop",
+      usage: { inputTokens: 0, outputTokens: 4, totalTokens: 4 },
+    },
+  ];
 };

@@ -32,6 +32,9 @@ const isClient = typeof window !== "undefined";
  */
 const isNextBuild = process.env.NEXT_PHASE === "phase-production-build";
 const openaiApiKey = process.env.OPENAI_API_KEY?.trim();
+const openaiBaseUrl = process.env.OPENAI_BASE_URL?.trim();
+const openaiOrganization = process.env.OPENAI_ORGANIZATION?.trim();
+const openaiProject = process.env.OPENAI_PROJECT?.trim();
 const baseChatModelId = process.env.OPENAI_MODEL_ID?.trim();
 const reasoningModelId =
   process.env.OPENAI_REASONING_MODEL_ID?.trim() ?? baseChatModelId;
@@ -46,7 +49,6 @@ const isMockTestingEnvironment = Boolean(
     Reflect.get(env, "PLAYWRIGHT") ??
     Reflect.get(env, "CI_PLAYWRIGHT")
 );
-
 type MockLanguageModelModule = {
   readonly chatModel: LanguageModelV2;
   readonly reasoningModel: LanguageModelV2;
@@ -56,19 +58,20 @@ type MockLanguageModelModule = {
 
 type InlineMockProfile = "basic" | "playwright";
 
-function createMockProvider() {
-  const createProviderFromModels = (models: MockLanguageModelModule) => {
-    const { artifactModel, chatModel, reasoningModel, titleModel } = models;
+function createProviderFromModels(models: MockLanguageModelModule) {
+  const { artifactModel, chatModel, reasoningModel, titleModel } = models;
 
-    return customProvider({
-      languageModels: {
-        "chat-model": chatModel,
-        "chat-model-reasoning": reasoningModel,
-        "title-model": titleModel,
-        "artifact-model": artifactModel,
-      },
-    });
-  };
+  return customProvider({
+    languageModels: {
+      "chat-model": chatModel,
+      "chat-model-reasoning": reasoningModel,
+      "title-model": titleModel,
+      "artifact-model": artifactModel,
+    },
+  });
+}
+
+function createMockProvider() {
 
   const shouldPreferTestingFixtures =
     isMockTestingEnvironment || isPlaywrightEnvironment;
@@ -758,10 +761,6 @@ if (!shouldUseMocks) {
 }
 
 if (!shouldUseMocks) {
-  if (!openaiApiKey) {
-    throw new Error("OPENAI_API_KEY is not set");
-  }
-
   if (!baseChatModelId) {
     throw new Error("OPENAI_MODEL_ID is not set");
   }
@@ -771,12 +770,40 @@ if (!shouldUseMocks) {
       "OPENAI_MODEL_ID is not set for one of the required capabilities"
     );
   }
+
+  if (!openaiApiKey) {
+    throw new Error("OPENAI_API_KEY is not set");
+  }
 }
 
 const openaiProvider = !shouldUseMocks
-  ? createOpenAI!({
-      apiKey: openaiApiKey!,
-    })
+  ? (() => {
+      const providerOptions: NonNullable<Parameters<CreateOpenAI>[0]> = {
+        apiKey: openaiApiKey!,
+      };
+
+      if (openaiBaseUrl) {
+        providerOptions.baseURL = openaiBaseUrl;
+      }
+
+      if (openaiOrganization) {
+        providerOptions.organization = openaiOrganization;
+      }
+
+      if (openaiProject) {
+        providerOptions.project = openaiProject;
+      }
+
+      return createOpenAI!(providerOptions);
+    })()
+  : null;
+
+if (!shouldUseMocks && !openaiProvider) {
+  throw new Error("No language model provider available");
+}
+
+const resolveLanguageModel = !shouldUseMocks
+  ? (modelId: string) => openaiProvider!.languageModel(modelId)
   : null;
 
 /**
@@ -825,12 +852,13 @@ const guardMiddleware: LanguageModelV2Middleware = {
 };
 
 /**
- * Helper that attaches the guard middleware to an OpenAI model while preserving
- * the reported model identifier for downstream analytics/usage reporting.
+ * Helper that attaches the guard middleware to a configured provider model while
+ * preserving the reported model identifier for downstream analytics/usage
+ * reporting.
  */
 const buildGuardedModel = (modelId: string) =>
   wrapLanguageModel({
-    model: openaiProvider!.languageModel(modelId),
+    model: resolveLanguageModel!(modelId),
     middleware: guardMiddleware,
     modelId,
   });
@@ -857,6 +885,12 @@ export const myProvider = shouldUseMocks
         "artifact-model": buildGuardedModel(artifactModelId!),
       },
     });
+
+export function createHermeticMockProvider(
+  profile: InlineMockProfile = "playwright"
+) {
+  return createProviderFromModels(createInlineMockLanguageModels(profile));
+}
 
 /**
  * Executes the supplied operation with exponential backoff while respecting

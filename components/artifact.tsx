@@ -3,6 +3,8 @@ import { formatDistance } from "date-fns";
 import equal from "fast-deep-equal";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  type ComponentProps,
+  type ComponentType,
   type Dispatch,
   memo,
   type SetStateAction,
@@ -21,6 +23,10 @@ import type { Document, Vote } from "@/lib/db/schema";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import { fetcher } from "@/lib/utils";
 import { ArtifactActions } from "./artifact-actions";
+import type {
+  ArtifactActionContext,
+  ArtifactContent,
+} from "./create-artifact";
 import { ArtifactCloseButton } from "./artifact-close-button";
 import { ArtifactMessages } from "./artifact-messages";
 import { MultimodalInput } from "./multimodal-input";
@@ -254,14 +260,59 @@ function PureArtifact({
     throw new Error("Artifact definition not found!");
   }
 
+  type ContentProps = ComponentProps<typeof artifactDefinition.content>;
+  const ContentComponent =
+    artifactDefinition.content as ComponentType<ArtifactContent<unknown>>;
+
+  // Normalise the incoming metadata to the component-specific shape while
+  // preserving the nullable contract used during streaming fallbacks.
+  const metadataForContent =
+    (metadata ?? null) as ArtifactContent<unknown>["metadata"];
+
+  const setMetadataForContent = useCallback(
+    (nextMetadata: SetStateAction<ContentProps["metadata"] | null>) => {
+      setMetadata((previousMetadata: unknown | null) => {
+        const current =
+          (previousMetadata ?? null) as ArtifactContent<unknown>["metadata"];
+
+        const resolvedMetadata =
+          typeof nextMetadata === "function"
+            ? (nextMetadata as (
+                value: ArtifactContent<unknown>["metadata"] | null
+              ) => ArtifactContent<unknown>["metadata"] | null)(current)
+            : nextMetadata;
+
+        return resolvedMetadata ?? null;
+      });
+    },
+    [setMetadata]
+  );
+
+  // Action handlers operate on the broader artefact context, so expose the
+  // metadata through that lens to avoid repeated casts at the call sites.
+  const metadataForActions = metadataForContent as ArtifactActionContext["metadata"];
+  const setMetadataForActions =
+    setMetadataForContent as ArtifactActionContext["setMetadata"];
+
+  const initializeArtifact = artifactDefinition.initialize as
+    | ((params: {
+        documentId: string;
+        setMetadata: ContentProps["setMetadata"];
+      }) => void | Promise<void>)
+    | undefined;
+
   useEffect(() => {
-    if (artifact.documentId !== "init" && artifactDefinition.initialize) {
-      artifactDefinition.initialize({
+    if (artifact.documentId !== "init" && initializeArtifact) {
+      initializeArtifact({
         documentId: artifact.documentId,
-        setMetadata,
+        setMetadata: setMetadataForContent,
       });
     }
-  }, [artifact.documentId, artifactDefinition, setMetadata]);
+  }, [
+    artifact.documentId,
+    initializeArtifact,
+    setMetadataForContent,
+  ]);
 
   return (
     <AnimatePresence>
@@ -449,37 +500,37 @@ function PureArtifact({
                 </div>
               </div>
 
-              <ArtifactActions
-                artifact={artifact}
-                currentVersionIndex={currentVersionIndex}
-                handleVersionChange={handleVersionChange}
-                isCurrentVersion={isCurrentVersion}
-                metadata={metadata}
-                mode={mode}
-                setMetadata={setMetadata}
-              />
+                  <ArtifactActions
+                    artifact={artifact}
+                    currentVersionIndex={currentVersionIndex}
+                    handleVersionChange={handleVersionChange}
+                    isCurrentVersion={isCurrentVersion}
+                    metadata={metadataForActions}
+                    mode={mode}
+                    setMetadata={setMetadataForActions}
+                  />
             </div>
 
             <div className="h-full max-w-full! items-center overflow-y-scroll bg-background dark:bg-muted">
-              <artifactDefinition.content
-                content={
-                  isCurrentVersion
-                    ? artifact.content
-                    : getDocumentContentById(currentVersionIndex)
-                }
-                currentVersionIndex={currentVersionIndex}
-                getDocumentContentById={getDocumentContentById}
-                isCurrentVersion={isCurrentVersion}
-                isInline={false}
-                isLoading={isDocumentsFetching && !artifact.content}
-                metadata={metadata}
-                mode={mode}
-                onSaveContent={saveContent}
-                setMetadata={setMetadata}
-                status={artifact.status}
-                suggestions={[]}
-                title={artifact.title}
-              />
+                <ContentComponent
+                  content={
+                    isCurrentVersion
+                      ? artifact.content
+                      : getDocumentContentById(currentVersionIndex)
+                  }
+                  currentVersionIndex={currentVersionIndex}
+                  getDocumentContentById={getDocumentContentById}
+                  isCurrentVersion={isCurrentVersion}
+                  isInline={false}
+                  isLoading={isDocumentsFetching && !artifact.content}
+                  metadata={metadataForContent}
+                  mode={mode}
+                  onSaveContent={saveContent}
+                  setMetadata={setMetadataForContent}
+                  status={artifact.status}
+                  suggestions={[]}
+                  title={artifact.title}
+                />
 
               <AnimatePresence>
                 {isCurrentVersion && (

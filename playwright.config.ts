@@ -5,6 +5,7 @@ import { defineConfig, devices } from "@playwright/test";
 import { config } from "dotenv";
 
 import { resolvePreferredPortSync } from "./tests/utils/port-resolver";
+import { collectOpenAIEnvVars } from "./tests/utils/openai-env";
 
 config({
   path: ".env.local",
@@ -26,6 +27,16 @@ if (process.env.PLAYWRIGHT === "true") {
   // Surface the Playwright flag to client components so they can disable
   // remote resources (avatars, TokenLens catalog fetches, etc.).
   process.env.NEXT_PUBLIC_PLAYWRIGHT = "true";
+}
+
+if (!process.env.NEXT_PUBLIC_FEATURE_FINANCE) {
+  /**
+   * Keep the client-side finance flag aligned with the server toggle during e2e
+   * runs. This prevents the Playwright bootstrapping code from rendering
+   * finance components when the feature is deliberately disabled.
+   */
+  process.env.NEXT_PUBLIC_FEATURE_FINANCE =
+    process.env.FEATURE_FINANCE ?? "true";
 }
 
 const isHermeticPlaywrightRun =
@@ -56,6 +67,15 @@ const workerCount = process.env.CI
     : 8;
 
 const shouldStartWebServer = process.env.PLAYWRIGHT_MANUAL_SERVER !== "true";
+
+/**
+ * Mirror the boilerplate’s behaviour by forwarding the OpenAI credentials to
+ * the Playwright-managed dev server. Without this explicit propagation the
+ * Next.js process launched by Playwright would miss the secrets when CI runs
+ * with a minimal environment, causing the chat routes to fall back to the
+ * hermetic mocks even when we expect real completions.
+ */
+const openAIEnvVars = collectOpenAIEnvVars(process.env as NodeJS.ProcessEnv);
 
 /**
  * Determine which port Playwright should target. We strongly prefer reusing
@@ -162,9 +182,13 @@ export default defineConfig({
     ? {
         command: "node --import tsx tests/utils/run-next-dev.ts",
         url: `${baseURL}/ping`,
-        timeout: 120 * 1000,
+        // Allow extra time for the dev server to compile the finance bundles on
+        // cold CI machines. The previous 120s budget was occasionally tight
+        // when Playwright requested a rebuild after installing dependencies.
+        timeout: 180 * 1000,
         reuseExistingServer: !process.env.CI,
         env: {
+          ...openAIEnvVars,
           /**
            * Force the spawned Next.js dev server to activate the Playwright
            * feature flag so our hermetic database and asset mocks kick in.
@@ -172,6 +196,24 @@ export default defineConfig({
            * Google Fonts, both of which are unavailable in CI.
            */
           PLAYWRIGHT: "true",
+          /**
+           * Expose the public Playwright flag to the dev server so client-side
+           * bundles (e.g. Pyodide loader, avatar fallbacks) can disable remote
+           * fetches during hermetic runs. The flag mirrors the environment that
+           * the CI workflow exports when invoking `pnpm e2e`.
+           */
+          NEXT_PUBLIC_PLAYWRIGHT: "true",
+          /**
+           * Surface the finance toggle to both the server and the client build
+           * pipeline. This keeps the behaviour identical to the CI workflow
+           * where FEATURE_FINANCE/NEXT_PUBLIC_FEATURE_FINANCE are exported and
+           * avoids subtle mismatches when the dev server is spawned locally.
+           */
+          FEATURE_FINANCE: process.env.FEATURE_FINANCE ?? "true",
+          NEXT_PUBLIC_FEATURE_FINANCE:
+            process.env.NEXT_PUBLIC_FEATURE_FINANCE ??
+            process.env.FEATURE_FINANCE ??
+            "true",
           PORT: String(resolvedPort),
         },
       }

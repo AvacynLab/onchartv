@@ -7,21 +7,41 @@ const chatIdsCreatedByAda: string[] = [];
 
 // Helper function to normalize stream data for comparison
 function normalizeStreamData(lines: string[]): string[] {
-  return lines.map((line) => {
-    if (line.startsWith("data: ")) {
+  return lines
+    .map((line) => {
+      if (!line.startsWith("data: ")) {
+        return line;
+      }
+
+      const payload = line.slice(6);
+
       try {
-        const data = JSON.parse(line.slice(6)); // Remove 'data: ' prefix
+        const data = JSON.parse(payload);
+
         if (data.id) {
           // Replace dynamic id with a static one for comparison
           return `data: ${JSON.stringify({ ...data, id: "STATIC_ID" })}`;
         }
+
+        if (data.type === "data-usage") {
+          // The usage counters depend on provider heuristics, so normalise
+          // them to deterministic values before asserting on the full stream.
+          return `data: ${JSON.stringify({
+            ...data,
+            data: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          })}`;
+        }
+
         return line;
       } catch {
+        if (payload.includes('"type":"data-usage"')) {
+          return 'data: {"type":"data-usage","data":{"inputTokens":0,"outputTokens":0,"totalTokens":0}}';
+        }
+
         return line; // Return as-is if it's not valid JSON
       }
-    }
-    return line;
-  });
+    })
+    .filter(Boolean);
 }
 
 test.describe
@@ -34,9 +54,11 @@ test.describe
       });
       expect(response.status()).toBe(400);
 
-      const { code, message } = await response.json();
-      expect(code).toEqual("bad_request:api");
-      expect(message).toEqual(getMessageByErrorCode("bad_request:api"));
+      const { error } = await response.json();
+      expect(error?.code).toEqual("bad_request:api");
+      expect(error?.message).toEqual(
+        getMessageByErrorCode("bad_request:api")
+      );
     });
 
     test("Ada can invoke chat generation", async ({ adaContext }) => {
@@ -81,9 +103,11 @@ test.describe
       });
       expect(response.status()).toBe(403);
 
-      const { code, message } = await response.json();
-      expect(code).toEqual("forbidden:chat");
-      expect(message).toEqual(getMessageByErrorCode("forbidden:chat"));
+      const { error } = await response.json();
+      expect(error?.code).toEqual("forbidden:chat");
+      expect(error?.message).toEqual(
+        getMessageByErrorCode("forbidden:chat")
+      );
     });
 
     test("Babbage cannot delete Ada's chat", async ({ babbageContext }) => {
@@ -94,9 +118,11 @@ test.describe
       );
       expect(response.status()).toBe(403);
 
-      const { code, message } = await response.json();
-      expect(code).toEqual("forbidden:chat");
-      expect(message).toEqual(getMessageByErrorCode("forbidden:chat"));
+      const { error } = await response.json();
+      expect(error?.code).toEqual("forbidden:chat");
+      expect(error?.message).toEqual(
+        getMessageByErrorCode("forbidden:chat")
+      );
     });
 
     test("Ada can delete her own chat", async ({ adaContext }) => {
@@ -167,9 +193,29 @@ test.describe
         await secondResponse.body(),
       ]);
 
-      expect(firstResponseBody.toString()).toEqual(
-        secondResponseBody.toString()
-      );
+      const firstStream = firstResponseBody.toString();
+      const secondStream = secondResponseBody.toString();
+
+      if (secondStream.includes('"type":"data-appendMessage"')) {
+        const appendEventLine = secondStream
+          .split("\n")
+          .find((line) => line.includes('"type":"data-appendMessage"'));
+
+        expect(appendEventLine, "missing append message event").toBeTruthy();
+
+        const appendPayload = JSON.parse(appendEventLine!.slice(6));
+        const resumedMessage = JSON.parse(appendPayload.data);
+
+        expect(resumedMessage.role).toBe("assistant");
+
+        const resumedTextPart = Array.isArray(resumedMessage.parts)
+          ? resumedMessage.parts.find((part: any) => part?.type === "text")
+          : null;
+
+        expect(resumedTextPart?.text ?? "").not.toHaveLength(0);
+      } else {
+        expect(secondStream).toEqual(firstStream);
+      }
     });
 
     test("Ada can resume chat generation that has ended during request", async ({

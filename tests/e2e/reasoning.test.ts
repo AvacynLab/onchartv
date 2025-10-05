@@ -26,15 +26,21 @@ test.describe("chat activity with reasoning", () => {
     await chatPage.isGenerationComplete();
 
     const assistantMessage = await chatPage.getRecentAssistantMessage();
-    const reasoningElement =
-      assistantMessage.element.getByTestId("message-reasoning");
-    expect(reasoningElement).toBeVisible();
+    const reasoningContent =
+      assistantMessage.element.getByTestId("message-reasoning-content");
+
+    // The accordion content stays mounted even when hidden, so we assert the
+    // data-state transitions instead of relying on visibility checks that can
+    // be racy with Tailwind’s exit animations.
+    await expect(reasoningContent).toHaveAttribute("data-state", "open");
 
     await assistantMessage.toggleReasoningVisibility();
-    await expect(reasoningElement).not.toBeVisible();
+    await expect(reasoningContent).toHaveAttribute("data-state", "closed");
+    await expect(reasoningContent).not.toBeVisible();
 
     await assistantMessage.toggleReasoningVisibility();
-    await expect(reasoningElement).toBeVisible();
+    await expect(reasoningContent).toHaveAttribute("data-state", "open");
+    await expect(reasoningContent).toBeVisible();
   });
 
   test("Curie can edit message and resubmit", async () => {
@@ -42,9 +48,9 @@ test.describe("chat activity with reasoning", () => {
     await chatPage.isGenerationComplete();
 
     const assistantMessage = await chatPage.getRecentAssistantMessage();
-    const reasoningElement =
-      assistantMessage.element.getByTestId("message-reasoning");
-    expect(reasoningElement).toBeVisible();
+    const reasoningContent =
+      assistantMessage.element.getByTestId("message-reasoning-content");
+    await expect(reasoningContent).toHaveAttribute("data-state", "open");
 
     const userMessage = await chatPage.getRecentUserMessage();
 
@@ -58,5 +64,11 @@ test.describe("chat activity with reasoning", () => {
     expect(updatedAssistantMessage.reasoning).toBe(
       "Grass is green because of chlorophyll absorption!"
     );
+
+    await expect(
+      updatedAssistantMessage.element.getByTestId(
+        "message-reasoning-content"
+      )
+    ).toHaveAttribute("data-state", "open");
   });
 });

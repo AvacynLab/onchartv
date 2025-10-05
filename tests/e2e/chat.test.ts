@@ -2,6 +2,18 @@ import { expect, test } from "../fixtures";
 import { ChatPage } from "../pages/chat";
 
 test.describe("Chat activity", () => {
+  /**
+   * Running the chat scenarios in parallel overwhelms the Playwright-managed
+   * Next.js dev server: each test boots a fresh chat thread which triggers
+   * expensive `/api/history` revalidations. Under concurrency the dev server
+   * stalls for minutes, leaving the UI in the "Thinking…" state and timing the
+   * suite out. Serialising the describe keeps the traffic sequential while the
+   * broader e2e matrix still benefits from multiple workers.
+   */
+  test.describe.configure({
+    mode: "serial",
+  });
+
   let chatPage: ChatPage;
 
   test.beforeEach(async ({ page }) => {
@@ -152,14 +164,14 @@ test.describe("Chat activity", () => {
   });
 
   test("auto-scrolls to bottom after submitting new messages", async () => {
-    test.fixme();
     await chatPage.sendMultipleMessages(5, (i) => `filling message #${i}`);
     await chatPage.waitForScrollToBottom();
   });
 
   test("scroll button appears when user scrolls up, hides on click", async () => {
-    test.fixme();
     await chatPage.sendMultipleMessages(5, (i) => `filling message #${i}`);
+    await chatPage.waitForScrollToBottom();
+
     await expect(chatPage.scrollToBottomButton).not.toBeVisible();
 
     await chatPage.scrollToTop();

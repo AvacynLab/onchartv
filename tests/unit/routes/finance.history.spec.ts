@@ -84,4 +84,39 @@ describe("/api/finance/history", () => {
 
     historySpy.mockRestore();
   });
+
+  it("rejects limits above the server-side maximum", async () => {
+    const response = await GET(
+      new Request("http://localhost/api/finance/history?symbol=AAPL&limit=6000")
+    );
+
+    expect(response.status).toBe(400);
+    const error = await response.json();
+    expect(error.error.code).toBe("bad_request:api");
+    expect(error.error.cause).toMatch(/maximum of 5000/);
+  });
+
+  it("rejects decimal limits to avoid silent truncation", async () => {
+    const response = await GET(
+      new Request("http://localhost/api/finance/history?symbol=AAPL&limit=5.5")
+    );
+
+    expect(response.status).toBe(400);
+    const error = await response.json();
+    expect(error.error.code).toBe("bad_request:api");
+    expect(error.error.cause).toMatch(/positive integer/);
+  });
+
+  it("rejects ranges where 'from' is later than 'to'", async () => {
+    const response = await GET(
+      new Request(
+        "http://localhost/api/finance/history?symbol=AAPL&from=2024-06-10T00:00:00Z&to=2024-06-01T00:00:00Z"
+      )
+    );
+
+    expect(response.status).toBe(400);
+    const error = await response.json();
+    expect(error.error.code).toBe("bad_request:api");
+    expect(error.error.cause).toMatch(/earlier than 'to'/);
+  });
 });

@@ -79,12 +79,15 @@ const PurePreviewMessage = ({
   useDataStream();
   const chatComposer = useChatComposer();
 
+  // Tag the rendered message with its unique identifier so e2e helpers
+  // can detect updates even when the assistant reuses identical copy.
   return (
     <motion.div
       animate={{ opacity: 1 }}
       className="group/message w-full"
       data-role={message.role}
       data-testid={`message-${message.role}`}
+      data-message-id={message.id}
       initial={{ opacity: 0 }}
     >
       <div
@@ -331,10 +334,18 @@ const PurePreviewMessage = ({
                 );
               }
 
+              const previewArgs = part.output
+                ? {
+                    ...part.output,
+                    kind: part.output.kind ?? "text",
+                    isUpdate: true,
+                  }
+                : null;
+
               return (
                 <div className="relative" key={toolCallId}>
                   <DocumentPreview
-                    args={{ ...part.output, isUpdate: true }}
+                    args={previewArgs}
                     isReadonly={isReadonly}
                     result={part.output}
                   />

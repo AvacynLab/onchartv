@@ -56,7 +56,14 @@ const ACTIVE_CHAT_STATUSES: ReadonlySet<UseChatHelpers<ChatMessage>["status"]> =
  * would otherwise swap the control back to "Send" before users can interact
  * with it.
  */
-const STOP_BUTTON_MINIMUM_DURATION_MS = 200;
+/**
+ * Délai minimal (en millisecondes) pendant lequel le bouton d'arrêt reste visible
+ * après la fin d'un streaming. Les réponses hermétiques de Playwright arrivent
+ * quasi instantanément ; conserver le bouton environ trois quarts de seconde
+ * laisse suffisamment de marge aux assertions e2e pour interagir avec le
+ * composant même lorsque le modèle a déjà terminé.
+ */
+export const STOP_BUTTON_MINIMUM_DURATION_MS = 750;
 
 function PureMultimodalInput({
   chatId,
@@ -517,8 +524,16 @@ function PureModelSelectorCompact({
       }}
       value={selectedModel?.name}
     >
+      {/**
+       * Expose a deterministic test identifier on the compact selector trigger so
+       * the Playwright helpers (and their supporting unit tests) can detect when
+       * the chat shell finished hydrating. The reasoning suite switches models
+       * immediately after authentication and previously timed out because the
+       * locator was missing from the DOM.
+       */}
       <Trigger
         className="flex h-8 items-center gap-2 rounded-lg border-0 bg-background px-2 text-foreground shadow-none transition-colors hover:bg-accent focus:outline-none focus:ring-0 focus-visible:ring-0 focus-visible:ring-offset-0"
+        data-testid="model-selector"
         type="button"
       >
         <CpuIcon size={16} />
@@ -530,7 +545,11 @@ function PureModelSelectorCompact({
       <PromptInputModelSelectContent className="min-w-[260px] p-0">
         <div className="flex flex-col gap-px">
           {chatModels.map((model) => (
-            <SelectItem key={model.id} value={model.name}>
+            <SelectItem
+              data-testid={`model-selector-item-${model.id}`}
+              key={model.id}
+              value={model.name}
+            >
               <div className="truncate font-medium text-xs">{model.name}</div>
               <div className="mt-px truncate text-[10px] text-muted-foreground leading-tight">
                 {model.description}

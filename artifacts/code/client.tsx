@@ -66,6 +66,14 @@ type Metadata = {
   outputs: ConsoleOutput[];
 };
 
+/**
+ * Normalises optional metadata coming from the shared artefact store so the
+ * action handlers can treat it as a fully initialised structure.
+ */
+function ensureMetadata(metadata: Metadata | null): Metadata {
+  return metadata ?? { outputs: [] };
+}
+
 export const codeArtifact = new Artifact<"code", Metadata>({
   kind: "code",
   description:
@@ -101,10 +109,10 @@ export const codeArtifact = new Artifact<"code", Metadata>({
           <Console
             consoleOutputs={metadata.outputs}
             setConsoleOutputs={() => {
-              setMetadata({
-                ...metadata,
+              setMetadata((current) => ({
+                ...ensureMetadata(current),
                 outputs: [],
-              });
+              }));
             }}
           />
         )}
@@ -120,17 +128,21 @@ export const codeArtifact = new Artifact<"code", Metadata>({
         const runId = generateUUID();
         const outputContent: ConsoleOutputContent[] = [];
 
-        setMetadata((metadata) => ({
-          ...metadata,
-          outputs: [
-            ...metadata.outputs,
+        setMetadata((metadata) => {
+          const current = ensureMetadata(metadata);
+
+          return {
+            ...current,
+            outputs: [
+            ...current.outputs,
             {
               id: runId,
               contents: [],
               status: "in_progress",
             },
           ],
-        }));
+          };
+        });
 
         try {
           // @ts-expect-error - loadPyodide is not defined
@@ -151,17 +163,21 @@ export const codeArtifact = new Artifact<"code", Metadata>({
 
           await currentPyodideInstance.loadPackagesFromImports(content, {
             messageCallback: (message: string) => {
-              setMetadata((metadata) => ({
-                ...metadata,
-                outputs: [
-                  ...metadata.outputs.filter((output) => output.id !== runId),
+              setMetadata((metadata) => {
+                const current = ensureMetadata(metadata);
+
+                return {
+                  ...current,
+                  outputs: [
+                  ...current.outputs.filter((output) => output.id !== runId),
                   {
                     id: runId,
                     contents: [{ type: "text", value: message }],
                     status: "loading_packages",
                   },
                 ],
-              }));
+                };
+              });
             },
           });
 
@@ -182,29 +198,40 @@ export const codeArtifact = new Artifact<"code", Metadata>({
 
           await currentPyodideInstance.runPythonAsync(content);
 
-          setMetadata((metadata) => ({
-            ...metadata,
-            outputs: [
-              ...metadata.outputs.filter((output) => output.id !== runId),
+          setMetadata((metadata) => {
+            const current = ensureMetadata(metadata);
+
+            return {
+              ...current,
+              outputs: [
+              ...current.outputs.filter((output) => output.id !== runId),
               {
                 id: runId,
                 contents: outputContent,
                 status: "completed",
               },
             ],
-          }));
-        } catch (error: any) {
-          setMetadata((metadata) => ({
-            ...metadata,
-            outputs: [
-              ...metadata.outputs.filter((output) => output.id !== runId),
+            };
+          });
+        } catch (error: unknown) {
+          const message =
+            error instanceof Error ? error.message : "Unexpected error";
+
+          setMetadata((metadata) => {
+            const current = ensureMetadata(metadata);
+
+            return {
+              ...current,
+              outputs: [
+              ...current.outputs.filter((output) => output.id !== runId),
               {
                 id: runId,
-                contents: [{ type: "text", value: error.message }],
+                contents: [{ type: "text", value: message }],
                 status: "failed",
               },
             ],
-          }));
+            };
+          });
         }
       },
     },

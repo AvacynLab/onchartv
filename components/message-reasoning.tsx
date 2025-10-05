@@ -30,8 +30,15 @@ export function MessageReasoning({
       defaultOpen={hasBeenStreaming}
       isStreaming={isLoading}
     >
-      <ReasoningTrigger />
-      <ReasoningContent>{reasoning}</ReasoningContent>
+      {/**
+       * The reasoning accordion exposes dedicated test ids so Playwright helpers
+       * can deterministically locate the toggle button and the rendered
+       * explanation, even after the auto-close animation hides the content.
+       */}
+      <ReasoningTrigger data-testid="message-reasoning-trigger" />
+      <ReasoningContent data-testid="message-reasoning-content">
+        {reasoning}
+      </ReasoningContent>
     </Reasoning>
   );
 }
