@@ -67,6 +67,259 @@ export const maxDuration = 60;
 
 let globalStreamContext: ResumableStreamContext | null = null;
 
+const textDecoder = new TextDecoder();
+
+class InMemoryResumableStream {
+  private readonly reader: ReadableStreamDefaultReader<unknown>;
+  private readonly buffer: string[] = [];
+  private readonly watchers = new Set<ReadableStreamDefaultController<string>>();
+  private pumpStarted = false;
+  private finalised = false;
+  private done = false;
+  private error: unknown;
+
+  constructor(
+    stream: ReadableStream<string>,
+    private readonly onFinalize: () => void
+  ) {
+    this.reader = stream.getReader();
+  }
+
+  createInitialStream(): ReadableStream<string> {
+    return this.createStream({ replay: false });
+  }
+
+  createResumeStream(): ReadableStream<string> | null {
+    if (this.error) {
+      return null;
+    }
+
+    if (this.done && this.buffer.length === 0) {
+      return null;
+    }
+
+    return this.createStream({ replay: true });
+  }
+
+  isDone(): boolean {
+    return this.done || Boolean(this.error);
+  }
+
+  private createStream({ replay }: { replay: boolean }) {
+    let controllerRef: ReadableStreamDefaultController<string> | null = null;
+
+    const stream = new ReadableStream<string>({
+      start: (controller) => {
+        controllerRef = controller;
+
+        if (replay) {
+          for (const chunk of this.buffer) {
+            controller.enqueue(chunk);
+          }
+        }
+
+        if (this.error) {
+          controller.error(this.error);
+          controllerRef = null;
+          return;
+        }
+
+        if (this.done && !replay) {
+          controller.close();
+          controllerRef = null;
+          return;
+        }
+
+        if (!this.done) {
+          this.watchers.add(controller);
+          this.ensurePump();
+        } else {
+          controller.close();
+          controllerRef = null;
+        }
+      },
+      cancel: () => {
+        if (controllerRef) {
+          this.watchers.delete(controllerRef);
+          controllerRef = null;
+        }
+
+        this.cleanupIfIdle();
+      },
+    });
+
+    return stream;
+  }
+
+  private ensurePump() {
+    if (this.pumpStarted) {
+      return;
+    }
+
+    this.pumpStarted = true;
+    void this.pump();
+  }
+
+  private cleanupIfIdle() {
+    if ((this.done || this.error) && !this.finalised && this.watchers.size === 0) {
+      this.finalised = true;
+      this.onFinalize();
+    }
+  }
+
+  private async pump() {
+    try {
+      while (true) {
+        const { done, value } = await this.reader.read();
+
+        if (done) {
+          this.done = true;
+          break;
+        }
+
+        const chunk = this.toChunkString(value);
+        this.buffer.push(chunk);
+
+        for (const controller of this.watchers) {
+          try {
+            controller.enqueue(chunk);
+          } catch {
+            // Ignore enqueue errors triggered by closed controllers.
+          }
+        }
+      }
+    } catch (error) {
+      this.error = error;
+
+      for (const controller of this.watchers) {
+        try {
+          controller.error(error);
+        } catch {
+          // Ignore controllers already closed by the client.
+        }
+      }
+    } finally {
+      for (const controller of this.watchers) {
+        try {
+          controller.close();
+        } catch {
+          // Ignore controllers already closed by the client.
+        }
+      }
+
+      this.watchers.clear();
+      this.cleanupIfIdle();
+
+      try {
+        this.reader.releaseLock();
+      } catch {
+        // Ignore failures when the lock has already been released.
+      }
+    }
+  }
+
+  private toChunkString(value: unknown): string {
+    if (typeof value === "string") {
+      return value;
+    }
+
+    if (value instanceof Uint8Array) {
+      return textDecoder.decode(value);
+    }
+
+    if (Array.isArray(value)) {
+      return value.map((item) => this.toChunkString(item)).join("");
+    }
+
+    if (value == null) {
+      return "";
+    }
+
+    return String(value);
+  }
+}
+
+const createInMemoryResumableStreamContext = (): ResumableStreamContext => {
+  const activeStreams = new Map<string, InMemoryResumableStream>();
+  const completedStreams = new Set<string>();
+
+  const registerStream = (
+    streamId: string,
+    source: ReadableStream<string>
+  ): InMemoryResumableStream => {
+    const stream = new InMemoryResumableStream(source, () => {
+      activeStreams.delete(streamId);
+      completedStreams.add(streamId);
+    });
+
+    activeStreams.set(streamId, stream);
+
+    return stream;
+  };
+
+  return {
+    async resumableStream(streamId, makeStream) {
+      const existing = activeStreams.get(streamId);
+
+      if (existing) {
+        const resumed = existing.createResumeStream();
+
+        if (!resumed) {
+          activeStreams.delete(streamId);
+          completedStreams.add(streamId);
+        }
+
+        return resumed;
+      }
+
+      if (completedStreams.has(streamId)) {
+        return null;
+      }
+
+      const stream = registerStream(streamId, makeStream());
+      return stream.createInitialStream();
+    },
+    async createNewResumableStream(streamId, makeStream) {
+      completedStreams.delete(streamId);
+      const stream = registerStream(streamId, makeStream());
+      return stream.createInitialStream();
+    },
+    async resumeExistingStream(streamId) {
+      const existing = activeStreams.get(streamId);
+
+      if (!existing) {
+        if (completedStreams.has(streamId)) {
+          return null;
+        }
+
+        return undefined;
+      }
+
+      const resumed = existing.createResumeStream();
+
+      if (!resumed) {
+        activeStreams.delete(streamId);
+        completedStreams.add(streamId);
+      }
+
+      return resumed;
+    },
+    async hasExistingStream(streamId) {
+      const existing = activeStreams.get(streamId);
+
+      if (existing) {
+        return existing.isDone() ? "DONE" : true;
+      }
+
+      if (completedStreams.has(streamId)) {
+        return "DONE";
+      }
+
+      return null;
+    },
+  } satisfies ResumableStreamContext;
+};
+
 // Playwright runs without network access. Skipping the TokenLens catalog
 // download avoids repeated `ENETUNREACH` warnings during the e2e suite while
 // leaving production behaviour untouched.
@@ -136,14 +389,19 @@ export function getStreamContext() {
         waitUntil: after,
       });
     } catch (error: any) {
-      if (typeof error?.message === "string" && error.message.includes("REDIS_URL")) {
+      if (
+        typeof error?.message === "string" &&
+        error.message.includes("REDIS_URL")
+      ) {
         logWarning(
           "chat.streams",
-          "Resumable streams are disabled because REDIS_URL is unset"
+          "Resumable streams falling back to in-memory transport because REDIS_URL is unset"
         );
       } else {
         logError("chat.streams", error);
       }
+
+      globalStreamContext = createInMemoryResumableStreamContext();
     }
   }
 

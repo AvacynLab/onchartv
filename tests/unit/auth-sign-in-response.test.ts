@@ -30,6 +30,31 @@ test.describe("didSignInSucceed", () => {
       "HTTP 401 responses must surface a failed login state",
     );
   });
+
+  test("treats redirects back to the login page as failures", () => {
+    assert.equal(
+      didSignInSucceed("/login?error=CredentialsSignin"),
+      false,
+      "Redirects to the sign-in page should not be considered successful",
+    );
+
+    const redirectResponse = new Response(null, {
+      status: 200,
+      headers: { Location: "http://localhost:3000/login?callbackUrl=%2F" },
+    });
+
+    assert.equal(
+      didSignInSucceed(redirectResponse),
+      false,
+      "Login redirects from responses should mark the attempt as failed",
+    );
+
+    assert.equal(
+      didSignInSucceed({ ok: true, url: "/login" }),
+      false,
+      "Objects pointing to the login route should be treated as failures",
+    );
+  });
 });
 
 test.describe("extractRedirectPath", () => {
