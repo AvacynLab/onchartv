@@ -21,7 +21,10 @@ export async function GET(
   const resumeRequestedAt = new Date();
 
   if (!streamContext) {
-    return new Response(null, { status: 204 });
+    // Without a resumable stream backend (Redis), continuing the request would
+    // never yield data. Surface a not-found error so callers can gracefully
+    // fall back to the empty-state handling exercised in the route tests.
+    return new ChatSDKError("not_found:stream").toResponse();
   }
 
   if (!chatId) {

@@ -51,9 +51,12 @@ export default function Page() {
           await updateSession();
         } catch (error) {
           console.error("Failed to refresh session before redirecting", error);
+        } finally {
+          // Always navigate to the resolved destination even if the session
+          // refresh fails so successful logins do not leave the user stranded
+          // on the `/login` form.
+          router.replace(destination);
         }
-
-        router.replace(destination);
       })();
     }
   }, [state.redirectTo, state.status, router, updateSession]);

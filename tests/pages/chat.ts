@@ -361,6 +361,27 @@ export class ChatPage {
   }
 
   async addImageAttachment() {
+    const attachmentsButton = this.page.getByTestId("attachments-button");
+
+    /**
+     * Reasoning models disable file uploads in the composer. When the current
+     * chat session uses that model, temporarily switch back to the default
+     * conversational model so the attachment preview renders just like it does
+     * in production. This mirrors the behaviour a user would follow manually
+     * and keeps the Playwright journey deterministic.
+     */
+    if (await attachmentsButton.isDisabled()) {
+      const fallbackModel =
+        chatModels.find((model) => model.id === "chat-model") ?? chatModels[0];
+
+      if (!fallbackModel) {
+        throw new Error("Unable to determine the default chat model");
+      }
+
+      await this.chooseModelFromSelector(fallbackModel.id);
+      await expect(attachmentsButton).toBeEnabled();
+    }
+
     this.page.on("filechooser", async (fileChooser) => {
       const filePath = path.join(
         process.cwd(),
@@ -377,7 +398,7 @@ export class ChatPage {
       });
     });
 
-    await this.page.getByTestId("attachments-button").click();
+    await attachmentsButton.click();
   }
 
   async getSelectedModel() {
