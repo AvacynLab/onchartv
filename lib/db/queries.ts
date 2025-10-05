@@ -138,6 +138,14 @@ const inMemoryStore: InMemoryStore | null = isTestEnvironment
   : null;
 
 /**
+ * Normalise email addresses so lookups in the in-memory test database stay
+ * resilient to casing differences. The production Postgres queries remain
+ * case-sensitive, matching the schema constraints, while Playwright runs work
+ * with whatever variant the fixtures submit through the UI.
+ */
+const normaliseEmail = (value: string) => value.trim().toLowerCase();
+
+/**
  * Helper ensuring we only touch the in-memory store in the Playwright setup.
  * This avoids coupling the production Postgres code-path with the simulated
  * data required by the deterministic tests.
@@ -235,8 +243,11 @@ const db = client
 export async function getUser(email: string): Promise<User[]> {
   if (isTestEnvironment) {
     const store = getInMemoryStore();
+    const targetEmail = normaliseEmail(email);
     const users = Array.from(store.users.values()).filter(
-      (currentUser) => currentUser.email === email
+      (currentUser) =>
+        typeof currentUser.email === "string" &&
+        normaliseEmail(currentUser.email) === targetEmail
     );
 
     return users;
@@ -256,6 +267,25 @@ export async function createUser(email: string, password: string) {
   if (isTestEnvironment) {
     const store = getInMemoryStore();
     const hashedPassword = generateHashedPassword(password);
+    const targetEmail = normaliseEmail(email);
+
+    const existingEntry = Array.from(store.users.entries()).find(
+      ([, currentUser]) =>
+        typeof currentUser.email === "string" &&
+        normaliseEmail(currentUser.email) === targetEmail
+    );
+
+    if (existingEntry) {
+      const [userId, currentUser] = existingEntry;
+      store.users.set(userId, {
+        ...currentUser,
+        email: currentUser.email ?? email,
+        password: hashedPassword,
+      });
+
+      return;
+    }
+
     const id = generateUUID();
 
     store.users.set(id, { id, email, password: hashedPassword });

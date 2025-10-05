@@ -487,15 +487,22 @@ export async function POST(request: Request) {
       },
     });
 
-    // const streamContext = getStreamContext();
+    const streamContext = getStreamContext();
 
-    // if (streamContext) {
-    //   return new Response(
-    //     await streamContext.resumableStream(streamId, () =>
-    //       stream.pipeThrough(new JsonToSseTransformStream())
-    //     )
-    //   );
-    // }
+    if (streamContext) {
+      /**
+       * Register the active stream with the resumable context so follow-up
+       * requests can recover mid-generation. Without this hook the `/stream`
+       * endpoint falls back to replaying cached messages, leaving the client
+       * without incremental updates and breaking the Playwright resume tests.
+       */
+      const resumableStream = await streamContext.resumableStream(
+        streamId,
+        () => stream.pipeThrough(new JsonToSseTransformStream())
+      );
+
+      return new Response(resumableStream);
+    }
 
     return new Response(stream.pipeThrough(new JsonToSseTransformStream()));
   } catch (error) {
