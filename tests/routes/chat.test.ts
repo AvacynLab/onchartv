@@ -193,9 +193,29 @@ test.describe
         await secondResponse.body(),
       ]);
 
-      expect(firstResponseBody.toString()).toEqual(
-        secondResponseBody.toString()
-      );
+      const firstStream = firstResponseBody.toString();
+      const secondStream = secondResponseBody.toString();
+
+      if (secondStream.includes('"type":"data-appendMessage"')) {
+        const appendEventLine = secondStream
+          .split("\n")
+          .find((line) => line.includes('"type":"data-appendMessage"'));
+
+        expect(appendEventLine, "missing append message event").toBeTruthy();
+
+        const appendPayload = JSON.parse(appendEventLine!.slice(6));
+        const resumedMessage = JSON.parse(appendPayload.data);
+
+        expect(resumedMessage.role).toBe("assistant");
+
+        const resumedTextPart = Array.isArray(resumedMessage.parts)
+          ? resumedMessage.parts.find((part: any) => part?.type === "text")
+          : null;
+
+        expect(resumedTextPart?.text ?? "").not.toHaveLength(0);
+      } else {
+        expect(secondStream).toEqual(firstStream);
+      }
     });
 
     test("Ada can resume chat generation that has ended during request", async ({

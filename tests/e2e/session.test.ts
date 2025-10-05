@@ -5,17 +5,13 @@ import { AuthPage } from "../pages/auth";
 
 const waitForChatDashboard = async (page: Page) => {
   /**
-   * Successful logins trigger a client-side redirect to either `/` or the
-   * latest `/chat/:id`. Waiting on the browser location first gives the router
-   * enough time to settle before we assert on the hydrated composer textarea.
+   * Successful logins redirect users to either `/` or the latest `/chat/:id`.
+   * Rely on Playwright's URL matcher so the helper stays resilient to the
+   * client-side transition while still surfacing genuine navigation failures.
    */
-  await page.waitForFunction(
-    () =>
-      window.location.pathname === "/" ||
-      window.location.pathname.startsWith("/chat/"),
-    null,
-    { timeout: 60_000 }
-  );
+  await expect(page).toHaveURL(/\/(chat\/[^/]+)?$/, {
+    timeout: 60_000,
+  });
 
   const composer = page.getByPlaceholder("Send a message...");
 

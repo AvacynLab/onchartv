@@ -11,6 +11,59 @@ import { ChatSDKError } from "@/lib/errors";
 import type { ChatMessage } from "@/lib/types";
 import { getStreamContext } from "../../route";
 
+/**
+ * Builds an empty UI message stream that resolves immediately.
+ * The helper is exported to simplify unit verification of the fallback branch.
+ */
+export function createEmptyStream() {
+  return createUIMessageStream<ChatMessage>({
+    // biome-ignore lint/suspicious/noEmptyBlockStatements: "Needs to exist"
+    execute: () => {},
+  });
+}
+
+/**
+ * Generates a resumable stream response when Redis-backed streams are unavailable.
+ *
+ * The helper inspects the most recent assistant message and, if it was emitted
+ * recently, synthesises an SSE payload that mirrors a standard appendMessage
+ * event so the client can gracefully recover.
+ */
+export async function buildFallbackStreamResponse(
+  chatId: string,
+  resumeRequestedAt: Date
+) {
+  const emptyDataStream = createEmptyStream();
+
+  const messages = await getMessagesByChatId({ id: chatId });
+  const mostRecentMessage = messages.at(-1);
+
+  if (!mostRecentMessage || mostRecentMessage.role !== "assistant") {
+    return new Response(emptyDataStream, { status: 200 });
+  }
+
+  const messageCreatedAt = new Date(mostRecentMessage.createdAt);
+
+  if (differenceInSeconds(resumeRequestedAt, messageCreatedAt) > 15) {
+    return new Response(emptyDataStream, { status: 200 });
+  }
+
+  const restoredStream = createUIMessageStream<ChatMessage>({
+    execute: ({ writer }) => {
+      writer.write({
+        type: "data-appendMessage",
+        data: JSON.stringify(mostRecentMessage),
+        transient: true,
+      });
+    },
+  });
+
+  return new Response(
+    restoredStream.pipeThrough(new JsonToSseTransformStream()),
+    { status: 200 }
+  );
+}
+
 export async function GET(
   _: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -19,13 +72,6 @@ export async function GET(
 
   const streamContext = getStreamContext();
   const resumeRequestedAt = new Date();
-
-  if (!streamContext) {
-    // Without a resumable stream backend (Redis), continuing the request would
-    // never yield data. Surface a not-found error so callers can gracefully
-    // fall back to the empty-state handling exercised in the route tests.
-    return new ChatSDKError("not_found:stream").toResponse();
-  }
 
   if (!chatId) {
     return new ChatSDKError("bad_request:api").toResponse();
@@ -57,25 +103,24 @@ export async function GET(
     return new ChatSDKError("forbidden:chat").toResponse();
   }
 
+  if (!streamContext) {
+    return buildFallbackStreamResponse(chatId, resumeRequestedAt);
+  }
+
   const streamIds = await getStreamIdsByChatId({ chatId });
 
   if (!streamIds.length) {
-    return new ChatSDKError("not_found:stream").toResponse();
+    return buildFallbackStreamResponse(chatId, resumeRequestedAt);
   }
 
   const recentStreamId = streamIds.at(-1);
 
   if (!recentStreamId) {
-    return new ChatSDKError("not_found:stream").toResponse();
+    return buildFallbackStreamResponse(chatId, resumeRequestedAt);
   }
 
-  const emptyDataStream = createUIMessageStream<ChatMessage>({
-    // biome-ignore lint/suspicious/noEmptyBlockStatements: "Needs to exist"
-    execute: () => {},
-  });
-
   const stream = await streamContext.resumableStream(recentStreamId, () =>
-    emptyDataStream.pipeThrough(new JsonToSseTransformStream())
+    createEmptyStream().pipeThrough(new JsonToSseTransformStream())
   );
 
   /*
@@ -83,37 +128,7 @@ export async function GET(
    * but the resumable stream has concluded at this point.
    */
   if (!stream) {
-    const messages = await getMessagesByChatId({ id: chatId });
-    const mostRecentMessage = messages.at(-1);
-
-    if (!mostRecentMessage) {
-      return new Response(emptyDataStream, { status: 200 });
-    }
-
-    if (mostRecentMessage.role !== "assistant") {
-      return new Response(emptyDataStream, { status: 200 });
-    }
-
-    const messageCreatedAt = new Date(mostRecentMessage.createdAt);
-
-    if (differenceInSeconds(resumeRequestedAt, messageCreatedAt) > 15) {
-      return new Response(emptyDataStream, { status: 200 });
-    }
-
-    const restoredStream = createUIMessageStream<ChatMessage>({
-      execute: ({ writer }) => {
-        writer.write({
-          type: "data-appendMessage",
-          data: JSON.stringify(mostRecentMessage),
-          transient: true,
-        });
-      },
-    });
-
-    return new Response(
-      restoredStream.pipeThrough(new JsonToSseTransformStream()),
-      { status: 200 }
-    );
+    return buildFallbackStreamResponse(chatId, resumeRequestedAt);
   }
 
   return new Response(stream, { status: 200 });
