@@ -75,11 +75,18 @@ export function normaliseAssistantMessage<T extends { parts?: unknown }>(
     .join("")
     .trim();
 
+  const messageContent =
+    message &&
+    typeof message === "object" &&
+    "content" in (message as Record<string, unknown>)
+      ? (message as { content?: unknown }).content
+      : undefined;
+
   const fallbackText =
     aggregatedText.length > 0
       ? aggregatedText
-      : typeof (message as { content?: unknown }).content === "string"
-        ? (message as { content: string }).content.trim()
+      : typeof messageContent === "string"
+        ? messageContent.trim()
         : "";
 
   if (!fallbackText) {
