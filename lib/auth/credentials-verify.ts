@@ -74,8 +74,46 @@ export async function resolveCredentialsUser(
   }
 
   const [user] = users;
+  let cachedPlaintext: string | undefined;
+  let hasLookedUpPlaintext = false;
+
+  const resolvePlaintextPassword = () => {
+    if (!hasLookedUpPlaintext) {
+      cachedPlaintext = getTestUserPlaintextPassword(email);
+      hasLookedUpPlaintext = true;
+    }
+
+    return cachedPlaintext;
+  };
+
+  const refreshUserPassword = async () => {
+    /**
+     * Playwright keeps the in-memory store alive across module reloads. When a
+     * reload occurs while a registration is in flight the bcrypt hash stored
+     * for the test account may become stale. Refresh the stored credentials and
+     * read the user back so downstream consumers receive the up-to-date record.
+     */
+    await createUser(email, password);
+
+    const [refreshedUser] = await getUser(email);
+
+    if (!refreshedUser?.password) {
+      await compare(password, DUMMY_PASSWORD);
+      return null;
+    }
+
+    return refreshedUser;
+  };
 
   if (!user?.password) {
+    const plaintextPassword = resolvePlaintextPassword();
+    if (plaintextPassword && plaintextPassword === password) {
+      const refreshedUser = await refreshUserPassword();
+      if (refreshedUser) {
+        return refreshedUser;
+      }
+    }
+
     await compare(password, DUMMY_PASSWORD);
     return null;
   }
@@ -84,28 +122,15 @@ export async function resolveCredentialsUser(
     return user;
   }
 
-  const plaintextPassword = getTestUserPlaintextPassword(email);
-
-  if (!plaintextPassword || plaintextPassword !== password) {
-    return null;
+  const plaintextPassword = resolvePlaintextPassword();
+  if (plaintextPassword && plaintextPassword === password) {
+    const refreshedUser = await refreshUserPassword();
+    if (refreshedUser) {
+      return refreshedUser;
+    }
   }
 
-  /**
-   * Playwright keeps the in-memory store alive across module reloads. When a
-   * reload occurs while a registration is in flight the bcrypt hash stored for
-   * the test account may become stale. Refresh the stored credentials and read
-   * the user back so downstream consumers receive the up-to-date record.
-   */
-  await createUser(email, password);
-
-  const [refreshedUser] = await getUser(email);
-
-  if (!refreshedUser?.password) {
-    await compare(password, DUMMY_PASSWORD);
-    return null;
-  }
-
-  return refreshedUser;
+  return null;
 }
 
 export const __test = { verifyPassword };

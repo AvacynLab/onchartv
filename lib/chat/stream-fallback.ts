@@ -15,15 +15,24 @@ type GetMessagesByChatId = typeof import("@/lib/db/queries")["getMessagesByChatI
  */
 const FALLBACK_LOOKUP_ATTEMPTS = 60;
 const FALLBACK_LOOKUP_DELAY_MS = 100;
+const MAX_EMPTY_MESSAGE_POLLS = 3;
 
 const delay = (ms: number) =>
   new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
   });
 
-function ensureAssistantText(
-  message: any
-): typeof message {
+/**
+ * Ensure assistant messages contain a stable text payload before they are
+ * replayed through the redis-less resume fallback. Streaming responses often
+ * persist a mix of transient delta events (`text-delta`, `appendMessage`) and
+ * empty placeholders once the stream completes. The UI relies on the plain
+ * `text` part to render deterministic content, so we rebuild that payload by
+ * aggregating every textual fragment we can recover from the stored message.
+ */
+export function normaliseAssistantMessage<T extends { parts?: unknown }>(
+  message: T
+): T {
   if (!message || typeof message !== "object") {
     return message;
   }
@@ -123,9 +132,9 @@ function ensureAssistantText(
   }
 
   return {
-    ...message,
+    ...(message as object),
     parts: mergedParts,
-  };
+  } as T;
 }
 
 async function resolveRecentAssistantMessage(
@@ -133,14 +142,23 @@ async function resolveRecentAssistantMessage(
   resumeRequestedAt: Date,
   getMessages: GetMessagesByChatId
 ) {
+  let consecutiveEmptyPolls = 0;
   for (let attempt = 0; attempt < FALLBACK_LOOKUP_ATTEMPTS; attempt += 1) {
     const messages = await getMessages({ id: chatId });
     if (messages.length === 0) {
-      // The chat has never received a reply, so there is nothing to replay and
-      // no reason to keep polling. Returning early avoids a pointless wait in
-      // resume flows triggered before the first assistant message is created.
-      return null;
+      consecutiveEmptyPolls += 1;
+
+      if (consecutiveEmptyPolls >= MAX_EMPTY_MESSAGE_POLLS) {
+        // Give up after a handful of empty lookups so brand-new chats exit
+        // quickly while still allowing in-flight assistant replies to persist.
+        return null;
+      }
+
+      await delay(FALLBACK_LOOKUP_DELAY_MS);
+      continue;
     }
+
+    consecutiveEmptyPolls = 0;
 
     const mostRecentMessage = messages.at(-1);
 
@@ -148,7 +166,7 @@ async function resolveRecentAssistantMessage(
       const messageCreatedAt = new Date(mostRecentMessage.createdAt);
 
       if (differenceInSeconds(resumeRequestedAt, messageCreatedAt) <= 15) {
-        return ensureAssistantText(mostRecentMessage);
+        return normaliseAssistantMessage(mostRecentMessage);
       }
 
       return null;

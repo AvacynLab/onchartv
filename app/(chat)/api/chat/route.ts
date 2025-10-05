@@ -58,6 +58,7 @@ import { logError, logWarning } from "@/lib/logging";
 import type { ChatMessage } from "@/lib/types";
 import type { AppUsage } from "@/lib/usage";
 import type { UIDataTypes, UIMessagePart, UITools } from "ai";
+import { normaliseAssistantMessage } from "@/lib/chat/stream-fallback";
 
 import { convertToUIMessages, generateUUID } from "@/lib/utils";
 import { generateTitleFromUserMessage } from "../../actions";
@@ -753,19 +754,33 @@ export async function POST(request: Request) {
           .find((currentMessage) => currentMessage.role === "assistant");
 
         await saveMessages({
-          messages: messages.map((currentMessage) => ({
-            id: currentMessage.id,
-            role: currentMessage.role,
-            parts: currentMessage.parts,
-            createdAt: new Date(),
-            attachments: extractAttachments(currentMessage.parts),
-            chatId: id,
-            artifacts:
-              assistantWithArtifacts &&
-              currentMessage.id === assistantWithArtifacts.id
-                ? capturedArtifacts
-                : [],
-          })),
+          messages: messages.map((currentMessage) => {
+            const enrichedMessage =
+              currentMessage.role === "assistant"
+                ? normaliseAssistantMessage(currentMessage)
+                : currentMessage;
+
+            /**
+             * Persist the enriched parts so resume requests can reconstruct a
+             * deterministic text payload even when the original stream only
+             * emitted transient delta fragments. Attachments are derived from
+             * the same parts array, therefore we extract them from the
+             * normalised structure as well.
+             */
+            return {
+              id: currentMessage.id,
+              role: currentMessage.role,
+              parts: enrichedMessage.parts,
+              createdAt: new Date(),
+              attachments: extractAttachments(enrichedMessage.parts),
+              chatId: id,
+              artifacts:
+                assistantWithArtifacts &&
+                currentMessage.id === assistantWithArtifacts.id
+                  ? capturedArtifacts
+                  : [],
+            };
+          }),
         });
 
         if (finalMergedUsage) {
