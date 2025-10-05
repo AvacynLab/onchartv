@@ -4,6 +4,38 @@ import { differenceInSeconds } from "date-fns";
 import { getMessagesByChatId } from "@/lib/db/queries";
 import type { ChatMessage } from "@/lib/types";
 
+const FALLBACK_LOOKUP_ATTEMPTS = 20;
+const FALLBACK_LOOKUP_DELAY_MS = 100;
+
+const delay = (ms: number) =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
+async function resolveRecentAssistantMessage(
+  chatId: string,
+  resumeRequestedAt: Date
+) {
+  for (let attempt = 0; attempt < FALLBACK_LOOKUP_ATTEMPTS; attempt += 1) {
+    const messages = await getMessagesByChatId({ id: chatId });
+    const mostRecentMessage = messages.at(-1);
+
+    if (mostRecentMessage?.role === "assistant") {
+      const messageCreatedAt = new Date(mostRecentMessage.createdAt);
+
+      if (differenceInSeconds(resumeRequestedAt, messageCreatedAt) <= 15) {
+        return mostRecentMessage;
+      }
+
+      return null;
+    }
+
+    await delay(FALLBACK_LOOKUP_DELAY_MS);
+  }
+
+  return null;
+}
+
 /**
  * Builds an empty UI message stream that resolves immediately.
  * The helper is exported to simplify unit verification of the fallback branch.
@@ -28,16 +60,12 @@ export async function buildFallbackStreamResponse(
 ) {
   const emptyDataStream = createEmptyStream();
 
-  const messages = await getMessagesByChatId({ id: chatId });
-  const mostRecentMessage = messages.at(-1);
+  const mostRecentMessage = await resolveRecentAssistantMessage(
+    chatId,
+    resumeRequestedAt
+  );
 
-  if (!mostRecentMessage || mostRecentMessage.role !== "assistant") {
-    return new Response(emptyDataStream, { status: 200 });
-  }
-
-  const messageCreatedAt = new Date(mostRecentMessage.createdAt);
-
-  if (differenceInSeconds(resumeRequestedAt, messageCreatedAt) > 15) {
+  if (!mostRecentMessage) {
     return new Response(emptyDataStream, { status: 200 });
   }
 

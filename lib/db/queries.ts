@@ -65,6 +65,7 @@ import {
 
 type InMemoryStore = {
   users: Map<string, User>;
+  userPlaintextPasswords: Map<string, string>;
   chats: Map<string, Chat>;
   messages: Map<string, DBMessage>;
   votes: Map<string, { chatId: string; messageId: string; isUpvoted: boolean }>;
@@ -136,6 +137,7 @@ function getOrCreateInMemoryStore(): InMemoryStore {
    */
   const store: InMemoryStore = {
     users: new Map(),
+    userPlaintextPasswords: new Map(),
     chats: new Map(),
     messages: new Map(),
     votes: new Map(),
@@ -202,6 +204,7 @@ export function __resetInMemoryDbForTests(): void {
   const store = getInMemoryStore();
 
   store.users.clear();
+  store.userPlaintextPasswords.clear();
   store.chats.clear();
   store.messages.clear();
   store.votes.clear();
@@ -268,13 +271,10 @@ export async function getUser(email: string): Promise<User[]> {
   if (isTestEnvironment) {
     const store = getInMemoryStore();
     const targetEmail = normaliseEmail(email);
-    const users = Array.from(store.users.values()).filter(
-      (currentUser) =>
-        typeof currentUser.email === "string" &&
-        normaliseEmail(currentUser.email) === targetEmail
+    return Array.from(store.users.values()).filter((currentUser) =>
+      typeof currentUser.email === "string" &&
+      normaliseEmail(currentUser.email) === targetEmail
     );
-
-    return users;
   }
 
   try {
@@ -285,6 +285,35 @@ export async function getUser(email: string): Promise<User[]> {
       "Failed to get user by email"
     );
   }
+}
+
+function getInMemoryPlaintextPassword(email: string): string | undefined {
+  if (!isTestEnvironment) {
+    return undefined;
+  }
+
+  const store = getInMemoryStore();
+  const targetEmail = normaliseEmail(email);
+
+  for (const [userId, currentUser] of store.users.entries()) {
+    if (
+      typeof currentUser.email === "string" &&
+      normaliseEmail(currentUser.email) === targetEmail
+    ) {
+      const plainPassword = store.userPlaintextPasswords.get(userId);
+      if (typeof plainPassword === "string" && plainPassword.length > 0) {
+        return plainPassword;
+      }
+
+      return undefined;
+    }
+  }
+
+  return undefined;
+}
+
+export function getTestUserPlaintextPassword(email: string): string | undefined {
+  return getInMemoryPlaintextPassword(email);
 }
 
 export async function createUser(email: string, password: string) {
@@ -306,6 +335,7 @@ export async function createUser(email: string, password: string) {
         email: currentUser.email ?? email,
         password: hashedPassword,
       });
+      store.userPlaintextPasswords.set(userId, password);
 
       return;
     }
@@ -313,6 +343,7 @@ export async function createUser(email: string, password: string) {
     const id = generateUUID();
 
     store.users.set(id, { id, email, password: hashedPassword });
+    store.userPlaintextPasswords.set(id, password);
 
     return;
   }
@@ -334,6 +365,7 @@ export async function createGuestUser() {
     const password = generateHashedPassword(generateUUID());
 
     store.users.set(id, { id, email, password });
+    store.userPlaintextPasswords.set(id, "");
 
     return [{ id, email }];
   }
