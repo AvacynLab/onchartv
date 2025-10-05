@@ -1,9 +1,9 @@
-import { compare, compareSync } from "bcrypt-ts";
+import { compare } from "bcrypt-ts";
 import NextAuth, { type DefaultSession } from "next-auth";
 import type { DefaultJWT } from "next-auth/jwt";
 import Credentials from "next-auth/providers/credentials";
 import { resolveAuthSecret } from "@/lib/auth/secret";
-import { DUMMY_PASSWORD, isTestEnvironment } from "@/lib/constants";
+import { DUMMY_PASSWORD } from "@/lib/constants";
 import { createGuestUser, getUser } from "@/lib/db/queries";
 import { authConfig } from "./auth.config";
 
@@ -12,16 +12,14 @@ async function verifyPassword(
   hashedPassword: string
 ): Promise<boolean> {
   /**
-   * Playwright runs operate against the hermetic in-memory database on a
-   * single Node.js worker. Using the synchronous bcrypt comparison keeps the
-   * credentials provider deterministic while the production environment still
-   * relies on the asynchronous implementation to avoid blocking the event
-   * loop.
+   * Always rely on the asynchronous bcrypt comparison so the hermetic
+   * Playwright environment and the production runtime share the exact same
+   * hashing semantics. The slower synchronous branch occasionally diverged
+   * when Turbopack reloaded modules mid-test which left the in-memory hashes
+   * stale. Using the promise-based helper ensures fresh comparisons while the
+   * lighter salt rounds configured for tests keep the performance impact
+   * negligible.
    */
-  if (isTestEnvironment) {
-    return compareSync(password, hashedPassword);
-  }
-
   return compare(password, hashedPassword);
 }
 

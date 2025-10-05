@@ -67,6 +67,32 @@ export const maxDuration = 60;
 
 let globalStreamContext: ResumableStreamContext | null = null;
 
+declare global {
+  // eslint-disable-next-line no-var -- share the in-memory stream context across module graphs.
+  var __ONCHARTV_RESUMABLE_STREAM_CONTEXT__:
+    | ResumableStreamContext
+    | undefined;
+}
+
+const resolveGlobalStreamContext = () => {
+  /**
+   * Next.js spawns separate module graphs for route handlers and server
+   * actions while developing with Turbopack. Persist the stream context on the
+   * Node.js global object so resume requests share the same in-flight stream
+   * registry as the originating POST handler.
+   */
+  if (globalThis.__ONCHARTV_RESUMABLE_STREAM_CONTEXT__) {
+    return globalThis.__ONCHARTV_RESUMABLE_STREAM_CONTEXT__;
+  }
+
+  if (globalStreamContext) {
+    globalThis.__ONCHARTV_RESUMABLE_STREAM_CONTEXT__ = globalStreamContext;
+    return globalStreamContext;
+  }
+
+  return null;
+};
+
 const textDecoder = new TextDecoder();
 
 class InMemoryResumableStream {
@@ -383,27 +409,33 @@ const extractAttachments = (parts: ReadonlyArray<AttachmentCandidate>) => {
 
 
 export function getStreamContext() {
-  if (!globalStreamContext) {
-    try {
-      globalStreamContext = createResumableStreamContext({
-        waitUntil: after,
-      });
-    } catch (error: any) {
-      if (
-        typeof error?.message === "string" &&
-        error.message.includes("REDIS_URL")
-      ) {
-        logWarning(
-          "chat.streams",
-          "Resumable streams falling back to in-memory transport because REDIS_URL is unset"
-        );
-      } else {
-        logError("chat.streams", error);
-      }
+  const cached = resolveGlobalStreamContext();
 
-      globalStreamContext = createInMemoryResumableStreamContext();
-    }
+  if (cached) {
+    return cached;
   }
+
+  try {
+    globalStreamContext = createResumableStreamContext({
+      waitUntil: after,
+    });
+  } catch (error: any) {
+    if (
+      typeof error?.message === "string" &&
+      error.message.includes("REDIS_URL")
+    ) {
+      logWarning(
+        "chat.streams",
+        "Resumable streams falling back to in-memory transport because REDIS_URL is unset"
+      );
+    } else {
+      logError("chat.streams", error);
+    }
+
+    globalStreamContext = createInMemoryResumableStreamContext();
+  }
+
+  globalThis.__ONCHARTV_RESUMABLE_STREAM_CONTEXT__ = globalStreamContext;
 
   return globalStreamContext;
 }

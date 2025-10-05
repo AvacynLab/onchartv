@@ -29,6 +29,24 @@ beforeEach(() => {
 });
 
 describe("finance queries", () => {
+  it("reuses in-memory users across duplicate registrations", async () => {
+    // Mirror the credential flows exercised by Playwright: the initial
+    // registration stores the user, and subsequent submissions should refresh
+    // the hashed password instead of creating duplicate entries.
+    await queries.createUser("Playwright@Example.com", "first-secret");
+    const [initialUser] = await queries.getUser("playwright@example.com");
+
+    expect(initialUser).toBeDefined();
+    expect(initialUser?.password).toBeDefined();
+
+    await queries.createUser("playwright@example.com", "second-secret");
+    const [updatedUser] = await queries.getUser("PLAYWRIGHT@EXAMPLE.COM");
+
+    expect(updatedUser).toBeDefined();
+    expect(updatedUser?.id).toBe(initialUser?.id);
+    expect(updatedUser?.password).not.toBe(initialUser?.password);
+  });
+
   it("normalises assets on upsert and fetch", async () => {
     const created = await queries.upsertAsset({
       symbol: "aapl",
