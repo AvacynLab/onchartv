@@ -98,39 +98,63 @@ declare global {
   var __ONCHARTV_IN_MEMORY_STORE__: InMemoryStore | undefined;
 }
 
+type ProcessWithInMemoryStore = NodeJS.Process & {
+  __ONCHARTV_IN_MEMORY_STORE__?: InMemoryStore;
+};
+
+const processWithStore = process as ProcessWithInMemoryStore;
+
+function setSharedInMemoryStore(store: InMemoryStore): InMemoryStore {
+  globalThis.__ONCHARTV_IN_MEMORY_STORE__ = store;
+  processWithStore.__ONCHARTV_IN_MEMORY_STORE__ = store;
+  return store;
+}
+
 function getOrCreateInMemoryStore(): InMemoryStore {
-  if (!globalThis.__ONCHARTV_IN_MEMORY_STORE__) {
-    /**
-     * Persist the Playwright-specific data structures on the Node.js global
-     * object. Next.js spawns isolated module graphs for server actions and
-     * route handlers in development, so relying on module-level state causes
-     * the in-memory database to reset between the registration action and the
-     * credentials provider. Storing the maps globally ensures the auth flow
-     * sees a consistent view of the fake database while keeping production
-     * paths untouched.
-     */
-    globalThis.__ONCHARTV_IN_MEMORY_STORE__ = {
-      users: new Map(),
-      chats: new Map(),
-      messages: new Map(),
-      votes: new Map(),
-      documents: new Map(),
-      suggestions: new Map(),
-      streams: new Map(),
-      assets: new Map(),
-      assetsBySymbolExchange: new Map(),
-      watchlists: new Map(),
-      watchlistItems: new Map(),
-      strategies: new Map(),
-      strategyVersions: new Map(),
-      backtestRuns: new Map(),
-      indicatorConfigs: new Map(),
-      newsItems: new Map(),
-      financePreferences: new Map(),
-    } as InMemoryStore;
+  /**
+   * Hydrate the store from whichever runtime context initialised it first.
+   *
+   * Turbopack spins up independent module graphs for server actions and route
+   * handlers. When those graphs run in separate VM contexts they may expose
+   * distinct `globalThis` objects, but they continue to share the same Node.js
+   * `process` instance. We therefore check the process-scoped cache before
+   * falling back to the current global so every context converges on a single
+   * in-memory database.
+   */
+  if (processWithStore.__ONCHARTV_IN_MEMORY_STORE__) {
+    return setSharedInMemoryStore(processWithStore.__ONCHARTV_IN_MEMORY_STORE__);
   }
 
-  return globalThis.__ONCHARTV_IN_MEMORY_STORE__;
+  if (globalThis.__ONCHARTV_IN_MEMORY_STORE__) {
+    return setSharedInMemoryStore(globalThis.__ONCHARTV_IN_MEMORY_STORE__);
+  }
+
+  /**
+   * Persist the Playwright-specific data structures on the shared holders so
+   * credentials verified inside route handlers can still see the users created
+   * by server actions running in a different compilation graph.
+   */
+  const store: InMemoryStore = {
+    users: new Map(),
+    chats: new Map(),
+    messages: new Map(),
+    votes: new Map(),
+    documents: new Map(),
+    suggestions: new Map(),
+    streams: new Map(),
+    assets: new Map(),
+    assetsBySymbolExchange: new Map(),
+    watchlists: new Map(),
+    watchlistItems: new Map(),
+    strategies: new Map(),
+    strategyVersions: new Map(),
+    backtestRuns: new Map(),
+    indicatorConfigs: new Map(),
+    newsItems: new Map(),
+    financePreferences: new Map(),
+  };
+
+  return setSharedInMemoryStore(store);
 }
 
 const inMemoryStore: InMemoryStore | null = isTestEnvironment

@@ -65,14 +65,24 @@ import { type PostRequestBody, postRequestBodySchema } from "./schema";
 
 export const maxDuration = 60;
 
-let globalStreamContext: ResumableStreamContext | null = null;
-
 declare global {
   // eslint-disable-next-line no-var -- share the in-memory stream context across module graphs.
   var __ONCHARTV_RESUMABLE_STREAM_CONTEXT__:
     | ResumableStreamContext
     | undefined;
 }
+
+type ProcessWithStreamContext = NodeJS.Process & {
+  __ONCHARTV_RESUMABLE_STREAM_CONTEXT__?: ResumableStreamContext;
+};
+
+const processWithStreamContext = process as ProcessWithStreamContext;
+
+const cacheStreamContext = (context: ResumableStreamContext) => {
+  globalThis.__ONCHARTV_RESUMABLE_STREAM_CONTEXT__ = context;
+  processWithStreamContext.__ONCHARTV_RESUMABLE_STREAM_CONTEXT__ = context;
+  return context;
+};
 
 const resolveGlobalStreamContext = () => {
   /**
@@ -81,13 +91,14 @@ const resolveGlobalStreamContext = () => {
    * Node.js global object so resume requests share the same in-flight stream
    * registry as the originating POST handler.
    */
-  if (globalThis.__ONCHARTV_RESUMABLE_STREAM_CONTEXT__) {
-    return globalThis.__ONCHARTV_RESUMABLE_STREAM_CONTEXT__;
+  const processCached = processWithStreamContext.__ONCHARTV_RESUMABLE_STREAM_CONTEXT__;
+  if (processCached) {
+    return cacheStreamContext(processCached);
   }
 
-  if (globalStreamContext) {
-    globalThis.__ONCHARTV_RESUMABLE_STREAM_CONTEXT__ = globalStreamContext;
-    return globalStreamContext;
+  const globalCached = globalThis.__ONCHARTV_RESUMABLE_STREAM_CONTEXT__;
+  if (globalCached) {
+    return cacheStreamContext(globalCached);
   }
 
   return null;
@@ -415,8 +426,10 @@ export function getStreamContext() {
     return cached;
   }
 
+  let resolvedContext: ResumableStreamContext;
+
   try {
-    globalStreamContext = createResumableStreamContext({
+    resolvedContext = createResumableStreamContext({
       waitUntil: after,
     });
   } catch (error: any) {
@@ -432,12 +445,10 @@ export function getStreamContext() {
       logError("chat.streams", error);
     }
 
-    globalStreamContext = createInMemoryResumableStreamContext();
+    resolvedContext = createInMemoryResumableStreamContext();
   }
 
-  globalThis.__ONCHARTV_RESUMABLE_STREAM_CONTEXT__ = globalStreamContext;
-
-  return globalStreamContext;
+  return cacheStreamContext(resolvedContext);
 }
 
 export async function POST(request: Request) {

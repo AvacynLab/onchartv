@@ -47,6 +47,32 @@ describe("finance queries", () => {
     expect(updatedUser?.password).not.toBe(initialUser?.password);
   });
 
+  it("shares the in-memory user store across module reloads", async () => {
+    await queries.createUser("reload@example.com", "persisted-secret");
+    const [initialUser] = await queries.getUser("reload@example.com");
+
+    expect(initialUser).toBeDefined();
+
+    vi.resetModules();
+
+    // Reinstate the `server-only` stub for the fresh module graph.
+    vi.mock("server-only", () => ({}));
+
+    /**
+     * Import the queries module again to mimic the separate module graphs that
+     * Turbopack creates for server actions and route handlers. The shared
+     * process-level cache should keep the Playwright accounts visible across
+     * those reloads.
+     */
+    const reloadedQueries = await import("../../../lib/db/queries");
+    const [reloadedUser] = await reloadedQueries.getUser("reload@example.com");
+
+    expect(reloadedUser?.id).toBe(initialUser?.id);
+
+    reloadedQueries.__resetInMemoryDbForTests();
+    queries = reloadedQueries;
+  });
+
   it("normalises assets on upsert and fetch", async () => {
     const created = await queries.upsertAsset({
       symbol: "aapl",
