@@ -17,9 +17,7 @@ vi.mock("@/lib/artifacts/server", () => ({
 process.env.OPENAI_MODEL_ID ??= "test-model";
 process.env.OPENAI_API_KEY ??= "test-key";
 
-const streamModule = await import(
-  "@/app/(chat)/api/chat/[id]/stream/route"
-);
+const streamModule = await import("@/lib/chat/stream-fallback");
 const { buildFallbackStreamResponse, createEmptyStream } = streamModule;
 
 const { getMessagesByChatId } = await import("@/lib/db/queries");
@@ -43,7 +41,7 @@ describe("chat stream fallback", () => {
     const response = await buildFallbackStreamResponse(chatId, resumeRequestedAt);
 
     expect(response.status).toBe(200);
-    expect(await response.text()).toBe("");
+    expect(await readStream(response.body)).toBe("data: [DONE]\n\n");
   });
 
   it("returns an empty stream when the most recent assistant reply is stale", async () => {
@@ -61,7 +59,7 @@ describe("chat stream fallback", () => {
     const response = await buildFallbackStreamResponse(chatId, resumeRequestedAt);
 
     expect(response.status).toBe(200);
-    expect(await response.text()).toBe("");
+    expect(await readStream(response.body)).toBe("data: [DONE]\n\n");
   });
 
   it("streams the latest assistant reply when it is still fresh", async () => {

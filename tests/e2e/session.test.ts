@@ -4,20 +4,19 @@ import { generateRandomTestUser } from "../helpers";
 import { AuthPage } from "../pages/auth";
 
 const waitForChatDashboard = async (page: Page) => {
-  /**
-   * Successful logins redirect users to either `/` or the latest `/chat/:id`.
-   * Rely on Playwright's URL matcher so the helper stays resilient to the
-   * client-side transition while still surfacing genuine navigation failures.
-   */
-  await expect(page).toHaveURL(/\/(chat\/[^/]+)?$/, {
-    timeout: 60_000,
-  });
-
   const composer = page.getByPlaceholder("Send a message...");
 
   // Once the textarea is rendered ensure the Playwright assertion API also
   // sees it as visible so downstream tests can safely interact with it.
   await expect(composer).toBeVisible({ timeout: 60_000 });
+
+  /**
+   * Successful logins redirect users to either `/` or the latest `/chat/:id`.
+   * Allow for transient query parameters that Next.js may append during the
+   * client-side transition while still failing the test if the flow remains on
+   * the `/login` route.
+   */
+  await expect(page).toHaveURL(/\/(?:chat\/[^/?#]+)?(?:\?.*)?$/);
 };
 
 test.describe("Access Control", () => {

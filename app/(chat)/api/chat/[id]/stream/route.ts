@@ -1,68 +1,25 @@
-import { createUIMessageStream, JsonToSseTransformStream } from "ai";
-import { differenceInSeconds } from "date-fns";
 import { auth } from "@/app/(auth)/auth";
-import {
-  getChatById,
-  getMessagesByChatId,
-  getStreamIdsByChatId,
-} from "@/lib/db/queries";
+import { JsonToSseTransformStream } from "ai";
+
+import { getChatById, getStreamIdsByChatId } from "@/lib/db/queries";
 import type { Chat } from "@/lib/db/schema";
 import { ChatSDKError } from "@/lib/errors";
-import type { ChatMessage } from "@/lib/types";
+import {
+  buildFallbackStreamResponse,
+  createEmptyStream,
+} from "@/lib/chat/stream-fallback";
 import { getStreamContext } from "../../route";
 
 /**
- * Builds an empty UI message stream that resolves immediately.
- * The helper is exported to simplify unit verification of the fallback branch.
+ * Allow a brief window for concurrent chat creation requests to persist the
+ * record before the resume endpoint gives up. The e2e suite posts a message
+ * and immediately opens the stream, so a short polling loop keeps the flow
+ * deterministic without compromising on the eventual 404 for unknown chats.
  */
-export function createEmptyStream() {
-  return createUIMessageStream<ChatMessage>({
-    // biome-ignore lint/suspicious/noEmptyBlockStatements: "Needs to exist"
-    execute: () => {},
-  });
-}
+const CHAT_LOOKUP_ATTEMPTS = 5;
+const CHAT_LOOKUP_DELAY_MS = 100;
 
-/**
- * Generates a resumable stream response when Redis-backed streams are unavailable.
- *
- * The helper inspects the most recent assistant message and, if it was emitted
- * recently, synthesises an SSE payload that mirrors a standard appendMessage
- * event so the client can gracefully recover.
- */
-export async function buildFallbackStreamResponse(
-  chatId: string,
-  resumeRequestedAt: Date
-) {
-  const emptyDataStream = createEmptyStream();
-
-  const messages = await getMessagesByChatId({ id: chatId });
-  const mostRecentMessage = messages.at(-1);
-
-  if (!mostRecentMessage || mostRecentMessage.role !== "assistant") {
-    return new Response(emptyDataStream, { status: 200 });
-  }
-
-  const messageCreatedAt = new Date(mostRecentMessage.createdAt);
-
-  if (differenceInSeconds(resumeRequestedAt, messageCreatedAt) > 15) {
-    return new Response(emptyDataStream, { status: 200 });
-  }
-
-  const restoredStream = createUIMessageStream<ChatMessage>({
-    execute: ({ writer }) => {
-      writer.write({
-        type: "data-appendMessage",
-        data: JSON.stringify(mostRecentMessage),
-        transient: true,
-      });
-    },
-  });
-
-  return new Response(
-    restoredStream.pipeThrough(new JsonToSseTransformStream()),
-    { status: 200 }
-  );
-}
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function GET(
   _: Request,
@@ -87,12 +44,22 @@ export async function GET(
     return new ChatSDKError("forbidden:chat").toResponse();
   }
 
-  let chat: Chat | null;
+  let chat: Chat | null = null;
 
-  try {
-    chat = await getChatById({ id: chatId });
-  } catch {
-    return new ChatSDKError("not_found:chat").toResponse();
+  for (let attempt = 0; attempt < CHAT_LOOKUP_ATTEMPTS; attempt += 1) {
+    try {
+      chat = await getChatById({ id: chatId });
+    } catch {
+      if (attempt === CHAT_LOOKUP_ATTEMPTS - 1) {
+        return new ChatSDKError("not_found:chat").toResponse();
+      }
+    }
+
+    if (chat) {
+      break;
+    }
+
+    await delay(CHAT_LOOKUP_DELAY_MS);
   }
 
   if (!chat) {
