@@ -10,6 +10,7 @@ import type {
   CreateBacktestRunInput,
   CreateStrategyInput,
 } from "../../../lib/db/queries";
+import { resolveCredentialsUser } from "../../../lib/auth/credentials-verify";
 import type {
   BacktestMetrics,
   BacktestTrade,
@@ -71,6 +72,28 @@ describe("finance queries", () => {
 
     reloadedQueries.__resetInMemoryDbForTests();
     queries = reloadedQueries;
+  });
+
+  it("allows credentials verification after failed attempts refresh the user hash", async () => {
+    const email = "playwright-flow@example.com";
+    const password = "deterministic-secret";
+
+    await queries.createUser(email, password);
+
+    const dependencies = {
+      getUser: queries.getUser,
+      createUser: queries.createUser,
+      getTestUserPlaintextPassword: queries.getTestUserPlaintextPassword,
+    } as const;
+
+    const initial = await resolveCredentialsUser(email, password, dependencies);
+    expect(initial?.email).toBe(email);
+
+    const failed = await resolveCredentialsUser(email, "incorrect", dependencies);
+    expect(failed).toBeNull();
+
+    const retried = await resolveCredentialsUser(email, password, dependencies);
+    expect(retried?.id).toBe(initial?.id);
   });
 
   it("normalises assets on upsert and fetch", async () => {

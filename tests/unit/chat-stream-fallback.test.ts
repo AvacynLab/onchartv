@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   buildFallbackStreamResponse,
+  normaliseAssistantMessage,
   __test as streamFallbackTestUtils,
 } from "../../lib/chat/stream-fallback";
 
@@ -80,4 +81,27 @@ test("buildFallbackStreamResponse polls until a fresh assistant reply is availab
     payload.includes("Recovered answer"),
     "fallback stream should replay the assistant message"
   );
+});
+
+test("normaliseAssistantMessage reconstructs text from delta fragments", () => {
+  const message = {
+    id: "assistant-1",
+    role: "assistant",
+    parts: [
+      { type: "text-delta", delta: "Hello" },
+      { type: "appendMessage", message: " world" },
+      { type: "text", text: "" },
+      { type: "text", text: { text: "" } },
+    ],
+  } as any;
+
+  const normalised = normaliseAssistantMessage(message);
+
+  assert.equal(Array.isArray(normalised.parts), true);
+
+  const textPart = normalised.parts.find(
+    (part: any) => part && part.type === "text"
+  );
+
+  assert.equal(textPart?.text, "Hello world");
 });

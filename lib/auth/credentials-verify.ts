@@ -1,4 +1,4 @@
-import { compare } from "bcrypt-ts";
+import { compareSync } from "bcrypt-ts";
 
 import { DUMMY_PASSWORD } from "@/lib/constants";
 import type { User } from "@/lib/db/schema";
@@ -8,13 +8,14 @@ async function verifyPassword(
   hashedPassword: string
 ): Promise<boolean> {
   /**
-   * Always rely on the asynchronous bcrypt comparison so production, local
-   * development and the hermetic Playwright runs evaluate credentials using the
-   * same implementation. The async helper mirrors the work performed by
-   * NextAuth and avoids subtle divergences caused by Turbopack recompilations
-   * swapping in the sync variant mid-test.
+   * Use the synchronous bcrypt comparator to keep credential verification
+   * compatible with environments that do not expose the Node.js scheduling
+   * primitives relied upon by the async helper (`setImmediate`,
+   * `process.nextTick`). Wrapping the result in a resolved promise retains the
+   * async signature expected by the surrounding logic while still exercising
+   * the same hashing cost as the sync comparison used during user creation.
    */
-  return compare(password, hashedPassword);
+  return Promise.resolve(compareSync(password, hashedPassword));
 }
 
 /**
@@ -69,7 +70,7 @@ export async function resolveCredentialsUser(
      * default adapter and keeps the observable timing behaviour consistent
      * between successful and failed attempts.
      */
-    await compare(password, DUMMY_PASSWORD);
+    compareSync(password, DUMMY_PASSWORD);
     return null;
   }
 
@@ -98,7 +99,7 @@ export async function resolveCredentialsUser(
     const [refreshedUser] = await getUser(email);
 
     if (!refreshedUser?.password) {
-      await compare(password, DUMMY_PASSWORD);
+      compareSync(password, DUMMY_PASSWORD);
       return null;
     }
 
@@ -114,7 +115,7 @@ export async function resolveCredentialsUser(
       }
     }
 
-    await compare(password, DUMMY_PASSWORD);
+    compareSync(password, DUMMY_PASSWORD);
     return null;
   }
 

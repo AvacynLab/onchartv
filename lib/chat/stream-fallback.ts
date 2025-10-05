@@ -30,6 +30,64 @@ const delay = (ms: number) =>
  * `text` part to render deterministic content, so we rebuild that payload by
  * aggregating every textual fragment we can recover from the stored message.
  */
+/**
+ * Recursively extract textual content from the variety of message shapes that
+ * can be persisted by streamed assistant replies. The helper understands plain
+ * strings, nested text payloads, delta fragments and appendMessage snapshots so
+ * the resume fallback can rebuild a deterministic text part.
+ */
+function extractTextFragment(value: unknown): string {
+  if (!value) {
+    return "";
+  }
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((entry) => extractTextFragment(entry)).join("");
+  }
+
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+
+    if (typeof record.text === "string") {
+      return record.text;
+    }
+
+    if (record.text) {
+      const nested = extractTextFragment(record.text);
+      if (nested) return nested;
+    }
+
+    if (typeof record.delta === "string") {
+      return record.delta;
+    }
+
+    if (record.delta) {
+      const nested = extractTextFragment(record.delta);
+      if (nested) return nested;
+    }
+
+    if (typeof record.message === "string") {
+      return record.message;
+    }
+
+    if (record.message) {
+      const nested = extractTextFragment(record.message);
+      if (nested) return nested;
+    }
+
+    if (record.content) {
+      const nested = extractTextFragment(record.content);
+      if (nested) return nested;
+    }
+  }
+
+  return "";
+}
+
 export function normaliseAssistantMessage<T extends { parts?: unknown }>(
   message: T
 ): T {
@@ -44,8 +102,8 @@ export function normaliseAssistantMessage<T extends { parts?: unknown }>(
       part &&
       typeof part === "object" &&
       part.type === "text" &&
-      typeof part.text === "string" &&
-      part.text.trim().length > 0
+      typeof (part as { text?: unknown }).text === "string" &&
+      (part as { text: string }).text.trim().length > 0
   );
 
   if (hasRichTextPart) {
@@ -53,41 +111,19 @@ export function normaliseAssistantMessage<T extends { parts?: unknown }>(
   }
 
   const aggregatedText = parts
-    .map((part) => {
-      if (!part || typeof part !== "object") {
-        return "";
-      }
-
-      if (typeof part.text === "string") {
-        return part.text;
-      }
-
-      if (typeof (part as { delta?: unknown }).delta === "string") {
-        return (part as { delta: string }).delta;
-      }
-
-      if (typeof (part as { message?: unknown }).message === "string") {
-        return (part as { message: string }).message;
-      }
-
-      return "";
-    })
+    .map((part) => extractTextFragment(part))
     .join("")
     .trim();
 
-  const messageContent =
-    message &&
-    typeof message === "object" &&
-    "content" in (message as Record<string, unknown>)
+  const messageContent = extractTextFragment(
+    message && typeof message === "object"
       ? (message as { content?: unknown }).content
-      : undefined;
+      : undefined
+  );
 
-  const fallbackText =
-    aggregatedText.length > 0
-      ? aggregatedText
-      : typeof messageContent === "string"
-        ? messageContent.trim()
-        : "";
+  const fallbackText = aggregatedText.length > 0
+    ? aggregatedText
+    : messageContent.trim();
 
   if (!fallbackText) {
     return message;
