@@ -193,6 +193,63 @@ describe("loadPersistedUsers", () => {
     expect(store.userPlaintextByEmail.get("first@example.com")).toBe("secret-1");
   });
 
+  it("forces a reload when lookups miss but the timestamp is unchanged", async () => {
+    const email = "force-reload@example.com";
+    const password = "super-secure!";
+
+    const { queries, store, updatePersistedRecords } = await setup({
+      records: [],
+      initialMtimeMs: 100,
+    });
+
+    expect(await queries.getUser(email)).toEqual([]);
+
+    updatePersistedRecords(
+      [
+        {
+          id: "user-1",
+          email,
+          password: "$hashed-1",
+          plaintext: password,
+        },
+      ],
+      { bumpMtime: false }
+    );
+
+    const reloadedUsers = await queries.getUser(email);
+
+    expect(reloadedUsers).toHaveLength(1);
+    expect(reloadedUsers[0]?.email).toBe(email);
+    expect(store.userPlaintextByEmail.get(email)).toBe(password);
+  });
+
+  it("refreshes plaintext passwords when the forced reload succeeds", async () => {
+    const email = "plaintext-reload@example.com";
+    const password = "plaintext-secret!";
+
+    const { queries, store, updatePersistedRecords } = await setup({
+      records: [],
+      initialMtimeMs: 200,
+    });
+
+    expect(queries.getTestUserPlaintextPassword(email)).toBeUndefined();
+
+    updatePersistedRecords(
+      [
+        {
+          id: "user-1",
+          email,
+          password: "$hashed-1",
+          plaintext: password,
+        },
+      ],
+      { bumpMtime: false }
+    );
+
+    expect(queries.getTestUserPlaintextPassword(email)).toBe(password);
+    expect(store.userPlaintextByEmail.get(email)).toBe(password);
+  });
+
   it("retains credential verification after a module reload", async () => {
     const email = "reloaded@example.com";
     const password = "strong-password!";

@@ -313,10 +313,24 @@ let persistedUsersMtimeMs = 0;
  * Hydrate the shared in-memory store from the persisted credentials file when
  * the Playwright harness spins up a fresh module graph.
  */
-function loadPersistedUsers(store: InMemoryStore) {
+type LoadPersistedUsersOptions = {
+  /**
+   * Force the persisted snapshot to be re-read even when the recorded
+   * modification timestamp has not advanced. The flag is used as a
+   * last-resort hydration step when a caller observes a cache miss after
+   * loading the optimistic in-memory store, which can happen when two module
+   * graphs race to read the snapshot within the same millisecond.
+   */
+  force?: boolean;
+};
+
+function loadPersistedUsers(
+  store: InMemoryStore,
+  options: LoadPersistedUsersOptions = {}
+): boolean {
   if (!fs.existsSync(PLAYWRIGHT_USERS_PATH)) {
     persistedUsersMtimeMs = 0;
-    return;
+    return false;
   }
 
   let currentMtimeMs = 0;
@@ -329,11 +343,15 @@ function loadPersistedUsers(store: InMemoryStore) {
       "Failed to stat persisted Playwright users",
       error
     );
-    return;
+    return false;
   }
 
-  if (currentMtimeMs !== 0 && currentMtimeMs <= persistedUsersMtimeMs) {
-    return;
+  if (
+    !options.force &&
+    currentMtimeMs !== 0 &&
+    currentMtimeMs <= persistedUsersMtimeMs
+  ) {
+    return false;
   }
 
   try {
@@ -368,11 +386,13 @@ function loadPersistedUsers(store: InMemoryStore) {
     }
 
     persistedUsersMtimeMs = currentMtimeMs;
+    return true;
   } catch (error) {
     console.warn(
       "Failed to hydrate Playwright users from persisted store",
       error
     );
+    return false;
   }
 }
 
@@ -539,6 +559,28 @@ export async function getUser(email: string): Promise<User[]> {
   if (isTestEnvironment) {
     const store = getInMemoryStore();
     const targetEmail = normaliseEmail(email);
+    const matches = Array.from(store.users.values()).filter((currentUser) =>
+      typeof currentUser.email === "string" &&
+      normaliseEmail(currentUser.email) === targetEmail
+    );
+
+    if (matches.length > 0) {
+      return matches;
+    }
+
+    /**
+     * When two module graphs access the persisted snapshot within the same
+     * millisecond the filesystem timestamp may not advance, causing the eager
+     * hydration in `getInMemoryStore` to short-circuit. Force a refresh so the
+     * login flow can observe users that were registered in a neighbouring
+     * graph moments earlier.
+     */
+    const reloaded = loadPersistedUsers(store, { force: true });
+
+    if (!reloaded) {
+      return matches;
+    }
+
     return Array.from(store.users.values()).filter((currentUser) =>
       typeof currentUser.email === "string" &&
       normaliseEmail(currentUser.email) === targetEmail
@@ -569,26 +611,40 @@ function getInMemoryPlaintextPassword(email: string): string | undefined {
     return directLookup;
   }
 
-  for (const [userId, currentUser] of store.users.entries()) {
-    if (
-      typeof currentUser.email === "string" &&
-      normaliseEmail(currentUser.email) === targetEmail
-    ) {
-      const plainPassword = store.userPlaintextPasswords.get(userId);
-      if (typeof plainPassword === "string" && plainPassword.length > 0) {
-        /**
-         * Persist the freshly recovered plaintext so the direct map short-
-         * circuits future lookups, keeping the hot login path inexpensive.
-         */
-        store.userPlaintextByEmail.set(targetEmail, plainPassword);
-        return plainPassword;
-      }
+  const resolveFromStore = () => {
+    for (const [userId, currentUser] of store.users.entries()) {
+      if (
+        typeof currentUser.email === "string" &&
+        normaliseEmail(currentUser.email) === targetEmail
+      ) {
+        const plainPassword = store.userPlaintextPasswords.get(userId);
+        if (typeof plainPassword === "string" && plainPassword.length > 0) {
+          /**
+           * Persist the freshly recovered plaintext so the direct map short-
+           * circuits future lookups, keeping the hot login path inexpensive.
+           */
+          store.userPlaintextByEmail.set(targetEmail, plainPassword);
+          return plainPassword;
+        }
 
-      return undefined;
+        return undefined;
+      }
     }
+
+    return undefined;
+  };
+
+  const lookup = resolveFromStore();
+  if (lookup) {
+    return lookup;
   }
 
-  return undefined;
+  const reloaded = loadPersistedUsers(store, { force: true });
+  if (!reloaded) {
+    return undefined;
+  }
+
+  return resolveFromStore();
 }
 
 export function getTestUserPlaintextPassword(email: string): string | undefined {
