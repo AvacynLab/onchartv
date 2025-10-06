@@ -153,7 +153,8 @@ export async function resolveCredentialsUser(
     return null;
   }
 
-  if (await verifyPassword(password, user.password)) {
+  const passwordMatches = await verifyPassword(password, user.password);
+  if (passwordMatches) {
     return user;
   }
 

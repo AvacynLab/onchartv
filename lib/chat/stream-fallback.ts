@@ -328,20 +328,38 @@ export async function buildFallbackStreamResponse(
     return new Response(emptyDataStream, { status: 200 });
   }
 
-  const restoredStream = createUIMessageStream<ChatMessage>({
-    execute: ({ writer }) => {
-      writer.write({
-        type: "data-appendMessage",
+  const encoder = new TextEncoder();
+  const restoredStream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const event = {
+        type: "data-appendMessage" as const,
         data: JSON.stringify(mostRecentMessage),
         transient: true,
-      });
+      };
+
+      /**
+       * Manually serialise the append event so the fallback mirrors the
+       * structure emitted by the Redis-backed implementation. This keeps the
+       * resume endpoint compatible with the Playwright route tests and avoids
+       * pulling in the heavier `createUIMessageStream` pipeline just to flush a
+       * single payload.
+       */
+      controller.enqueue(
+        encoder.encode(`data: ${JSON.stringify(event)}\n\n`)
+      );
+      controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+      controller.close();
     },
   });
 
-  return new Response(
-    restoredStream.pipeThrough(new JsonToSseTransformStream()),
-    { status: 200 }
-  );
+  return new Response(restoredStream, {
+    status: 200,
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    },
+  });
 }
 
 export const __test = {

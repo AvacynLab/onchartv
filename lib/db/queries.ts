@@ -66,6 +66,8 @@ import {
 type InMemoryStore = {
   users: Map<string, User>;
   userPlaintextPasswords: Map<string, string>;
+  /** Normalised email -> latest plaintext password for Playwright accounts. */
+  userPlaintextByEmail: Map<string, string>;
   chats: Map<string, Chat>;
   messages: Map<string, DBMessage>;
   votes: Map<string, { chatId: string; messageId: string; isUpvoted: boolean }>;
@@ -106,6 +108,14 @@ type ProcessWithInMemoryStore = NodeJS.Process & {
 const processWithStore = process as ProcessWithInMemoryStore;
 
 function setSharedInMemoryStore(store: InMemoryStore): InMemoryStore {
+  /**
+   * Older dev servers may have initialised the shared store before this field
+   * existed. Hydrate it lazily so Turbopack reloads continue sharing the same
+   * instance without losing access to the cached plaintext credentials.
+   */
+  if (!store.userPlaintextByEmail) {
+    store.userPlaintextByEmail = new Map();
+  }
   globalThis.__ONCHARTV_IN_MEMORY_STORE__ = store;
   processWithStore.__ONCHARTV_IN_MEMORY_STORE__ = store;
   return store;
@@ -138,6 +148,7 @@ function getOrCreateInMemoryStore(): InMemoryStore {
   const store: InMemoryStore = {
     users: new Map(),
     userPlaintextPasswords: new Map(),
+    userPlaintextByEmail: new Map(),
     chats: new Map(),
     messages: new Map(),
     votes: new Map(),
@@ -205,6 +216,7 @@ export function __resetInMemoryDbForTests(): void {
 
   store.users.clear();
   store.userPlaintextPasswords.clear();
+  store.userPlaintextByEmail.clear();
   store.chats.clear();
   store.messages.clear();
   store.votes.clear();
@@ -295,6 +307,12 @@ function getInMemoryPlaintextPassword(email: string): string | undefined {
   const store = getInMemoryStore();
   const targetEmail = normaliseEmail(email);
 
+  /** Fast-path lookups using the normalised email key. */
+  const directLookup = store.userPlaintextByEmail.get(targetEmail);
+  if (typeof directLookup === "string" && directLookup.length > 0) {
+    return directLookup;
+  }
+
   for (const [userId, currentUser] of store.users.entries()) {
     if (
       typeof currentUser.email === "string" &&
@@ -302,6 +320,11 @@ function getInMemoryPlaintextPassword(email: string): string | undefined {
     ) {
       const plainPassword = store.userPlaintextPasswords.get(userId);
       if (typeof plainPassword === "string" && plainPassword.length > 0) {
+        /**
+         * Persist the freshly recovered plaintext so the direct map short-
+         * circuits future lookups, keeping the hot login path inexpensive.
+         */
+        store.userPlaintextByEmail.set(targetEmail, plainPassword);
         return plainPassword;
       }
 
@@ -336,6 +359,7 @@ export async function createUser(email: string, password: string) {
         password: hashedPassword,
       });
       store.userPlaintextPasswords.set(userId, password);
+      store.userPlaintextByEmail.set(targetEmail, password);
 
       return;
     }
@@ -344,6 +368,7 @@ export async function createUser(email: string, password: string) {
 
     store.users.set(id, { id, email, password: hashedPassword });
     store.userPlaintextPasswords.set(id, password);
+    store.userPlaintextByEmail.set(targetEmail, password);
 
     return;
   }
@@ -366,6 +391,7 @@ export async function createGuestUser() {
 
     store.users.set(id, { id, email, password });
     store.userPlaintextPasswords.set(id, "");
+    store.userPlaintextByEmail.set(normaliseEmail(email), "");
 
     return [{ id, email }];
   }
