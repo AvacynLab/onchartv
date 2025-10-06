@@ -6,6 +6,7 @@ import { resolveCredentialsUser } from "@/lib/auth/credentials-verify";
 import {
   createGuestUser,
   createUser,
+  getPersistedTestUserByEmail,
   getTestUserPlaintextPassword,
   getUser,
 } from "@/lib/db/queries";
@@ -77,6 +78,12 @@ export const {
           {
             getUser,
             createUser,
+            /**
+             * Ensure the resolver can recover users from the persisted
+             * Playwright snapshot when Turbopack spins up a fresh module graph
+             * that misses the in-memory cache populated during registration.
+             */
+            getPersistedTestUserByEmail,
             getTestUserPlaintextPassword,
           }
         );
