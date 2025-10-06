@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { resolveCredentialsUser } from "@/lib/auth/credentials-verify";
+
 /**
  * Minimal representation of the persisted Playwright credential snapshot. The
  * unit tests feed deterministic payloads through the mocked filesystem so we
@@ -27,16 +29,17 @@ describe("loadPersistedUsers", () => {
   async function setup({
     records,
     initialMtimeMs = 1,
+    fileInitiallyExists = true,
   }: {
     records: PersistedUserRecord[];
     initialMtimeMs?: number;
+    fileInitiallyExists?: boolean;
   }) {
     let currentPayload = JSON.stringify(records);
     let currentMtimeMs = initialMtimeMs;
+    let isPersistedFilePresent = fileInitiallyExists;
 
-    vi.stubEnv("PLAYWRIGHT", "true");
-    vi.doMock("server-only", () => ({}));
-    vi.doMock("node:fs", () => {
+    const applyFsMock = () => {
       /**
        * Provide the minimal subset of the Node `fs` module that the loader
        * interacts with. The default export mirrors the named shape so the
@@ -44,11 +47,12 @@ describe("loadPersistedUsers", () => {
        * mocked helpers without tripping over Vitest's CJS emulation layer.
        */
       const mockedFs = {
-        existsSync: vi.fn(() => true),
+        existsSync: vi.fn(() => isPersistedFilePresent),
         readFileSync: vi.fn(() => currentPayload),
         writeFileSync: vi.fn((_path: string, content: string) => {
           currentPayload = content;
           currentMtimeMs += 1;
+          isPersistedFilePresent = true;
         }),
         mkdirSync: vi.fn(),
         rmSync: vi.fn(),
@@ -66,7 +70,11 @@ describe("loadPersistedUsers", () => {
         ...mockedFs,
         default: mockedFs,
       };
-    });
+    };
+
+    vi.stubEnv("PLAYWRIGHT", "true");
+    vi.doMock("server-only", () => ({}));
+    vi.doMock("node:fs", applyFsMock);
 
     const queries = await import("@/lib/db/queries");
     const store = queries.__getInMemoryStoreForTests();
@@ -74,6 +82,31 @@ describe("loadPersistedUsers", () => {
     return {
       queries,
       store,
+      setPersistedFilePresence(present: boolean) {
+        isPersistedFilePresent = present;
+      },
+      /**
+       * Reapply the filesystem mock while retaining the captured payload so we
+       * can simulate additional module graphs that reuse the persisted
+       * snapshot. Turbopack frequently reloads modules under Playwright, so the
+       * helper mirrors that behaviour for the unit assertions.
+       */
+      reloadQueries: async (options?: { resetProcessStore?: boolean }) => {
+        vi.resetModules();
+        vi.stubEnv("PLAYWRIGHT", "true");
+        vi.doMock("server-only", () => ({}));
+        vi.doMock("node:fs", applyFsMock);
+        if (options?.resetProcessStore ?? false) {
+          // @ts-expect-error -- Explicitly mutate the process-scoped cache to
+          // emulate an isolated module graph such as a NextAuth handler.
+          delete (process as { __ONCHARTV_IN_MEMORY_STORE__?: unknown })
+            .__ONCHARTV_IN_MEMORY_STORE__;
+          // eslint-disable-next-line no-undef -- `globalThis` is available in the test runtime.
+          delete (globalThis as { __ONCHARTV_IN_MEMORY_STORE__?: unknown })
+            .__ONCHARTV_IN_MEMORY_STORE__;
+        }
+        return import("@/lib/db/queries");
+      },
       updatePersistedRecords(
         nextRecords: PersistedUserRecord[],
         options?: { bumpMtime?: boolean }
@@ -158,5 +191,71 @@ describe("loadPersistedUsers", () => {
     queries.__loadPersistedUsersForTests(store);
 
     expect(store.userPlaintextByEmail.get("first@example.com")).toBe("secret-1");
+  });
+
+  it("retains credential verification after a module reload", async () => {
+    const email = "reloaded@example.com";
+    const password = "strong-password!";
+
+    const { queries, reloadQueries } = await setup({
+      records: [],
+      initialMtimeMs: 20,
+    });
+
+    await queries.createUser(email, password);
+
+    const dependencies = {
+      getUser: queries.getUser,
+      createUser: queries.createUser,
+      getTestUserPlaintextPassword: queries.getTestUserPlaintextPassword,
+    } satisfies Parameters<typeof resolveCredentialsUser>[2];
+
+    expect(
+      await resolveCredentialsUser(email, password, dependencies)
+    ).not.toBeNull();
+
+    const reloadedQueries = await reloadQueries({ resetProcessStore: true });
+
+    const reloadedDependencies = {
+      getUser: reloadedQueries.getUser,
+      createUser: reloadedQueries.createUser,
+      getTestUserPlaintextPassword: reloadedQueries.getTestUserPlaintextPassword,
+    } satisfies Parameters<typeof resolveCredentialsUser>[2];
+
+    const resolved = await resolveCredentialsUser(
+      email,
+      password,
+      reloadedDependencies
+    );
+
+    expect(resolved?.email).toBe(email);
+  });
+
+  it("hydrates NextAuth stores when the snapshot appears after initialisation", async () => {
+    const email = "late-load@example.com";
+    const password = "reliable-password!";
+
+    const { queries, reloadQueries } = await setup({
+      records: [],
+      initialMtimeMs: 0,
+      fileInitiallyExists: false,
+    });
+
+    const authDependencies = {
+      getUser: queries.getUser,
+      createUser: queries.createUser,
+      getTestUserPlaintextPassword: queries.getTestUserPlaintextPassword,
+    } satisfies Parameters<typeof resolveCredentialsUser>[2];
+
+    const writerQueries = await reloadQueries({ resetProcessStore: true });
+    await writerQueries.createUser(email, password);
+
+    const resolved = await resolveCredentialsUser(
+      email,
+      password,
+      authDependencies
+    );
+
+    expect(resolved?.email).toBe(email);
   });
 });

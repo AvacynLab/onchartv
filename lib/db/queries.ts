@@ -438,6 +438,9 @@ function getInMemoryStore(): InMemoryStore {
     );
   }
 
+  loadPersistedUsers(inMemoryStore);
+  logPlaywrightStoreSnapshot("lazy-hydration", inMemoryStore);
+
   return inMemoryStore;
 }
 
