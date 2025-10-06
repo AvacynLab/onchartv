@@ -301,20 +301,38 @@ const PLAYWRIGHT_USERS_PATH = path.join(
   "playwright-users.json"
 );
 
-let hasLoadedPersistedUsers = false;
+/**
+ * Track the most recent modification timestamp of the persisted Playwright
+ * credentials snapshot. When the timestamp changes we reload the cached users
+ * so independent Next.js module graphs (server actions vs route handlers)
+ * converge on the same credential set without depending on shared memory.
+ */
+let persistedUsersMtimeMs = 0;
 
 /**
  * Hydrate the shared in-memory store from the persisted credentials file when
  * the Playwright harness spins up a fresh module graph.
  */
 function loadPersistedUsers(store: InMemoryStore) {
-  if (hasLoadedPersistedUsers) {
+  if (!fs.existsSync(PLAYWRIGHT_USERS_PATH)) {
+    persistedUsersMtimeMs = 0;
     return;
   }
 
-  hasLoadedPersistedUsers = true;
+  let currentMtimeMs = 0;
 
-  if (!fs.existsSync(PLAYWRIGHT_USERS_PATH)) {
+  try {
+    const stats = fs.statSync(PLAYWRIGHT_USERS_PATH);
+    currentMtimeMs = Number(stats.mtimeMs) || 0;
+  } catch (error) {
+    console.warn(
+      "Failed to stat persisted Playwright users",
+      error
+    );
+    return;
+  }
+
+  if (currentMtimeMs !== 0 && currentMtimeMs <= persistedUsersMtimeMs) {
     return;
   }
 
@@ -327,6 +345,9 @@ function loadPersistedUsers(store: InMemoryStore) {
       plaintext?: string | null;
     }>;
 
+    store.userPlaintextPasswords.clear();
+    store.userPlaintextByEmail.clear();
+
     for (const record of records) {
       if (!record?.id || !record?.email) {
         continue;
@@ -335,15 +356,18 @@ function loadPersistedUsers(store: InMemoryStore) {
       store.users.set(record.id, {
         id: record.id,
         email: record.email,
-        password: record.password ?? null,
+        password: typeof record.password === "string" ? record.password : null,
       });
 
       const normalised = normaliseEmail(record.email);
-      const plaintext = record.plaintext ?? "";
+      const plaintext =
+        typeof record.plaintext === "string" ? record.plaintext : "";
 
       store.userPlaintextPasswords.set(record.id, plaintext);
       store.userPlaintextByEmail.set(normalised, plaintext);
     }
+
+    persistedUsersMtimeMs = currentMtimeMs;
   } catch (error) {
     console.warn(
       "Failed to hydrate Playwright users from persisted store",
@@ -379,6 +403,20 @@ function persistUsers(store: InMemoryStore) {
       JSON.stringify(payload, null, 2),
       "utf-8"
     );
+
+    try {
+      const stats = fs.statSync(PLAYWRIGHT_USERS_PATH);
+      const updatedMtimeMs = Number(stats.mtimeMs) || 0;
+
+      if (updatedMtimeMs > 0) {
+        persistedUsersMtimeMs = updatedMtimeMs;
+      }
+    } catch (error) {
+      console.warn(
+        "Failed to refresh Playwright users timestamp",
+        error
+      );
+    }
   } catch (error) {
     console.warn("Failed to persist Playwright users", error);
   }
@@ -441,7 +479,7 @@ export function __resetInMemoryDbForTests(): void {
   store.financePreferences.clear();
 
   try {
-    hasLoadedPersistedUsers = false;
+    persistedUsersMtimeMs = 0;
     if (fs.existsSync(PLAYWRIGHT_USERS_PATH)) {
       fs.rmSync(PLAYWRIGHT_USERS_PATH);
     }
@@ -1869,4 +1907,8 @@ export async function upsertFinancePreferences(
  * relying on private module internals.
  */
 export const __summarisePlaywrightStoreForTests = summarisePlaywrightStore;
+export const __loadPersistedUsersForTests = loadPersistedUsers;
+export function __getInMemoryStoreForTests(): InMemoryStore {
+  return getInMemoryStore();
+}
 export type __InMemoryStoreForTests = InMemoryStore;
