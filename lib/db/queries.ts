@@ -228,7 +228,7 @@ function loadPersistedUsers(store: InMemoryStore) {
       store.users.set(record.id, {
         id: record.id,
         email: record.email,
-        password: record.password ?? undefined,
+        password: record.password ?? null,
       });
 
       const normalised = normaliseEmail(record.email);
