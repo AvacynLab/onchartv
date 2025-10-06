@@ -29,6 +29,53 @@ test("resolveCredentialsUser returns null when the user does not exist", async (
   assert.equal(result, null);
 });
 
+test(
+  "resolveCredentialsUser hydrates persisted snapshot when initial lookup misses",
+  async () => {
+    const email = "persisted@example.com";
+    const password = "secret";
+    const hashedPassword = generateHashedPassword(password);
+
+    let getUserCalls = 0;
+    let createUserCalls = 0;
+
+    const { resolveCredentialsUser } = await loadCredentialsModule();
+
+    const overrides = {
+      getUser: async () => {
+        getUserCalls += 1;
+        if (getUserCalls === 1) {
+          return [] as Array<{ id: string; email: string; password: string | null }>;
+        }
+
+        return [
+          { id: "persisted-id", email, password: hashedPassword } as {
+            id: string;
+            email: string;
+            password: string;
+          },
+        ];
+      },
+      createUser: async () => {
+        createUserCalls += 1;
+      },
+      getTestUserPlaintextPassword: () => undefined,
+      getPersistedTestUserByEmail: () => ({
+        id: "persisted-id",
+        email,
+        password: hashedPassword,
+        plaintext: password,
+      }),
+    } satisfies Parameters<typeof resolveCredentialsUser>[2];
+
+    const result = await resolveCredentialsUser(email, password, overrides);
+
+    assert.equal(result?.id, "persisted-id");
+    assert.equal(createUserCalls >= 1, true);
+    assert.equal(getUserCalls >= 2, true);
+  }
+);
+
 test("resolveCredentialsUser refreshes stale hashes when plaintext matches", async () => {
   const email = "user@example.com";
   const password = "secret";
