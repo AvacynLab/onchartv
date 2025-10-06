@@ -19,7 +19,51 @@ export type NormalisedSignInResult =
  * objects, or `{ ok: boolean }` objects) and normalises them into a boolean
  * flag that the UI can consume.
  */
-export function didSignInSucceed(result: NormalisedSignInResult): boolean {
+type SignInResultOptions = {
+  baseUrl?: string;
+};
+
+const resolveBaseUrl = () =>
+  process.env.NEXTAUTH_URL ?? "http://localhost:3000";
+
+const loginRedirectsTo = (
+  value: string | null | undefined,
+  baseUrl: string
+) => {
+  if (!value) {
+    return false;
+  }
+
+  try {
+    const target = new URL(value, baseUrl);
+    return target.pathname.startsWith("/login");
+  } catch {
+    return value.startsWith("/login");
+  }
+};
+
+const extractResultUrl = (result: NormalisedSignInResult) => {
+  if (typeof result === "string") {
+    return result;
+  }
+
+  if (result instanceof Response) {
+    return result.headers.get("Location");
+  }
+
+  if (typeof result === "object" && result !== null && "url" in result) {
+    const { url } = result as { url?: unknown };
+    return typeof url === "string" ? url : undefined;
+  }
+
+  return undefined;
+};
+
+export function didSignInSucceed(
+  result: NormalisedSignInResult,
+  options: SignInResultOptions = {}
+): boolean {
+  const baseUrl = options.baseUrl ?? resolveBaseUrl();
   if (typeof result === "undefined") {
     /**
      * NextAuth returns `undefined` when a credentials-based sign-in succeeds
@@ -30,16 +74,32 @@ export function didSignInSucceed(result: NormalisedSignInResult): boolean {
   }
 
   if (typeof result === "string") {
-    return true;
+    return !loginRedirectsTo(result, baseUrl);
   }
 
   if (result instanceof Response) {
-    return result.ok;
+    if (!result.ok) {
+      return false;
+    }
+
+    if (loginRedirectsTo(result.headers.get("Location"), baseUrl)) {
+      return false;
+    }
+
+    return true;
   }
 
   if (typeof result === "object" && result !== null && "ok" in result) {
     const { ok } = result as { ok?: unknown };
+    if (loginRedirectsTo(extractResultUrl(result), baseUrl)) {
+      return false;
+    }
+
     return ok === true;
+  }
+
+  if (loginRedirectsTo(extractResultUrl(result), baseUrl)) {
+    return false;
   }
 
   return false;

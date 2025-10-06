@@ -42,6 +42,7 @@ export const login = async (
     const signInResponse = await signIn("credentials", {
       email: validatedData.email,
       password: validatedData.password,
+      callbackUrl: "/",
       redirect: false,
     });
 
@@ -107,6 +108,7 @@ export const register = async (
     const signInResponse = await signIn("credentials", {
       email: validatedData.email,
       password: validatedData.password,
+      callbackUrl: "/",
       redirect: false,
     });
 

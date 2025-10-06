@@ -10,6 +10,7 @@ import type {
   CreateBacktestRunInput,
   CreateStrategyInput,
 } from "../../../lib/db/queries";
+import { resolveCredentialsUser } from "../../../lib/auth/credentials-verify";
 import type {
   BacktestMetrics,
   BacktestTrade,
@@ -29,6 +30,72 @@ beforeEach(() => {
 });
 
 describe("finance queries", () => {
+  it("reuses in-memory users across duplicate registrations", async () => {
+    // Mirror the credential flows exercised by Playwright: the initial
+    // registration stores the user, and subsequent submissions should refresh
+    // the hashed password instead of creating duplicate entries.
+    await queries.createUser("Playwright@Example.com", "first-secret");
+    const [initialUser] = await queries.getUser("playwright@example.com");
+
+    expect(initialUser).toBeDefined();
+    expect(initialUser?.password).toBeDefined();
+
+    await queries.createUser("playwright@example.com", "second-secret");
+    const [updatedUser] = await queries.getUser("PLAYWRIGHT@EXAMPLE.COM");
+
+    expect(updatedUser).toBeDefined();
+    expect(updatedUser?.id).toBe(initialUser?.id);
+    expect(updatedUser?.password).not.toBe(initialUser?.password);
+  });
+
+  it("shares the in-memory user store across module reloads", async () => {
+    await queries.createUser("reload@example.com", "persisted-secret");
+    const [initialUser] = await queries.getUser("reload@example.com");
+
+    expect(initialUser).toBeDefined();
+
+    vi.resetModules();
+
+    // Reinstate the `server-only` stub for the fresh module graph.
+    vi.mock("server-only", () => ({}));
+
+    /**
+     * Import the queries module again to mimic the separate module graphs that
+     * Turbopack creates for server actions and route handlers. The shared
+     * process-level cache should keep the Playwright accounts visible across
+     * those reloads.
+     */
+    const reloadedQueries = await import("../../../lib/db/queries");
+    const [reloadedUser] = await reloadedQueries.getUser("reload@example.com");
+
+    expect(reloadedUser?.id).toBe(initialUser?.id);
+
+    reloadedQueries.__resetInMemoryDbForTests();
+    queries = reloadedQueries;
+  });
+
+  it("allows credentials verification after failed attempts refresh the user hash", async () => {
+    const email = "playwright-flow@example.com";
+    const password = "deterministic-secret";
+
+    await queries.createUser(email, password);
+
+    const dependencies = {
+      getUser: queries.getUser,
+      createUser: queries.createUser,
+      getTestUserPlaintextPassword: queries.getTestUserPlaintextPassword,
+    } as const;
+
+    const initial = await resolveCredentialsUser(email, password, dependencies);
+    expect(initial?.email).toBe(email);
+
+    const failed = await resolveCredentialsUser(email, "incorrect", dependencies);
+    expect(failed).toBeNull();
+
+    const retried = await resolveCredentialsUser(email, password, dependencies);
+    expect(retried?.id).toBe(initial?.id);
+  });
+
   it("normalises assets on upsert and fetch", async () => {
     const created = await queries.upsertAsset({
       symbol: "aapl",

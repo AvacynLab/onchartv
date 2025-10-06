@@ -23,6 +23,8 @@ const { buildFallbackStreamResponse, createEmptyStream } = streamModule;
 const { getMessagesByChatId } = await import("@/lib/db/queries");
 const mockedGetMessagesByChatId = vi.mocked(getMessagesByChatId);
 
+const immediateSleep = async () => {};
+
 describe("chat stream fallback", () => {
   const chatId = "chat-test-id";
   const resumeRequestedAt = new Date("2024-01-01T00:00:30Z");
@@ -38,10 +40,12 @@ describe("chat stream fallback", () => {
   it("returns an empty stream when the chat has no assistant replies", async () => {
     mockedGetMessagesByChatId.mockResolvedValue([]);
 
-    const response = await buildFallbackStreamResponse(chatId, resumeRequestedAt);
+    const response = await buildFallbackStreamResponse(chatId, resumeRequestedAt, {
+      sleep: immediateSleep,
+    });
 
     expect(response.status).toBe(200);
-    expect(await readStream(response.body)).toBe("data: [DONE]\n\n");
+    expect(await readStream(response.body)).toBe("");
   });
 
   it("returns an empty stream when the most recent assistant reply is stale", async () => {
@@ -56,10 +60,12 @@ describe("chat stream fallback", () => {
       } as any,
     ]);
 
-    const response = await buildFallbackStreamResponse(chatId, resumeRequestedAt);
+    const response = await buildFallbackStreamResponse(chatId, resumeRequestedAt, {
+      sleep: immediateSleep,
+    });
 
     expect(response.status).toBe(200);
-    expect(await readStream(response.body)).toBe("data: [DONE]\n\n");
+    expect(await readStream(response.body)).toBe("");
   });
 
   it("streams the latest assistant reply when it is still fresh", async () => {
@@ -80,7 +86,9 @@ describe("chat stream fallback", () => {
 
     mockedGetMessagesByChatId.mockResolvedValue([assistantMessage]);
 
-    const response = await buildFallbackStreamResponse(chatId, resumeRequestedAt);
+    const response = await buildFallbackStreamResponse(chatId, resumeRequestedAt, {
+      sleep: immediateSleep,
+    });
 
     expect(response.status).toBe(200);
 
@@ -88,6 +96,71 @@ describe("chat stream fallback", () => {
     expect(payload).toContain("data-appendMessage");
     expect(payload).toContain(assistantMessage.id);
     expect(payload).toContain("Here is the latest insight");
+  });
+
+  it("reconstructs text replies that only persisted streaming deltas", async () => {
+    mockedGetMessagesByChatId.mockResolvedValue([
+      {
+        id: "msg-3",
+        chatId,
+        role: "assistant",
+        parts: [
+          { type: "text-delta", delta: "Streaming " },
+          { type: "text-delta", delta: "response " },
+          { type: "text-delta", delta: "content" },
+        ],
+        createdAt: new Date(resumeRequestedAt.getTime() - 2_000).toISOString(),
+        updatedAt: new Date(resumeRequestedAt.getTime() - 2_000).toISOString(),
+      } as any,
+    ]);
+
+    const response = await buildFallbackStreamResponse(chatId, resumeRequestedAt, {
+      sleep: immediateSleep,
+    });
+
+    expect(response.status).toBe(200);
+
+    const payload = await readStream(response.body);
+    expect(payload).toContain("data-appendMessage");
+    expect(payload).toContain("Streaming response content");
+  });
+
+  it("overwrites empty text placeholders when rebuilding replies", async () => {
+    mockedGetMessagesByChatId.mockResolvedValue([
+      {
+        id: "msg-4",
+        chatId,
+        role: "assistant",
+        parts: [
+          { type: "text", text: "" },
+          { type: "text-delta", delta: "Rebuilt " },
+          { type: "text-delta", delta: "text" },
+        ],
+        createdAt: new Date(resumeRequestedAt.getTime() - 1_000).toISOString(),
+        updatedAt: new Date(resumeRequestedAt.getTime() - 1_000).toISOString(),
+      } as any,
+    ]);
+
+    const response = await buildFallbackStreamResponse(chatId, resumeRequestedAt, {
+      sleep: immediateSleep,
+    });
+
+    expect(response.status).toBe(200);
+
+    const payload = await readStream(response.body);
+    const appendLine = payload
+      .split("\n")
+      .find((line) => line.includes('"type":"data-appendMessage"'));
+
+    expect(appendLine, "missing append message event").toBeTruthy();
+
+    const appendPayload = JSON.parse(appendLine!.slice(6));
+    const resumedMessage = JSON.parse(appendPayload.data);
+    const resumedTextPart = Array.isArray(resumedMessage.parts)
+      ? resumedMessage.parts.find((part: any) => part?.type === "text")
+      : null;
+
+    expect(resumedTextPart?.text).toBe("Rebuilt text");
   });
 
   it("exposes the empty stream helper for defensive use", () => {

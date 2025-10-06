@@ -1,5 +1,8 @@
 import "server-only";
 
+import fs from "node:fs";
+import path from "node:path";
+
 import {
   and,
   asc,
@@ -65,6 +68,9 @@ import {
 
 type InMemoryStore = {
   users: Map<string, User>;
+  userPlaintextPasswords: Map<string, string>;
+  /** Normalised email -> latest plaintext password for Playwright accounts. */
+  userPlaintextByEmail: Map<string, string>;
   chats: Map<string, Chat>;
   messages: Map<string, DBMessage>;
   votes: Map<string, { chatId: string; messageId: string; isUpvoted: boolean }>;
@@ -98,39 +104,187 @@ declare global {
   var __ONCHARTV_IN_MEMORY_STORE__: InMemoryStore | undefined;
 }
 
+type ProcessWithInMemoryStore = NodeJS.Process & {
+  __ONCHARTV_IN_MEMORY_STORE__?: InMemoryStore;
+};
+
+const processWithStore = process as ProcessWithInMemoryStore;
+
+/**
+ * Normalise email addresses so lookups in the in-memory test database stay
+ * resilient to casing differences. The production Postgres queries remain
+ * case-sensitive, matching the schema constraints, while Playwright runs work
+ * with whatever variant the fixtures submit through the UI.
+ */
+function normaliseEmail(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function setSharedInMemoryStore(store: InMemoryStore): InMemoryStore {
+  /**
+   * Older dev servers may have initialised the shared store before this field
+   * existed. Hydrate it lazily so Turbopack reloads continue sharing the same
+   * instance without losing access to the cached plaintext credentials.
+   */
+  if (!store.userPlaintextByEmail) {
+    store.userPlaintextByEmail = new Map();
+  }
+  globalThis.__ONCHARTV_IN_MEMORY_STORE__ = store;
+  processWithStore.__ONCHARTV_IN_MEMORY_STORE__ = store;
+  return store;
+}
+
 function getOrCreateInMemoryStore(): InMemoryStore {
-  if (!globalThis.__ONCHARTV_IN_MEMORY_STORE__) {
-    /**
-     * Persist the Playwright-specific data structures on the Node.js global
-     * object. Next.js spawns isolated module graphs for server actions and
-     * route handlers in development, so relying on module-level state causes
-     * the in-memory database to reset between the registration action and the
-     * credentials provider. Storing the maps globally ensures the auth flow
-     * sees a consistent view of the fake database while keeping production
-     * paths untouched.
-     */
-    globalThis.__ONCHARTV_IN_MEMORY_STORE__ = {
-      users: new Map(),
-      chats: new Map(),
-      messages: new Map(),
-      votes: new Map(),
-      documents: new Map(),
-      suggestions: new Map(),
-      streams: new Map(),
-      assets: new Map(),
-      assetsBySymbolExchange: new Map(),
-      watchlists: new Map(),
-      watchlistItems: new Map(),
-      strategies: new Map(),
-      strategyVersions: new Map(),
-      backtestRuns: new Map(),
-      indicatorConfigs: new Map(),
-      newsItems: new Map(),
-      financePreferences: new Map(),
-    } as InMemoryStore;
+  /**
+   * Hydrate the store from whichever runtime context initialised it first.
+   *
+   * Turbopack spins up independent module graphs for server actions and route
+   * handlers. When those graphs run in separate VM contexts they may expose
+   * distinct `globalThis` objects, but they continue to share the same Node.js
+   * `process` instance. We therefore check the process-scoped cache before
+   * falling back to the current global so every context converges on a single
+   * in-memory database.
+   */
+  if (processWithStore.__ONCHARTV_IN_MEMORY_STORE__) {
+    const store = setSharedInMemoryStore(
+      processWithStore.__ONCHARTV_IN_MEMORY_STORE__
+    );
+    loadPersistedUsers(store);
+    return store;
   }
 
-  return globalThis.__ONCHARTV_IN_MEMORY_STORE__;
+  if (globalThis.__ONCHARTV_IN_MEMORY_STORE__) {
+    const store = setSharedInMemoryStore(globalThis.__ONCHARTV_IN_MEMORY_STORE__);
+    loadPersistedUsers(store);
+    return store;
+  }
+
+  /**
+   * Persist the Playwright-specific data structures on the shared holders so
+   * credentials verified inside route handlers can still see the users created
+   * by server actions running in a different compilation graph.
+   */
+  const store: InMemoryStore = {
+    users: new Map(),
+    userPlaintextPasswords: new Map(),
+    userPlaintextByEmail: new Map(),
+    chats: new Map(),
+    messages: new Map(),
+    votes: new Map(),
+    documents: new Map(),
+    suggestions: new Map(),
+    streams: new Map(),
+    assets: new Map(),
+    assetsBySymbolExchange: new Map(),
+    watchlists: new Map(),
+    watchlistItems: new Map(),
+    strategies: new Map(),
+    strategyVersions: new Map(),
+    backtestRuns: new Map(),
+    indicatorConfigs: new Map(),
+    newsItems: new Map(),
+    financePreferences: new Map(),
+  };
+
+  const shared = setSharedInMemoryStore(store);
+  loadPersistedUsers(shared);
+  return shared;
+}
+
+/**
+ * Persist Playwright-created credentials to disk so that independent Next.js
+ * compilation graphs (server actions, route handlers, middleware) can converge
+ * on the same deterministic user store. Without this fallback the different
+ * environments would frequently lose sight of the registration performed in a
+ * separate worker, causing `CredentialsSignin` errors mid-suite.
+ */
+const PLAYWRIGHT_AUTH_DIR = path.resolve(process.cwd(), "tests/.auth");
+const PLAYWRIGHT_USERS_PATH = path.join(
+  PLAYWRIGHT_AUTH_DIR,
+  "playwright-users.json"
+);
+
+let hasLoadedPersistedUsers = false;
+
+/**
+ * Hydrate the shared in-memory store from the persisted credentials file when
+ * the Playwright harness spins up a fresh module graph.
+ */
+function loadPersistedUsers(store: InMemoryStore) {
+  if (hasLoadedPersistedUsers) {
+    return;
+  }
+
+  hasLoadedPersistedUsers = true;
+
+  if (!fs.existsSync(PLAYWRIGHT_USERS_PATH)) {
+    return;
+  }
+
+  try {
+    const raw = fs.readFileSync(PLAYWRIGHT_USERS_PATH, "utf-8");
+    const records = JSON.parse(raw) as Array<{
+      id: string;
+      email: string;
+      password: string | null;
+      plaintext?: string | null;
+    }>;
+
+    for (const record of records) {
+      if (!record?.id || !record?.email) {
+        continue;
+      }
+
+      store.users.set(record.id, {
+        id: record.id,
+        email: record.email,
+        password: record.password ?? null,
+      });
+
+      const normalised = normaliseEmail(record.email);
+      const plaintext = record.plaintext ?? "";
+
+      store.userPlaintextPasswords.set(record.id, plaintext);
+      store.userPlaintextByEmail.set(normalised, plaintext);
+    }
+  } catch (error) {
+    console.warn(
+      "Failed to hydrate Playwright users from persisted store",
+      error
+    );
+  }
+}
+
+/**
+ * Serialize the current set of Playwright users so other runtimes can import
+ * the deterministic credentials without depending on shared memory.
+ */
+function persistUsers(store: InMemoryStore) {
+  try {
+    fs.mkdirSync(PLAYWRIGHT_AUTH_DIR, { recursive: true });
+
+    const payload = Array.from(store.users.entries()).map(
+      ([id, currentUser]) => {
+        const email = currentUser.email ?? "";
+        const plaintext = store.userPlaintextPasswords.get(id) ?? "";
+
+        return {
+          id,
+          email,
+          password: currentUser.password ?? null,
+          plaintext,
+        };
+      }
+    );
+
+    fs.writeFileSync(
+      PLAYWRIGHT_USERS_PATH,
+      JSON.stringify(payload, null, 2),
+      "utf-8"
+    );
+  } catch (error) {
+    console.warn("Failed to persist Playwright users", error);
+  }
 }
 
 const inMemoryStore: InMemoryStore | null = isTestEnvironment
@@ -170,6 +324,8 @@ export function __resetInMemoryDbForTests(): void {
   const store = getInMemoryStore();
 
   store.users.clear();
+  store.userPlaintextPasswords.clear();
+  store.userPlaintextByEmail.clear();
   store.chats.clear();
   store.messages.clear();
   store.votes.clear();
@@ -186,6 +342,15 @@ export function __resetInMemoryDbForTests(): void {
   store.indicatorConfigs.clear();
   store.newsItems.clear();
   store.financePreferences.clear();
+
+  try {
+    hasLoadedPersistedUsers = false;
+    if (fs.existsSync(PLAYWRIGHT_USERS_PATH)) {
+      fs.rmSync(PLAYWRIGHT_USERS_PATH);
+    }
+  } catch (error) {
+    console.warn("Failed to reset persisted Playwright users", error);
+  }
 }
 
 const makeVoteKey = (chatId: string, messageId: string) => `${chatId}:${messageId}`;
@@ -235,11 +400,11 @@ const db = client
 export async function getUser(email: string): Promise<User[]> {
   if (isTestEnvironment) {
     const store = getInMemoryStore();
-    const users = Array.from(store.users.values()).filter(
-      (currentUser) => currentUser.email === email
+    const targetEmail = normaliseEmail(email);
+    return Array.from(store.users.values()).filter((currentUser) =>
+      typeof currentUser.email === "string" &&
+      normaliseEmail(currentUser.email) === targetEmail
     );
-
-    return users;
   }
 
   try {
@@ -252,13 +417,80 @@ export async function getUser(email: string): Promise<User[]> {
   }
 }
 
+function getInMemoryPlaintextPassword(email: string): string | undefined {
+  if (!isTestEnvironment) {
+    return undefined;
+  }
+
+  const store = getInMemoryStore();
+  const targetEmail = normaliseEmail(email);
+
+  /** Fast-path lookups using the normalised email key. */
+  const directLookup = store.userPlaintextByEmail.get(targetEmail);
+  if (typeof directLookup === "string" && directLookup.length > 0) {
+    return directLookup;
+  }
+
+  for (const [userId, currentUser] of store.users.entries()) {
+    if (
+      typeof currentUser.email === "string" &&
+      normaliseEmail(currentUser.email) === targetEmail
+    ) {
+      const plainPassword = store.userPlaintextPasswords.get(userId);
+      if (typeof plainPassword === "string" && plainPassword.length > 0) {
+        /**
+         * Persist the freshly recovered plaintext so the direct map short-
+         * circuits future lookups, keeping the hot login path inexpensive.
+         */
+        store.userPlaintextByEmail.set(targetEmail, plainPassword);
+        return plainPassword;
+      }
+
+      return undefined;
+    }
+  }
+
+  return undefined;
+}
+
+export function getTestUserPlaintextPassword(email: string): string | undefined {
+  return getInMemoryPlaintextPassword(email);
+}
+
 export async function createUser(email: string, password: string) {
   if (isTestEnvironment) {
     const store = getInMemoryStore();
     const hashedPassword = generateHashedPassword(password);
+    const targetEmail = normaliseEmail(email);
+
+    const existingEntry = Array.from(store.users.entries()).find(
+      ([, currentUser]) =>
+        typeof currentUser.email === "string" &&
+        normaliseEmail(currentUser.email) === targetEmail
+    );
+
+    if (existingEntry) {
+      const [userId, currentUser] = existingEntry;
+      store.users.set(userId, {
+        ...currentUser,
+        email: currentUser.email ?? email,
+        password: hashedPassword,
+      });
+      store.userPlaintextPasswords.set(userId, password);
+      store.userPlaintextByEmail.set(targetEmail, password);
+
+      persistUsers(store);
+
+      return;
+    }
+
     const id = generateUUID();
 
     store.users.set(id, { id, email, password: hashedPassword });
+    store.userPlaintextPasswords.set(id, password);
+    store.userPlaintextByEmail.set(targetEmail, password);
+
+    persistUsers(store);
 
     return;
   }
@@ -280,6 +512,10 @@ export async function createGuestUser() {
     const password = generateHashedPassword(generateUUID());
 
     store.users.set(id, { id, email, password });
+    store.userPlaintextPasswords.set(id, "");
+    store.userPlaintextByEmail.set(normaliseEmail(email), "");
+
+    persistUsers(store);
 
     return [{ id, email }];
   }

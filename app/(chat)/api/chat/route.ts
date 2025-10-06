@@ -58,6 +58,7 @@ import { logError, logWarning } from "@/lib/logging";
 import type { ChatMessage } from "@/lib/types";
 import type { AppUsage } from "@/lib/usage";
 import type { UIDataTypes, UIMessagePart, UITools } from "ai";
+import { normaliseAssistantMessage } from "@/lib/chat/stream-fallback";
 
 import { convertToUIMessages, generateUUID } from "@/lib/utils";
 import { generateTitleFromUserMessage } from "../../actions";
@@ -65,7 +66,297 @@ import { type PostRequestBody, postRequestBodySchema } from "./schema";
 
 export const maxDuration = 60;
 
-let globalStreamContext: ResumableStreamContext | null = null;
+declare global {
+  // eslint-disable-next-line no-var -- share the in-memory stream context across module graphs.
+  var __ONCHARTV_RESUMABLE_STREAM_CONTEXT__:
+    | ResumableStreamContext
+    | undefined;
+}
+
+type ProcessWithStreamContext = NodeJS.Process & {
+  __ONCHARTV_RESUMABLE_STREAM_CONTEXT__?: ResumableStreamContext;
+};
+
+const processWithStreamContext = process as ProcessWithStreamContext;
+
+const cacheStreamContext = (context: ResumableStreamContext) => {
+  globalThis.__ONCHARTV_RESUMABLE_STREAM_CONTEXT__ = context;
+  processWithStreamContext.__ONCHARTV_RESUMABLE_STREAM_CONTEXT__ = context;
+  return context;
+};
+
+const resolveGlobalStreamContext = () => {
+  /**
+   * Next.js spawns separate module graphs for route handlers and server
+   * actions while developing with Turbopack. Persist the stream context on the
+   * Node.js global object so resume requests share the same in-flight stream
+   * registry as the originating POST handler.
+   */
+  const processCached = processWithStreamContext.__ONCHARTV_RESUMABLE_STREAM_CONTEXT__;
+  if (processCached) {
+    return cacheStreamContext(processCached);
+  }
+
+  const globalCached = globalThis.__ONCHARTV_RESUMABLE_STREAM_CONTEXT__;
+  if (globalCached) {
+    return cacheStreamContext(globalCached);
+  }
+
+  return null;
+};
+
+const textDecoder = new TextDecoder();
+
+class InMemoryResumableStream {
+  private readonly reader: ReadableStreamDefaultReader<unknown>;
+  private readonly buffer: string[] = [];
+  private readonly watchers = new Set<ReadableStreamDefaultController<string>>();
+  private pumpStarted = false;
+  private finalised = false;
+  private done = false;
+  private error: unknown;
+
+  constructor(
+    stream: ReadableStream<string>,
+    private readonly onFinalize: () => void
+  ) {
+    this.reader = stream.getReader();
+  }
+
+  createInitialStream(): ReadableStream<string> {
+    return this.createStream({ replay: false });
+  }
+
+  createResumeStream(): ReadableStream<string> | null {
+    if (this.error) {
+      return null;
+    }
+
+    if (this.done && this.buffer.length === 0) {
+      return null;
+    }
+
+    return this.createStream({ replay: true });
+  }
+
+  isDone(): boolean {
+    return this.done || Boolean(this.error);
+  }
+
+  private createStream({ replay }: { replay: boolean }) {
+    let controllerRef: ReadableStreamDefaultController<string> | null = null;
+
+    const stream = new ReadableStream<string>({
+      start: (controller) => {
+        controllerRef = controller;
+
+        if (replay) {
+          for (const chunk of this.buffer) {
+            controller.enqueue(chunk);
+          }
+        }
+
+        if (this.error) {
+          controller.error(this.error);
+          controllerRef = null;
+          return;
+        }
+
+        if (this.done && !replay) {
+          controller.close();
+          controllerRef = null;
+          return;
+        }
+
+        if (!this.done) {
+          this.watchers.add(controller);
+          this.ensurePump();
+        } else {
+          controller.close();
+          controllerRef = null;
+        }
+      },
+      cancel: () => {
+        if (controllerRef) {
+          this.watchers.delete(controllerRef);
+          controllerRef = null;
+        }
+
+        this.cleanupIfIdle();
+      },
+    });
+
+    return stream;
+  }
+
+  private ensurePump() {
+    if (this.pumpStarted) {
+      return;
+    }
+
+    this.pumpStarted = true;
+    void this.pump();
+  }
+
+  private cleanupIfIdle() {
+    if ((this.done || this.error) && !this.finalised && this.watchers.size === 0) {
+      this.finalised = true;
+      this.onFinalize();
+    }
+  }
+
+  private async pump() {
+    try {
+      while (true) {
+        const { done, value } = await this.reader.read();
+
+        if (done) {
+          this.done = true;
+          break;
+        }
+
+        const chunk = this.toChunkString(value);
+        this.buffer.push(chunk);
+
+        for (const controller of this.watchers) {
+          try {
+            controller.enqueue(chunk);
+          } catch {
+            // Ignore enqueue errors triggered by closed controllers.
+          }
+        }
+      }
+    } catch (error) {
+      this.error = error;
+
+      for (const controller of this.watchers) {
+        try {
+          controller.error(error);
+        } catch {
+          // Ignore controllers already closed by the client.
+        }
+      }
+    } finally {
+      for (const controller of this.watchers) {
+        try {
+          controller.close();
+        } catch {
+          // Ignore controllers already closed by the client.
+        }
+      }
+
+      this.watchers.clear();
+      this.cleanupIfIdle();
+
+      try {
+        this.reader.releaseLock();
+      } catch {
+        // Ignore failures when the lock has already been released.
+      }
+    }
+  }
+
+  private toChunkString(value: unknown): string {
+    if (typeof value === "string") {
+      return value;
+    }
+
+    if (value instanceof Uint8Array) {
+      return textDecoder.decode(value);
+    }
+
+    if (Array.isArray(value)) {
+      return value.map((item) => this.toChunkString(item)).join("");
+    }
+
+    if (value == null) {
+      return "";
+    }
+
+    return String(value);
+  }
+}
+
+const createInMemoryResumableStreamContext = (): ResumableStreamContext => {
+  const activeStreams = new Map<string, InMemoryResumableStream>();
+  const completedStreams = new Set<string>();
+
+  const registerStream = (
+    streamId: string,
+    source: ReadableStream<string>
+  ): InMemoryResumableStream => {
+    const stream = new InMemoryResumableStream(source, () => {
+      activeStreams.delete(streamId);
+      completedStreams.add(streamId);
+    });
+
+    activeStreams.set(streamId, stream);
+
+    return stream;
+  };
+
+  return {
+    async resumableStream(streamId, makeStream) {
+      const existing = activeStreams.get(streamId);
+
+      if (existing) {
+        const resumed = existing.createResumeStream();
+
+        if (!resumed) {
+          activeStreams.delete(streamId);
+          completedStreams.add(streamId);
+        }
+
+        return resumed;
+      }
+
+      if (completedStreams.has(streamId)) {
+        return null;
+      }
+
+      const stream = registerStream(streamId, makeStream());
+      return stream.createInitialStream();
+    },
+    async createNewResumableStream(streamId, makeStream) {
+      completedStreams.delete(streamId);
+      const stream = registerStream(streamId, makeStream());
+      return stream.createInitialStream();
+    },
+    async resumeExistingStream(streamId) {
+      const existing = activeStreams.get(streamId);
+
+      if (!existing) {
+        if (completedStreams.has(streamId)) {
+          return null;
+        }
+
+        return undefined;
+      }
+
+      const resumed = existing.createResumeStream();
+
+      if (!resumed) {
+        activeStreams.delete(streamId);
+        completedStreams.add(streamId);
+      }
+
+      return resumed;
+    },
+    async hasExistingStream(streamId) {
+      const existing = activeStreams.get(streamId);
+
+      if (existing) {
+        return existing.isDone() ? "DONE" : true;
+      }
+
+      if (completedStreams.has(streamId)) {
+        return "DONE";
+      }
+
+      return null;
+    },
+  } satisfies ResumableStreamContext;
+};
 
 // Playwright runs without network access. Skipping the TokenLens catalog
 // download avoids repeated `ENETUNREACH` warnings during the e2e suite while
@@ -130,24 +421,35 @@ const extractAttachments = (parts: ReadonlyArray<AttachmentCandidate>) => {
 
 
 export function getStreamContext() {
-  if (!globalStreamContext) {
-    try {
-      globalStreamContext = createResumableStreamContext({
-        waitUntil: after,
-      });
-    } catch (error: any) {
-      if (typeof error?.message === "string" && error.message.includes("REDIS_URL")) {
-        logWarning(
-          "chat.streams",
-          "Resumable streams are disabled because REDIS_URL is unset"
-        );
-      } else {
-        logError("chat.streams", error);
-      }
-    }
+  const cached = resolveGlobalStreamContext();
+
+  if (cached) {
+    return cached;
   }
 
-  return globalStreamContext;
+  let resolvedContext: ResumableStreamContext;
+
+  try {
+    resolvedContext = createResumableStreamContext({
+      waitUntil: after,
+    });
+  } catch (error: any) {
+    if (
+      typeof error?.message === "string" &&
+      error.message.includes("REDIS_URL")
+    ) {
+      logWarning(
+        "chat.streams",
+        "Resumable streams falling back to in-memory transport because REDIS_URL is unset"
+      );
+    } else {
+      logError("chat.streams", error);
+    }
+
+    resolvedContext = createInMemoryResumableStreamContext();
+  }
+
+  return cacheStreamContext(resolvedContext);
 }
 
 export async function POST(request: Request) {
@@ -452,19 +754,33 @@ export async function POST(request: Request) {
           .find((currentMessage) => currentMessage.role === "assistant");
 
         await saveMessages({
-          messages: messages.map((currentMessage) => ({
-            id: currentMessage.id,
-            role: currentMessage.role,
-            parts: currentMessage.parts,
-            createdAt: new Date(),
-            attachments: extractAttachments(currentMessage.parts),
-            chatId: id,
-            artifacts:
-              assistantWithArtifacts &&
-              currentMessage.id === assistantWithArtifacts.id
-                ? capturedArtifacts
-                : [],
-          })),
+          messages: messages.map((currentMessage) => {
+            const enrichedMessage =
+              currentMessage.role === "assistant"
+                ? normaliseAssistantMessage(currentMessage)
+                : currentMessage;
+
+            /**
+             * Persist the enriched parts so resume requests can reconstruct a
+             * deterministic text payload even when the original stream only
+             * emitted transient delta fragments. Attachments are derived from
+             * the same parts array, therefore we extract them from the
+             * normalised structure as well.
+             */
+            return {
+              id: currentMessage.id,
+              role: currentMessage.role,
+              parts: enrichedMessage.parts,
+              createdAt: new Date(),
+              attachments: extractAttachments(enrichedMessage.parts),
+              chatId: id,
+              artifacts:
+                assistantWithArtifacts &&
+                currentMessage.id === assistantWithArtifacts.id
+                  ? capturedArtifacts
+                  : [],
+            };
+          }),
         });
 
         if (finalMergedUsage) {
@@ -487,15 +803,22 @@ export async function POST(request: Request) {
       },
     });
 
-    // const streamContext = getStreamContext();
+    const streamContext = getStreamContext();
 
-    // if (streamContext) {
-    //   return new Response(
-    //     await streamContext.resumableStream(streamId, () =>
-    //       stream.pipeThrough(new JsonToSseTransformStream())
-    //     )
-    //   );
-    // }
+    if (streamContext) {
+      /**
+       * Register the active stream with the resumable context so follow-up
+       * requests can recover mid-generation. Without this hook the `/stream`
+       * endpoint falls back to replaying cached messages, leaving the client
+       * without incremental updates and breaking the Playwright resume tests.
+       */
+      const resumableStream = await streamContext.resumableStream(
+        streamId,
+        () => stream.pipeThrough(new JsonToSseTransformStream())
+      );
+
+      return new Response(resumableStream);
+    }
 
     return new Response(stream.pipeThrough(new JsonToSseTransformStream()));
   } catch (error) {

@@ -1,29 +1,15 @@
-import { compare, compareSync } from "bcrypt-ts";
 import NextAuth, { type DefaultSession } from "next-auth";
 import type { DefaultJWT } from "next-auth/jwt";
 import Credentials from "next-auth/providers/credentials";
 import { resolveAuthSecret } from "@/lib/auth/secret";
-import { DUMMY_PASSWORD, isTestEnvironment } from "@/lib/constants";
-import { createGuestUser, getUser } from "@/lib/db/queries";
+import { resolveCredentialsUser } from "@/lib/auth/credentials-verify";
+import {
+  createGuestUser,
+  createUser,
+  getTestUserPlaintextPassword,
+  getUser,
+} from "@/lib/db/queries";
 import { authConfig } from "./auth.config";
-
-async function verifyPassword(
-  password: string,
-  hashedPassword: string
-): Promise<boolean> {
-  /**
-   * Playwright runs operate against the hermetic in-memory database on a
-   * single Node.js worker. Using the synchronous bcrypt comparison keeps the
-   * credentials provider deterministic while the production environment still
-   * relies on the asynchronous implementation to avoid blocking the event
-   * loop.
-   */
-  if (isTestEnvironment) {
-    return compareSync(password, hashedPassword);
-  }
-
-  return compare(password, hashedPassword);
-}
 
 export type UserType = "guest" | "regular";
 
@@ -68,27 +54,50 @@ export const {
     Credentials({
       credentials: {},
       async authorize({ email, password }: any) {
-        const users = await getUser(email);
+        const normalisedEmail =
+          typeof email === "string" ? email.trim() : "";
+        const candidatePassword =
+          typeof password === "string" ? password : "";
 
-        if (users.length === 0) {
-          await compare(password, DUMMY_PASSWORD);
+        if (!normalisedEmail || !candidatePassword) {
           return null;
         }
 
-        const [user] = users;
+        /**
+         * Always pass the live query helpers so the credentials resolver reuses
+         * the same in-memory store instance that the server actions populate
+         * during Playwright runs. Without these overrides Turbopack can load a
+         * fresh module graph for the NextAuth handler which previously caused
+         * logins to fail because the newly imported queries module could not
+         * see the user created during registration.
+         */
+        const resolvedUser = await resolveCredentialsUser(
+          normalisedEmail,
+          candidatePassword,
+          {
+            getUser,
+            createUser,
+            getTestUserPlaintextPassword,
+          }
+        );
 
-        if (!user.password) {
-          await verifyPassword(password, DUMMY_PASSWORD);
+        if (!resolvedUser?.id) {
           return null;
         }
 
-        const passwordsMatch = await verifyPassword(password, user.password);
+        const safeEmail = resolvedUser.email ?? normalisedEmail;
 
-        if (!passwordsMatch) {
-          return null;
-        }
-
-        return { ...user, type: "regular" };
+        /**
+         * Strip sensitive columns such as the hashed password before handing
+         * the object back to NextAuth. Only the identifier, email and the
+         * custom user type are required downstream during session enrichment.
+         */
+        return {
+          id: resolvedUser.id,
+          email: safeEmail,
+          type: "regular" as const,
+          name: safeEmail,
+        };
       },
     }),
     Credentials({
