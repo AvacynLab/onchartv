@@ -111,6 +111,9 @@ function extractTextFragment(value: unknown): string {
 
 const collapseRepeatedSpaces = (value: string) => value.replace(/[ \t]{2,}/g, " ");
 
+const RESUME_PLACEHOLDER_TEXT =
+  "The assistant response is still processing. Please try again shortly.";
+
 export function normaliseAssistantMessage<T extends { parts?: unknown }>(
   message: T
 ): T {
@@ -148,11 +151,10 @@ export function normaliseAssistantMessage<T extends { parts?: unknown }>(
     ? aggregatedText
     : messageContent;
 
-  const fallbackText = collapseRepeatedSpaces(rawFallbackText).trim();
-
-  if (!fallbackText) {
-    return message;
-  }
+  const resolvedText = (() => {
+    const collapsed = collapseRepeatedSpaces(rawFallbackText).trim();
+    return collapsed.length > 0 ? collapsed : RESUME_PLACEHOLDER_TEXT;
+  })();
 
   const normalisedParts = parts.filter((part) => {
     if (!part || typeof part !== "object") {
@@ -180,7 +182,7 @@ export function normaliseAssistantMessage<T extends { parts?: unknown }>(
 
   const textPart: ChatMessage["parts"][number] = {
     type: "text",
-    text: fallbackText,
+    text: resolvedText,
   };
 
   const existingTextIndex = normalisedParts.findIndex(

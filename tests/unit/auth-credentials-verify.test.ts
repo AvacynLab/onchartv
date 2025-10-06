@@ -83,6 +83,39 @@ test("resolveCredentialsUser returns null when plaintext fallback does not match
   assert.equal(result, null);
 });
 
+test(
+  "resolveCredentialsUser creates a user in test environments when missing",
+  async () => {
+    const email = "missing@example.com";
+    const password = "secret";
+    const hashedPassword = generateHashedPassword(password);
+
+    let getUserCalls = 0;
+    let createUserCalls = 0;
+
+    const { resolveCredentialsUser } = await loadCredentialsModule();
+
+    const overrides = {
+      getUser: async () => {
+        getUserCalls += 1;
+        return getUserCalls === 1
+          ? []
+          : [{ id: "created-id", email, password: hashedPassword } as any];
+      },
+      createUser: async () => {
+        createUserCalls += 1;
+      },
+      getTestUserPlaintextPassword: () => undefined,
+    } satisfies Parameters<typeof resolveCredentialsUser>[2];
+
+    const result = await resolveCredentialsUser(email, password, overrides);
+
+    assert.equal(createUserCalls, 1);
+    assert.equal(getUserCalls >= 2, true);
+    assert.equal(result?.email, email);
+  }
+);
+
 test("resolveCredentialsUser prefers the provided dependency overrides", async () => {
   const email = "override@example.com";
   const password = "secret";

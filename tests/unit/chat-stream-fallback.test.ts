@@ -140,3 +140,22 @@ test("normaliseAssistantMessage extracts deeply nested value content", () => {
 
   assert.equal(textPart?.text, "Primary insight (delta)");
 });
+
+test("normaliseAssistantMessage injects placeholder text when none is available", () => {
+  const message = {
+    id: "assistant-3",
+    role: "assistant",
+    parts: [{ type: "tool-call", args: { query: "documents" } }],
+  } as any;
+
+  const normalised = normaliseAssistantMessage(message);
+
+  const textPart = normalised.parts.find(
+    (part: any) => part && part.type === "text"
+  );
+
+  assert.equal(
+    textPart?.text,
+    "The assistant response is still processing. Please try again shortly."
+  );
+});
