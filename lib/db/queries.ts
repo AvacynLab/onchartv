@@ -1,5 +1,8 @@
 import "server-only";
 
+import fs from "node:fs";
+import path from "node:path";
+
 import {
   and,
   asc,
@@ -133,11 +136,17 @@ function getOrCreateInMemoryStore(): InMemoryStore {
    * in-memory database.
    */
   if (processWithStore.__ONCHARTV_IN_MEMORY_STORE__) {
-    return setSharedInMemoryStore(processWithStore.__ONCHARTV_IN_MEMORY_STORE__);
+    const store = setSharedInMemoryStore(
+      processWithStore.__ONCHARTV_IN_MEMORY_STORE__
+    );
+    loadPersistedUsers(store);
+    return store;
   }
 
   if (globalThis.__ONCHARTV_IN_MEMORY_STORE__) {
-    return setSharedInMemoryStore(globalThis.__ONCHARTV_IN_MEMORY_STORE__);
+    const store = setSharedInMemoryStore(globalThis.__ONCHARTV_IN_MEMORY_STORE__);
+    loadPersistedUsers(store);
+    return store;
   }
 
   /**
@@ -167,7 +176,105 @@ function getOrCreateInMemoryStore(): InMemoryStore {
     financePreferences: new Map(),
   };
 
-  return setSharedInMemoryStore(store);
+  const shared = setSharedInMemoryStore(store);
+  loadPersistedUsers(shared);
+  return shared;
+}
+
+/**
+ * Persist Playwright-created credentials to disk so that independent Next.js
+ * compilation graphs (server actions, route handlers, middleware) can converge
+ * on the same deterministic user store. Without this fallback the different
+ * environments would frequently lose sight of the registration performed in a
+ * separate worker, causing `CredentialsSignin` errors mid-suite.
+ */
+const PLAYWRIGHT_AUTH_DIR = path.resolve(process.cwd(), "tests/.auth");
+const PLAYWRIGHT_USERS_PATH = path.join(
+  PLAYWRIGHT_AUTH_DIR,
+  "playwright-users.json"
+);
+
+let hasLoadedPersistedUsers = false;
+
+/**
+ * Hydrate the shared in-memory store from the persisted credentials file when
+ * the Playwright harness spins up a fresh module graph.
+ */
+function loadPersistedUsers(store: InMemoryStore) {
+  if (hasLoadedPersistedUsers) {
+    return;
+  }
+
+  hasLoadedPersistedUsers = true;
+
+  if (!fs.existsSync(PLAYWRIGHT_USERS_PATH)) {
+    return;
+  }
+
+  try {
+    const raw = fs.readFileSync(PLAYWRIGHT_USERS_PATH, "utf-8");
+    const records = JSON.parse(raw) as Array<{
+      id: string;
+      email: string;
+      password: string | null;
+      plaintext?: string | null;
+    }>;
+
+    for (const record of records) {
+      if (!record?.id || !record?.email) {
+        continue;
+      }
+
+      store.users.set(record.id, {
+        id: record.id,
+        email: record.email,
+        password: record.password ?? undefined,
+      });
+
+      const normalised = normaliseEmail(record.email);
+      const plaintext = record.plaintext ?? "";
+
+      store.userPlaintextPasswords.set(record.id, plaintext);
+      store.userPlaintextByEmail.set(normalised, plaintext);
+    }
+  } catch (error) {
+    console.warn(
+      "Failed to hydrate Playwright users from persisted store",
+      error
+    );
+  }
+}
+
+/**
+ * Serialize the current set of Playwright users so other runtimes can import
+ * the deterministic credentials without depending on shared memory.
+ */
+function persistUsers(store: InMemoryStore) {
+  try {
+    fs.mkdirSync(PLAYWRIGHT_AUTH_DIR, { recursive: true });
+
+    const payload = Array.from(store.users.entries()).map(
+      ([id, currentUser]) => {
+        const email = currentUser.email ?? "";
+        const plaintext = store.userPlaintextPasswords.get(id) ?? "";
+
+        return {
+          id,
+          email,
+          password: currentUser.password ?? null,
+          plaintext,
+        };
+      }
+    );
+
+    fs.writeFileSync(
+      PLAYWRIGHT_USERS_PATH,
+      JSON.stringify(payload, null, 2),
+      "utf-8"
+    );
+  } catch (error) {
+    console.warn("Failed to persist Playwright users", error);
+  }
 }
 
 const inMemoryStore: InMemoryStore | null = isTestEnvironment
@@ -233,6 +340,15 @@ export function __resetInMemoryDbForTests(): void {
   store.indicatorConfigs.clear();
   store.newsItems.clear();
   store.financePreferences.clear();
+
+  try {
+    hasLoadedPersistedUsers = false;
+    if (fs.existsSync(PLAYWRIGHT_USERS_PATH)) {
+      fs.rmSync(PLAYWRIGHT_USERS_PATH);
+    }
+  } catch (error) {
+    console.warn("Failed to reset persisted Playwright users", error);
+  }
 }
 
 const makeVoteKey = (chatId: string, messageId: string) => `${chatId}:${messageId}`;
@@ -361,6 +477,8 @@ export async function createUser(email: string, password: string) {
       store.userPlaintextPasswords.set(userId, password);
       store.userPlaintextByEmail.set(targetEmail, password);
 
+      persistUsers(store);
+
       return;
     }
 
@@ -369,6 +487,8 @@ export async function createUser(email: string, password: string) {
     store.users.set(id, { id, email, password: hashedPassword });
     store.userPlaintextPasswords.set(id, password);
     store.userPlaintextByEmail.set(targetEmail, password);
+
+    persistUsers(store);
 
     return;
   }
@@ -392,6 +512,8 @@ export async function createGuestUser() {
     store.users.set(id, { id, email, password });
     store.userPlaintextPasswords.set(id, "");
     store.userPlaintextByEmail.set(normaliseEmail(email), "");
+
+    persistUsers(store);
 
     return [{ id, email }];
   }
