@@ -23,6 +23,8 @@ const { buildFallbackStreamResponse, createEmptyStream } = streamModule;
 const { getMessagesByChatId } = await import("@/lib/db/queries");
 const mockedGetMessagesByChatId = vi.mocked(getMessagesByChatId);
 
+const immediateSleep = async () => {};
+
 describe("chat stream fallback", () => {
   const chatId = "chat-test-id";
   const resumeRequestedAt = new Date("2024-01-01T00:00:30Z");
@@ -38,7 +40,9 @@ describe("chat stream fallback", () => {
   it("returns an empty stream when the chat has no assistant replies", async () => {
     mockedGetMessagesByChatId.mockResolvedValue([]);
 
-    const response = await buildFallbackStreamResponse(chatId, resumeRequestedAt);
+    const response = await buildFallbackStreamResponse(chatId, resumeRequestedAt, {
+      sleep: immediateSleep,
+    });
 
     expect(response.status).toBe(200);
     expect(await readStream(response.body)).toBe("data: [DONE]\n\n");
@@ -56,7 +60,9 @@ describe("chat stream fallback", () => {
       } as any,
     ]);
 
-    const response = await buildFallbackStreamResponse(chatId, resumeRequestedAt);
+    const response = await buildFallbackStreamResponse(chatId, resumeRequestedAt, {
+      sleep: immediateSleep,
+    });
 
     expect(response.status).toBe(200);
     expect(await readStream(response.body)).toBe("data: [DONE]\n\n");
@@ -80,7 +86,9 @@ describe("chat stream fallback", () => {
 
     mockedGetMessagesByChatId.mockResolvedValue([assistantMessage]);
 
-    const response = await buildFallbackStreamResponse(chatId, resumeRequestedAt);
+    const response = await buildFallbackStreamResponse(chatId, resumeRequestedAt, {
+      sleep: immediateSleep,
+    });
 
     expect(response.status).toBe(200);
 
@@ -106,7 +114,9 @@ describe("chat stream fallback", () => {
       } as any,
     ]);
 
-    const response = await buildFallbackStreamResponse(chatId, resumeRequestedAt);
+    const response = await buildFallbackStreamResponse(chatId, resumeRequestedAt, {
+      sleep: immediateSleep,
+    });
 
     expect(response.status).toBe(200);
 
@@ -131,7 +141,9 @@ describe("chat stream fallback", () => {
       } as any,
     ]);
 
-    const response = await buildFallbackStreamResponse(chatId, resumeRequestedAt);
+    const response = await buildFallbackStreamResponse(chatId, resumeRequestedAt, {
+      sleep: immediateSleep,
+    });
 
     expect(response.status).toBe(200);
 

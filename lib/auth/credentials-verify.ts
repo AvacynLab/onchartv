@@ -87,6 +87,11 @@ export async function resolveCredentialsUser(
     return cachedPlaintext;
   };
 
+  const plaintextMatches = () => {
+    const plaintextPassword = resolvePlaintextPassword();
+    return typeof plaintextPassword === "string" && plaintextPassword === password;
+  };
+
   const refreshUserPassword = async () => {
     /**
      * Playwright keeps the in-memory store alive across module reloads. When a
@@ -106,12 +111,7 @@ export async function resolveCredentialsUser(
     return refreshedUser;
   };
 
-  const plaintextMatches = () => {
-    const plaintextPassword = resolvePlaintextPassword();
-    return typeof plaintextPassword === "string" && plaintextPassword === password;
-  };
-
-  const refreshWithPlaintext = async () => {
+  const attemptRefreshWithPlaintext = async () => {
     if (!plaintextMatches()) {
       return null;
     }
@@ -122,23 +122,23 @@ export async function resolveCredentialsUser(
         return refreshedUser;
       }
     } catch (error) {
-      if (isTestEnvironment) {
-        return user ?? null;
+      if (!isTestEnvironment) {
+        throw error;
       }
-
-      throw error;
     }
 
-    return null;
+    return plaintextMatches() ? user ?? null : null;
   };
 
+  const allowPlaintextFallback = () => isTestEnvironment && plaintextMatches();
+
   if (!user?.password) {
-    const refreshedUser = await refreshWithPlaintext();
+    const refreshedUser = await attemptRefreshWithPlaintext();
     if (refreshedUser) {
       return refreshedUser;
     }
 
-    if (isTestEnvironment && plaintextMatches()) {
+    if (allowPlaintextFallback()) {
       /**
        * The in-memory Playwright store occasionally serves user records before
        * their bcrypt hash has been refreshed. When the plaintext credential
@@ -146,7 +146,7 @@ export async function resolveCredentialsUser(
        * rejecting the login attempt, keeping the credential flow deterministic
        * while the refresh completes in the background.
        */
-      return user;
+      return user ?? null;
     }
 
     compareSync(password, DUMMY_PASSWORD);
@@ -157,12 +157,12 @@ export async function resolveCredentialsUser(
     return user;
   }
 
-  const refreshedUser = await refreshWithPlaintext();
+  const refreshedUser = await attemptRefreshWithPlaintext();
   if (refreshedUser) {
     return refreshedUser;
   }
 
-  if (isTestEnvironment && plaintextMatches()) {
+  if (allowPlaintextFallback()) {
     /**
      * When running inside the hermetic Playwright environment we retain the
      * plaintext credentials alongside the hashed value so deterministic login
@@ -173,6 +173,7 @@ export async function resolveCredentialsUser(
     return user;
   }
 
+  compareSync(password, DUMMY_PASSWORD);
   return null;
 }
 

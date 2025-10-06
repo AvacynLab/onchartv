@@ -15,9 +15,17 @@ type GetMessagesByChatId = typeof import("@/lib/db/queries")["getMessagesByChatI
  */
 const FALLBACK_LOOKUP_ATTEMPTS = 60;
 const FALLBACK_LOOKUP_DELAY_MS = 100;
-const MAX_EMPTY_MESSAGE_POLLS = 3;
+/**
+ * Allow the resume fallback to observe multiple empty polls (~2 seconds) before
+ * assuming no assistant reply exists. This keeps brand-new chats responsive
+ * while still giving the persistence layer enough time to flush streamed
+ * messages during slower hermetic runs.
+ */
+const MAX_EMPTY_MESSAGE_POLLS = 20;
 
-const delay = (ms: number) =>
+type DelayFn = (ms: number) => Promise<void>;
+
+const delay: DelayFn = (ms: number) =>
   new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
   });
@@ -200,7 +208,8 @@ export function normaliseAssistantMessage<T extends { parts?: unknown }>(
 async function resolveRecentAssistantMessage(
   chatId: string,
   resumeRequestedAt: Date,
-  getMessages: GetMessagesByChatId
+  getMessages: GetMessagesByChatId,
+  sleep: DelayFn
 ) {
   let consecutiveEmptyPolls = 0;
   for (let attempt = 0; attempt < FALLBACK_LOOKUP_ATTEMPTS; attempt += 1) {
@@ -214,7 +223,7 @@ async function resolveRecentAssistantMessage(
         return null;
       }
 
-      await delay(FALLBACK_LOOKUP_DELAY_MS);
+      await sleep(FALLBACK_LOOKUP_DELAY_MS);
       continue;
     }
 
@@ -247,7 +256,7 @@ async function resolveRecentAssistantMessage(
           // The assistant message has been persisted but its textual content
           // has not yet been finalised. Keep polling so the resume endpoint
           // replays a meaningful payload instead of returning an empty chunk.
-          await delay(FALLBACK_LOOKUP_DELAY_MS);
+          await sleep(FALLBACK_LOOKUP_DELAY_MS);
           continue;
         }
 
@@ -257,7 +266,7 @@ async function resolveRecentAssistantMessage(
       return null;
     }
 
-    await delay(FALLBACK_LOOKUP_DELAY_MS);
+    await sleep(FALLBACK_LOOKUP_DELAY_MS);
   }
 
   return null;
@@ -297,6 +306,7 @@ export async function buildFallbackStreamResponse(
   resumeRequestedAt: Date,
   overrides?: {
     getMessagesByChatId?: GetMessagesByChatId;
+    sleep?: DelayFn;
   }
 ) {
   const emptyDataStream = createEmptyStream();
@@ -305,10 +315,13 @@ export async function buildFallbackStreamResponse(
     overrides?.getMessagesByChatId
   );
 
+  const sleep = overrides?.sleep ?? delay;
+
   const mostRecentMessage = await resolveRecentAssistantMessage(
     chatId,
     resumeRequestedAt,
-    getMessages
+    getMessages,
+    sleep
   );
 
   if (!mostRecentMessage) {
