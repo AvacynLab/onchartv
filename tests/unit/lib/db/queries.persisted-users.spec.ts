@@ -36,17 +36,37 @@ describe("loadPersistedUsers", () => {
 
     vi.stubEnv("PLAYWRIGHT", "true");
     vi.doMock("server-only", () => ({}));
-    vi.doMock("node:fs", () => ({
-      existsSync: vi.fn(() => true),
-      readFileSync: vi.fn(() => currentPayload),
-      writeFileSync: vi.fn((_path: string, content: string) => {
-        currentPayload = content;
-        currentMtimeMs += 1;
-      }),
-      mkdirSync: vi.fn(),
-      rmSync: vi.fn(),
-      statSync: vi.fn(() => ({ mtimeMs: currentMtimeMs })),
-    }));
+    vi.doMock("node:fs", () => {
+      /**
+       * Provide the minimal subset of the Node `fs` module that the loader
+       * interacts with. The default export mirrors the named shape so the
+       * `import fs from "node:fs"` statement in `queries.ts` can resolve the
+       * mocked helpers without tripping over Vitest's CJS emulation layer.
+       */
+      const mockedFs = {
+        existsSync: vi.fn(() => true),
+        readFileSync: vi.fn(() => currentPayload),
+        writeFileSync: vi.fn((_path: string, content: string) => {
+          currentPayload = content;
+          currentMtimeMs += 1;
+        }),
+        mkdirSync: vi.fn(),
+        rmSync: vi.fn(),
+        statSync: vi.fn(() => ({ mtimeMs: currentMtimeMs })),
+      } satisfies Partial<typeof import("node:fs")> & {
+        existsSync: ReturnType<typeof vi.fn>;
+        readFileSync: ReturnType<typeof vi.fn>;
+        writeFileSync: ReturnType<typeof vi.fn>;
+        mkdirSync: ReturnType<typeof vi.fn>;
+        rmSync: ReturnType<typeof vi.fn>;
+        statSync: ReturnType<typeof vi.fn>;
+      };
+
+      return {
+        ...mockedFs,
+        default: mockedFs,
+      };
+    });
 
     const queries = await import("@/lib/db/queries");
     const store = queries.__getInMemoryStoreForTests();
