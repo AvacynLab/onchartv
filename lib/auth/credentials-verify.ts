@@ -104,7 +104,13 @@ export async function resolveCredentialsUser(
     const persistedPlaintext =
       typeof persisted.plaintext === "string" ? persisted.plaintext : "";
 
-    if (persistedPlaintext !== password) {
+    const plaintextMatchesPersisted = persistedPlaintext === password;
+    const hashedMatchesPersisted =
+      !plaintextMatchesPersisted &&
+      typeof persisted.password === "string" &&
+      compareSync(password, persisted.password);
+
+    if (!plaintextMatchesPersisted && !hashedMatchesPersisted) {
       return null;
     }
 
@@ -133,6 +139,13 @@ export async function resolveCredentialsUser(
         email: persisted.email,
         password: persisted.password,
       } as User;
+    }
+
+    if (candidateUser && hashedMatchesPersisted && !candidateUser.password) {
+      return {
+        ...candidateUser,
+        password: persisted.password ?? candidateUser.password ?? null,
+      };
     }
 
     return candidateUser ?? null;

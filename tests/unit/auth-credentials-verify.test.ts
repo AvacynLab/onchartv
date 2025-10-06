@@ -76,6 +76,61 @@ test(
   }
 );
 
+test(
+  "resolveCredentialsUser falls back to persisted hash when plaintext is missing",
+  async () => {
+    const email = "persisted-hash@example.com";
+    const password = "secret";
+    const staleHash = generateHashedPassword("old-secret");
+    const refreshedHash = generateHashedPassword(password);
+
+    let getUserCalls = 0;
+    let createUserCalls = 0;
+
+    const { resolveCredentialsUser } = await loadCredentialsModule();
+
+    const overrides = {
+      getUser: async () => {
+        getUserCalls += 1;
+
+        if (getUserCalls === 1) {
+          return [
+            { id: "persisted-id", email, password: staleHash } as {
+              id: string;
+              email: string;
+              password: string;
+            },
+          ];
+        }
+
+        return [
+          { id: "persisted-id", email, password: refreshedHash } as {
+            id: string;
+            email: string;
+            password: string;
+          },
+        ];
+      },
+      createUser: async () => {
+        createUserCalls += 1;
+      },
+      getTestUserPlaintextPassword: () => undefined,
+      getPersistedTestUserByEmail: () => ({
+        id: "persisted-id",
+        email,
+        password: refreshedHash,
+        plaintext: null,
+      }),
+    } satisfies Parameters<typeof resolveCredentialsUser>[2];
+
+    const result = await resolveCredentialsUser(email, password, overrides);
+
+    assert.equal(createUserCalls, 1);
+    assert.equal(getUserCalls >= 2, true);
+    assert.equal(result?.password, refreshedHash);
+  }
+);
+
 test("resolveCredentialsUser refreshes stale hashes when plaintext matches", async () => {
   const email = "user@example.com";
   const password = "secret";
