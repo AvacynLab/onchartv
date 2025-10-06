@@ -79,6 +79,19 @@ function extractTextFragment(value: unknown): string {
       if (nested) return nested;
     }
 
+    if (typeof record.value === "string") {
+      return record.value;
+    }
+
+    if (record.value) {
+      const nested = extractTextFragment(record.value);
+      if (nested) return nested;
+    }
+
+    if (typeof record.content === "string") {
+      return record.content;
+    }
+
     if (record.content) {
       const nested = extractTextFragment(record.content);
       if (nested) return nested;
@@ -87,6 +100,8 @@ function extractTextFragment(value: unknown): string {
 
   return "";
 }
+
+const collapseRepeatedSpaces = (value: string) => value.replace(/[ \t]{2,}/g, " ");
 
 export function normaliseAssistantMessage<T extends { parts?: unknown }>(
   message: T
@@ -121,9 +136,11 @@ export function normaliseAssistantMessage<T extends { parts?: unknown }>(
       : undefined
   );
 
-  const fallbackText = aggregatedText.length > 0
+  const rawFallbackText = aggregatedText.length > 0
     ? aggregatedText
-    : messageContent.trim();
+    : messageContent;
+
+  const fallbackText = collapseRepeatedSpaces(rawFallbackText).trim();
 
   if (!fallbackText) {
     return message;

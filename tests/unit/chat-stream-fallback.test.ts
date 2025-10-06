@@ -105,3 +105,38 @@ test("normaliseAssistantMessage reconstructs text from delta fragments", () => {
 
   assert.equal(textPart?.text, "Hello world");
 });
+
+test("normaliseAssistantMessage extracts deeply nested value content", () => {
+  const message = {
+    id: "assistant-2",
+    role: "assistant",
+    parts: [
+      {
+        type: "text",
+        text: {
+          value: " Primary insight ",
+        },
+      },
+      {
+        type: "text-delta",
+        delta: { value: " (delta)" },
+      },
+    ],
+    content: [
+      {
+        type: "text",
+        text: {
+          message: { value: "" },
+        },
+      },
+    ],
+  } as any;
+
+  const normalised = normaliseAssistantMessage(message);
+
+  const textPart = normalised.parts.find(
+    (part: any) => part && part.type === "text"
+  );
+
+  assert.equal(textPart?.text, "Primary insight (delta)");
+});
