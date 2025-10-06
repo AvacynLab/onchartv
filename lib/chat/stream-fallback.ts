@@ -311,8 +311,6 @@ export async function buildFallbackStreamResponse(
     sleep?: DelayFn;
   }
 ) {
-  const emptyDataStream = createEmptyStream();
-
   const getMessages = await resolveGetMessagesByChatId(
     overrides?.getMessagesByChatId
   );
@@ -327,7 +325,13 @@ export async function buildFallbackStreamResponse(
   );
 
   if (!mostRecentMessage) {
-    return new Response(emptyDataStream, { status: 200 });
+    /**
+     * Redis stores return an empty body once a stream has completely finished.
+     * Mirror that behaviour so callers relying on the legacy contract (e.g. the
+     * `/api/chat` resume tests) continue to receive an empty payload rather than
+     * an SSE terminator.
+     */
+    return new Response("", { status: 200 });
   }
 
   const encoder = new TextEncoder();

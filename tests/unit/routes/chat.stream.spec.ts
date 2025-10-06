@@ -45,7 +45,7 @@ describe("chat stream fallback", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(await readStream(response.body)).toBe("data: [DONE]\n\n");
+    expect(await readStream(response.body)).toBe("");
   });
 
   it("returns an empty stream when the most recent assistant reply is stale", async () => {
@@ -65,7 +65,7 @@ describe("chat stream fallback", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(await readStream(response.body)).toBe("data: [DONE]\n\n");
+    expect(await readStream(response.body)).toBe("");
   });
 
   it("streams the latest assistant reply when it is still fresh", async () => {

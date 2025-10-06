@@ -110,6 +110,16 @@ type ProcessWithInMemoryStore = NodeJS.Process & {
 
 const processWithStore = process as ProcessWithInMemoryStore;
 
+/**
+ * Normalise email addresses so lookups in the in-memory test database stay
+ * resilient to casing differences. The production Postgres queries remain
+ * case-sensitive, matching the schema constraints, while Playwright runs work
+ * with whatever variant the fixtures submit through the UI.
+ */
+function normaliseEmail(value: string): string {
+  return value.trim().toLowerCase();
+}
+
 function setSharedInMemoryStore(store: InMemoryStore): InMemoryStore {
   /**
    * Older dev servers may have initialised the shared store before this field
@@ -195,14 +205,6 @@ const PLAYWRIGHT_USERS_PATH = path.join(
 );
 
 let hasLoadedPersistedUsers = false;
-
-/**
- * Normalise email addresses so lookups in the in-memory test database stay
- * resilient to casing differences. The production Postgres queries remain
- * case-sensitive, matching the schema constraints, while Playwright runs work
- * with whatever variant the fixtures submit through the UI.
- */
-const normaliseEmail = (value: string) => value.trim().toLowerCase();
 
 /**
  * Hydrate the shared in-memory store from the persisted credentials file when
