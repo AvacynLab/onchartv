@@ -91,8 +91,12 @@ function summariseSignInResponse(signInResponse: unknown): SignInResponseSummary
     };
   }
 
-  if (typeof signInResponse === "number" || typeof signInResponse === "boolean") {
-    return { kind: typeof signInResponse, value: signInResponse };
+  if (typeof signInResponse === "number") {
+    return { kind: "number", value: signInResponse };
+  }
+
+  if (typeof signInResponse === "boolean") {
+    return { kind: "boolean", value: signInResponse };
   }
 
   return {
