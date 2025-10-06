@@ -29,6 +29,92 @@ export type LoginActionState = {
  * the provider response into a lightweight status object that the UI can
  * consume to display precise feedback messages.
  */
+type SignInResponseSummary =
+  | {
+      kind: "response";
+      status: number;
+      redirected: boolean;
+      url: string;
+    }
+  | {
+      kind: "string";
+      value: string;
+    }
+  | {
+      kind: "object";
+      keys: string[];
+      ok?: boolean;
+      error?: unknown;
+      status?: number;
+      url?: string;
+    }
+  | {
+      kind: "null" | "undefined" | "number" | "boolean";
+      value: null | undefined | number | boolean;
+    };
+
+/**
+ * Build a serialisable snapshot of the raw `signIn` return value so that we can
+ * capture what NextAuth produced when credentials validation fails. Returning a
+ * lightweight structure keeps the console output readable while avoiding
+ * leaking request bodies or other sensitive metadata.
+ */
+function summariseSignInResponse(signInResponse: unknown): SignInResponseSummary {
+  if (signInResponse instanceof Response) {
+    return {
+      kind: "response",
+      status: signInResponse.status,
+      redirected: signInResponse.redirected,
+      url: signInResponse.url,
+    };
+  }
+
+  if (typeof signInResponse === "string") {
+    return { kind: "string", value: signInResponse };
+  }
+
+  if (signInResponse && typeof signInResponse === "object") {
+    const candidate = signInResponse as Record<string, unknown> & {
+      ok?: unknown;
+      error?: unknown;
+      status?: unknown;
+      url?: unknown;
+    };
+
+    return {
+      kind: "object",
+      keys: Object.keys(candidate).slice(0, 10),
+      ok: typeof candidate.ok === "boolean" ? candidate.ok : undefined,
+      error: candidate.error,
+      status: typeof candidate.status === "number" ? candidate.status : undefined,
+      url: typeof candidate.url === "string" ? candidate.url : undefined,
+    };
+  }
+
+  if (typeof signInResponse === "number" || typeof signInResponse === "boolean") {
+    return { kind: typeof signInResponse, value: signInResponse };
+  }
+
+  return {
+    kind: signInResponse === null ? "null" : "undefined",
+    value: signInResponse as null | undefined,
+  };
+}
+
+/**
+ * Surface a structured debug log whenever NextAuth reports a failed credentials
+ * sign-in. The log intentionally includes the normalised email so that we can
+ * correlate the output with the persisted Playwright fixtures without exposing
+ * plaintext passwords.
+ */
+function logFailedSignInAttempt(email: string, signInResponse: unknown): void {
+  const summary = summariseSignInResponse(signInResponse);
+  console.error("[auth][debug] Failed credentials sign-in", {
+    email,
+    response: summary,
+  });
+}
+
 export const login = async (
   _: LoginActionState,
   formData: FormData
@@ -53,6 +139,7 @@ export const login = async (
      * failed.
      */
     if (!didSignInSucceed(signInResponse)) {
+      logFailedSignInAttempt(validatedData.email, signInResponse);
       return { status: "failed" };
     }
 
@@ -72,6 +159,13 @@ export const login = async (
     return { status: "failed" };
   }
 };
+
+/**
+ * Expose the debug helper so unit tests can assert the sanitised payload
+ * without relying on console side-effects. The symbol is namespaced to make it
+ * clear that the function is only meant to support temporary instrumentation.
+ */
+export const __summariseSignInResponseForTests = summariseSignInResponse;
 
 export type RegisterActionState = {
   status:

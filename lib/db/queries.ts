@@ -120,6 +120,100 @@ function normaliseEmail(value: string): string {
   return value.trim().toLowerCase();
 }
 
+function shouldLogPlaywrightAuthInstrumentation(): boolean {
+  const flag = process.env.DEBUG_PLAYWRIGHT_AUTH;
+
+  if (typeof flag !== "string") {
+    return false;
+  }
+
+  const normalised = flag.trim().toLowerCase();
+  return normalised === "1" || normalised === "true" || normalised === "yes";
+}
+
+type PlaywrightStoreSummary = {
+  totalUsers: number;
+  totalPlaintextPasswords: number;
+  totalEmails: number;
+  sampleUserIds: string[];
+  sampleEmails: string[];
+  target?: {
+    email: string;
+    presentInUsers: boolean;
+    presentInPlaintext: boolean;
+    plaintextLength: number | null;
+    userId: string | null;
+  };
+};
+
+/**
+ * Build a compact snapshot of the Playwright in-memory store so we can inspect
+ * whether the expected user has been persisted across the distinct Next.js
+ * runtimes. The summary deliberately limits the number of IDs/emails surfaced
+ * to avoid dumping the whole fixture set in logs.
+ */
+function summarisePlaywrightStore(
+  store: InMemoryStore,
+  options?: { targetEmail?: string }
+): PlaywrightStoreSummary {
+  const sampleUserIds = Array.from(store.users.keys()).slice(0, 5);
+  const sampleEmails = Array.from(store.userPlaintextByEmail.keys()).slice(0, 5);
+
+  const summary: PlaywrightStoreSummary = {
+    totalUsers: store.users.size,
+    totalPlaintextPasswords: store.userPlaintextPasswords.size,
+    totalEmails: store.userPlaintextByEmail.size,
+    sampleUserIds,
+    sampleEmails,
+  };
+
+  if (options?.targetEmail) {
+    const normalisedTarget = normaliseEmail(options.targetEmail);
+    let targetUserId: string | null = null;
+
+    for (const [id, record] of store.users.entries()) {
+      if (normaliseEmail(record.email ?? "") === normalisedTarget) {
+        targetUserId = id;
+        break;
+      }
+    }
+
+    const plaintext = store.userPlaintextByEmail.get(normalisedTarget);
+
+    summary.target = {
+      email: normalisedTarget,
+      presentInUsers: targetUserId !== null,
+      presentInPlaintext: store.userPlaintextByEmail.has(normalisedTarget),
+      plaintextLength:
+        typeof plaintext === "string" ? plaintext.length : plaintext ? String(plaintext).length : null,
+      userId: targetUserId,
+    };
+  }
+
+  return summary;
+}
+
+/**
+ * Emit a structured log describing the Playwright user store when debugging is
+ * explicitly enabled. The helper keeps the side-effect centralised so
+ * production builds avoid noisy console output.
+ */
+function logPlaywrightStoreSnapshot(reason: string, store: InMemoryStore): void {
+  if (!shouldLogPlaywrightAuthInstrumentation()) {
+    return;
+  }
+
+  const targetEmail = process.env.DEBUG_PLAYWRIGHT_USER;
+  const summary = summarisePlaywrightStore(store, {
+    targetEmail: typeof targetEmail === "string" ? targetEmail : undefined,
+  });
+
+  console.info("[auth][debug] Playwright user store snapshot", {
+    reason,
+    ...summary,
+  });
+}
+
 function setSharedInMemoryStore(store: InMemoryStore): InMemoryStore {
   /**
    * Older dev servers may have initialised the shared store before this field
@@ -150,12 +244,14 @@ function getOrCreateInMemoryStore(): InMemoryStore {
       processWithStore.__ONCHARTV_IN_MEMORY_STORE__
     );
     loadPersistedUsers(store);
+    logPlaywrightStoreSnapshot("process-cache", store);
     return store;
   }
 
   if (globalThis.__ONCHARTV_IN_MEMORY_STORE__) {
     const store = setSharedInMemoryStore(globalThis.__ONCHARTV_IN_MEMORY_STORE__);
     loadPersistedUsers(store);
+    logPlaywrightStoreSnapshot("global-cache", store);
     return store;
   }
 
@@ -188,6 +284,7 @@ function getOrCreateInMemoryStore(): InMemoryStore {
 
   const shared = setSharedInMemoryStore(store);
   loadPersistedUsers(shared);
+  logPlaywrightStoreSnapshot("fresh-store", shared);
   return shared;
 }
 
@@ -1766,3 +1863,10 @@ export async function upsertFinancePreferences(
     );
   }
 }
+
+/**
+ * Test-only exports so unit tests can validate the debugging helpers without
+ * relying on private module internals.
+ */
+export const __summarisePlaywrightStoreForTests = summarisePlaywrightStore;
+export type __InMemoryStoreForTests = InMemoryStore;
