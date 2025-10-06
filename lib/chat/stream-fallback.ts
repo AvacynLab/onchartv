@@ -226,7 +226,32 @@ async function resolveRecentAssistantMessage(
       const messageCreatedAt = new Date(mostRecentMessage.createdAt);
 
       if (differenceInSeconds(resumeRequestedAt, messageCreatedAt) <= 15) {
-        return normaliseAssistantMessage(mostRecentMessage);
+        const normalised = normaliseAssistantMessage(mostRecentMessage);
+
+        const parts = Array.isArray((normalised as { parts?: unknown }).parts)
+          ? ((normalised as { parts: Array<{ type?: string; text?: unknown }> }).parts)
+          : [];
+
+        const textPart = parts.find(
+          (part) => part && part.type === "text"
+        ) as { text?: unknown } | undefined;
+
+        const textContent =
+          typeof textPart?.text === "string"
+            ? textPart.text.trim()
+            : typeof textPart?.text === "object"
+              ? extractTextFragment(textPart.text).trim()
+              : "";
+
+        if (!textContent) {
+          // The assistant message has been persisted but its textual content
+          // has not yet been finalised. Keep polling so the resume endpoint
+          // replays a meaningful payload instead of returning an empty chunk.
+          await delay(FALLBACK_LOOKUP_DELAY_MS);
+          continue;
+        }
+
+        return normalised;
       }
 
       return null;
