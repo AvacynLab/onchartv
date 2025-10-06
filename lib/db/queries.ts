@@ -197,6 +197,14 @@ const PLAYWRIGHT_USERS_PATH = path.join(
 let hasLoadedPersistedUsers = false;
 
 /**
+ * Normalise email addresses so lookups in the in-memory test database stay
+ * resilient to casing differences. The production Postgres queries remain
+ * case-sensitive, matching the schema constraints, while Playwright runs work
+ * with whatever variant the fixtures submit through the UI.
+ */
+const normaliseEmail = (value: string) => value.trim().toLowerCase();
+
+/**
  * Hydrate the shared in-memory store from the persisted credentials file when
  * the Playwright harness spins up a fresh module graph.
  */
@@ -280,14 +288,6 @@ function persistUsers(store: InMemoryStore) {
 const inMemoryStore: InMemoryStore | null = isTestEnvironment
   ? getOrCreateInMemoryStore()
   : null;
-
-/**
- * Normalise email addresses so lookups in the in-memory test database stay
- * resilient to casing differences. The production Postgres queries remain
- * case-sensitive, matching the schema constraints, while Playwright runs work
- * with whatever variant the fixtures submit through the UI.
- */
-const normaliseEmail = (value: string) => value.trim().toLowerCase();
 
 /**
  * Helper ensuring we only touch the in-memory store in the Playwright setup.
