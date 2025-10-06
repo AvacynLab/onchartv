@@ -265,6 +265,7 @@ describe("loadPersistedUsers", () => {
       getUser: queries.getUser,
       createUser: queries.createUser,
       getTestUserPlaintextPassword: queries.getTestUserPlaintextPassword,
+      getPersistedTestUserByEmail: queries.getPersistedTestUserByEmail,
     } satisfies Parameters<typeof resolveCredentialsUser>[2];
 
     expect(
@@ -277,6 +278,7 @@ describe("loadPersistedUsers", () => {
       getUser: reloadedQueries.getUser,
       createUser: reloadedQueries.createUser,
       getTestUserPlaintextPassword: reloadedQueries.getTestUserPlaintextPassword,
+      getPersistedTestUserByEmail: reloadedQueries.getPersistedTestUserByEmail,
     } satisfies Parameters<typeof resolveCredentialsUser>[2];
 
     const resolved = await resolveCredentialsUser(
@@ -314,5 +316,39 @@ describe("loadPersistedUsers", () => {
     );
 
     expect(resolved?.email).toBe(email);
+  });
+
+  it("recovers credentials from the persisted snapshot when the in-memory hash is missing", async () => {
+    const email = "snapshot-recovery@example.com";
+    const password = "disk-backed-secret!";
+
+    const { queries, store } = await setup({
+      records: [],
+      initialMtimeMs: 30,
+    });
+
+    await queries.createUser(email, password);
+
+    for (const [userId, record] of Array.from(store.users.entries())) {
+      store.users.set(userId, {
+        ...record,
+        password: null,
+      });
+    }
+
+    store.userPlaintextPasswords.clear();
+    store.userPlaintextByEmail.clear();
+
+    const dependencies = {
+      getUser: queries.getUser,
+      createUser: queries.createUser,
+      getTestUserPlaintextPassword: queries.getTestUserPlaintextPassword,
+      getPersistedTestUserByEmail: queries.getPersistedTestUserByEmail,
+    } satisfies Parameters<typeof resolveCredentialsUser>[2];
+
+    const resolved = await resolveCredentialsUser(email, password, dependencies);
+
+    expect(resolved?.email).toBe(email);
+    expect(typeof resolved?.password).toBe("string");
   });
 });

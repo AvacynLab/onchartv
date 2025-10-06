@@ -29,6 +29,7 @@ type CredentialsDependencies = {
   getUser: typeof import("@/lib/db/queries")["getUser"];
   createUser: typeof import("@/lib/db/queries")["createUser"];
   getTestUserPlaintextPassword: typeof import("@/lib/db/queries")["getTestUserPlaintextPassword"];
+  getPersistedTestUserByEmail: typeof import("@/lib/db/queries")["getPersistedTestUserByEmail"];
 };
 
 async function resolveDependencies(
@@ -50,6 +51,9 @@ async function resolveDependencies(
     getTestUserPlaintextPassword:
       overrides?.getTestUserPlaintextPassword ??
       queries.getTestUserPlaintextPassword,
+    getPersistedTestUserByEmail:
+      overrides?.getPersistedTestUserByEmail ??
+      queries.getPersistedTestUserByEmail,
   } satisfies CredentialsDependencies;
 }
 
@@ -58,8 +62,12 @@ export async function resolveCredentialsUser(
   password: string,
   overrides?: Partial<CredentialsDependencies>
 ): Promise<User | null> {
-  const { getUser, createUser, getTestUserPlaintextPassword } =
-    await resolveDependencies(overrides);
+  const {
+    getUser,
+    createUser,
+    getTestUserPlaintextPassword,
+    getPersistedTestUserByEmail,
+  } = await resolveDependencies(overrides);
 
   const users = await getUser(email);
 
@@ -153,6 +161,59 @@ export async function resolveCredentialsUser(
 
   const allowPlaintextFallback = () => isTestEnvironment && plaintextMatches();
 
+  /**
+   * Fallback to the persisted Playwright snapshot when the in-memory store has
+   * not yet hydrated. Turbopack occasionally loads credentials handlers before
+   * the shared store observes recently registered users, so reading the disk
+   * snapshot keeps the login flow deterministic across module graphs.
+   */
+  const attemptReloadFromPersistedSnapshot = async () => {
+    if (!isTestEnvironment) {
+      return null;
+    }
+
+    const persisted = getPersistedTestUserByEmail(email);
+    if (!persisted) {
+      return null;
+    }
+
+    const persistedPlaintext =
+      typeof persisted.plaintext === "string" ? persisted.plaintext : "";
+
+    if (persistedPlaintext !== password) {
+      return null;
+    }
+
+    try {
+      await createUser(email, password);
+      const [refreshedUser] = await getUser(email);
+      if (refreshedUser) {
+        return refreshedUser;
+      }
+    } catch (error) {
+      if (!isTestEnvironment) {
+        throw error;
+      }
+    }
+
+    if (persisted.password) {
+      if (user?.id) {
+        return {
+          ...user,
+          password: persisted.password,
+        };
+      }
+
+      return {
+        id: persisted.id,
+        email: persisted.email,
+        password: persisted.password,
+      } as User;
+    }
+
+    return user ?? null;
+  };
+
   if (!user?.password) {
     const refreshedUser = await attemptRefreshWithPlaintext();
     if (refreshedUser) {
@@ -193,6 +254,11 @@ export async function resolveCredentialsUser(
      * exercising the bcrypt comparison for production environments.
      */
     return user;
+  }
+
+  const persistedUser = await attemptReloadFromPersistedSnapshot();
+  if (persistedUser) {
+    return persistedUser;
   }
 
   compareSync(password, DUMMY_PASSWORD);

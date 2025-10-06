@@ -397,6 +397,68 @@ function loadPersistedUsers(
 }
 
 /**
+ * Minimal snapshot describing a Playwright persisted credential record.
+ * The helper functions below reuse the structure to bridge independent
+ * Next.js module graphs that cannot rely on shared in-memory state.
+ */
+type PersistedUserSnapshot = {
+  id: string;
+  email: string;
+  password: string | null;
+  plaintext?: string | null;
+};
+
+/**
+ * Read the persisted Playwright credential snapshot directly from disk.
+ * The loader is intentionally lightweight so fallback paths can reload the
+ * credentials even when the optimistic in-memory store has not yet hydrated.
+ */
+function readPersistedUsersFromDisk(): PersistedUserSnapshot[] | null {
+  if (!fs.existsSync(PLAYWRIGHT_USERS_PATH)) {
+    return null;
+  }
+
+  try {
+    const raw = fs.readFileSync(PLAYWRIGHT_USERS_PATH, "utf-8");
+    const parsed = JSON.parse(raw) as PersistedUserSnapshot[] | null;
+
+    if (!Array.isArray(parsed)) {
+      return null;
+    }
+
+    return parsed;
+  } catch (error) {
+    console.warn("Failed to parse persisted Playwright users", error);
+    return null;
+  }
+}
+
+/**
+ * Surface the persisted Playwright credential record associated with the
+ * provided email address. The helper keeps NextAuth workers deterministic when
+ * Turbopack isolates them in module graphs that cannot observe the shared
+ * in-memory store directly.
+ */
+export function getPersistedTestUserByEmail(
+  email: string
+): PersistedUserSnapshot | undefined {
+  if (!isTestEnvironment) {
+    return undefined;
+  }
+
+  const snapshot = readPersistedUsersFromDisk();
+  if (!snapshot) {
+    return undefined;
+  }
+
+  const targetEmail = normaliseEmail(email);
+  return snapshot.find((record) =>
+    typeof record?.email === "string" &&
+    normaliseEmail(record.email) === targetEmail
+  );
+}
+
+/**
  * Serialize the current set of Playwright users so other runtimes can import
  * the deterministic credentials without depending on shared memory.
  */

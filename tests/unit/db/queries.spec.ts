@@ -84,6 +84,7 @@ describe("finance queries", () => {
       getUser: queries.getUser,
       createUser: queries.createUser,
       getTestUserPlaintextPassword: queries.getTestUserPlaintextPassword,
+      getPersistedTestUserByEmail: queries.getPersistedTestUserByEmail,
     } as const;
 
     const initial = await resolveCredentialsUser(email, password, dependencies);
