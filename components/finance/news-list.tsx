@@ -64,6 +64,26 @@ const formatPublishedDate = (value: unknown): string => {
 };
 
 /**
+ * Normalise the raw `publishedAt` payload into an ISO 8601 timestamp that can
+ * safely power the `<time dateTime>` attribute. The helper gracefully accepts
+ * strings, `Date` instances, or unexpected values emitted by stale mocks.
+ */
+const normalisePublishedDateTime = (
+  value: unknown
+): string | undefined => {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? undefined : value.toISOString();
+  }
+
+  if (typeof value === "string") {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
+  }
+
+  return undefined;
+};
+
+/**
  * Render a scrollable list of mocked news headlines with sentiment context.
  * Links open in a new tab to avoid losing the chat session and keep the agent
  * workflow uninterrupted.
@@ -127,19 +147,9 @@ export function NewsList({ artifact }: { readonly artifact: FinanceNewsArtifact 
              * one. Screen readers benefit from the attribute even if the
              * human-readable fallback stays coarse.
              */
-            const publishedAtDateTime = (() => {
-              if (item.publishedAt instanceof Date) {
-                return Number.isNaN(item.publishedAt.getTime())
-                  ? undefined
-                  : item.publishedAt.toISOString();
-              }
-
-              if (typeof item.publishedAt === "string") {
-                return item.publishedAt;
-              }
-
-              return undefined;
-            })();
+            const publishedAtDateTime = normalisePublishedDateTime(
+              item.publishedAt
+            );
             const sentiment = normaliseSentiment(item.sentiment);
             const articleKey = item.id ?? `${title}-${index}`;
 

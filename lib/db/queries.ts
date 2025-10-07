@@ -426,7 +426,7 @@ function getRequiredDatabase(): DrizzleClient {
   const database = getDatabase();
   if (!database) {
     throw new ChatSDKError(
-      "config:postgres_unavailable",
+      "bad_request:database",
       "Attempted to access the Postgres client while the hermetic test database is active"
     );
   }

@@ -130,13 +130,18 @@ function PureMessages({
 
             /**
              * Guard the artefact list because assistant responses sometimes
-             * return `null` or omit the property entirely. We copy the message
-             * object to avoid mutating the original reference consumed by the
-             * memoiser.
+             * return `null` or omit the property entirely. We cast through
+             * `unknown` to inspect the optional field without fighting the
+             * stricter `ChatMessage` typing exported by the AI SDK, then copy
+             * the value into the array shape expected by the preview renderer
+             * so downstream consumers stay immutable.
              */
-            const safeArtifacts = Array.isArray(message.artifacts)
-              ? message.artifacts
-              : message.artifacts ?? [];
+            const rawArtifacts = (
+              message as unknown as { artifacts?: unknown }
+            ).artifacts;
+            const safeArtifacts = Array.isArray(rawArtifacts)
+              ? rawArtifacts
+              : rawArtifacts ?? [];
             const normalisedMessage = {
               ...message,
               artifacts: safeArtifacts,
