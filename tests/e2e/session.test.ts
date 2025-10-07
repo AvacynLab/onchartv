@@ -62,6 +62,13 @@ test.describe.serial("Login and Registration", () => {
     // authentication error toast returned by the server action.
     await authPage.login(testUser.email, "incorrect-password");
     await authPage.expectToastToContain("Invalid credentials!");
+
+    // Reset the user credentials to their original value so subsequent tests
+    // interact with a known-good password hash. The in-memory Playwright store
+    // can temporarily hold the rejected password when module graphs diverge,
+    // so explicitly restoring the secret keeps the remaining login scenarios
+    // deterministic.
+    await authPage.resetPassword(testUser.email, testUser.password);
   });
 
   test("Register new account with existing email", async () => {
