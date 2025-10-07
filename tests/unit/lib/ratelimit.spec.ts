@@ -34,6 +34,10 @@ afterEach(() => {
 
 describe("enforceRateLimit", () => {
   it("throws when exceeding the configured quota in normal conditions", () => {
+    // CI sets PLAYWRIGHT=true so e2e flows skip the limiter. Explicitly remove
+    // the flag to exercise the baseline production behaviour in this test.
+    delete process.env.PLAYWRIGHT;
+
     const options = { key: "user-1", limit: 2, windowMs: 1_000 } as const;
 
     enforceRateLimit(options);
@@ -56,6 +60,10 @@ describe("enforceRateLimit", () => {
   });
 
   it("reports remaining requests relative to the effective quota", () => {
+    // Ensure the relaxed Playwright quota does not interfere with the
+    // assertions that follow.
+    delete process.env.PLAYWRIGHT;
+
     const options = { key: "user-3", limit: 3, windowMs: 500 } as const;
 
     // The fixed-window limiter decrements the remaining quota on each call so

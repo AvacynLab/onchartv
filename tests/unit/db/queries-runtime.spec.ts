@@ -1,10 +1,14 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 /**
- * Preserve the original Playwright flag so the suite can toggle the hermetic
- * environment without leaking state to unrelated tests.
+ * Preserve the original hermetic flags so the suite can toggle the environment
+ * without leaking state to unrelated tests.
  */
-const ORIGINAL_PLAYWRIGHT = process.env.PLAYWRIGHT;
+const ORIGINAL_ENV = {
+  PLAYWRIGHT: process.env.PLAYWRIGHT,
+  CI_PLAYWRIGHT: process.env.CI_PLAYWRIGHT,
+  PLAYWRIGHT_TEST_BASE_URL: process.env.PLAYWRIGHT_TEST_BASE_URL,
+};
 
 vi.mock("server-only", () => ({}));
 
@@ -14,23 +18,29 @@ describe("lib/db/queries hermetic toggles", () => {
     // environment instead of reusing a cached copy initialised with a different
     // Playwright flag.
     vi.resetModules();
-    if (ORIGINAL_PLAYWRIGHT) {
-      process.env.PLAYWRIGHT = ORIGINAL_PLAYWRIGHT;
-    } else {
-      delete process.env.PLAYWRIGHT;
+    for (const [key, value] of Object.entries(ORIGINAL_ENV)) {
+      if (typeof value === "string") {
+        process.env[key] = value;
+      } else {
+        delete process.env[key];
+      }
     }
   });
 
   afterAll(() => {
-    if (ORIGINAL_PLAYWRIGHT) {
-      process.env.PLAYWRIGHT = ORIGINAL_PLAYWRIGHT;
-    } else {
-      delete process.env.PLAYWRIGHT;
+    for (const [key, value] of Object.entries(ORIGINAL_ENV)) {
+      if (typeof value === "string") {
+        process.env[key] = value;
+      } else {
+        delete process.env[key];
+      }
     }
   });
 
   it("enables the in-memory store when PLAYWRIGHT toggles after import", async () => {
     delete process.env.PLAYWRIGHT;
+    delete process.env.CI_PLAYWRIGHT;
+    delete process.env.PLAYWRIGHT_TEST_BASE_URL;
 
     vi.resetModules();
 
