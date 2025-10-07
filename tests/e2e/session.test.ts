@@ -53,11 +53,14 @@ test.describe.serial("Login and Registration", () => {
     authPage = new AuthPage(page);
   });
 
-  test("Register new account", async () => {
-    await authPage.register(testUser.email, testUser.password);
-    await authPage.expectToastToContain("Account created successfully!");
-    await persistSessionCookies(page.context());
-  });
+test("Register new account", async ({ page }) => {
+  await authPage.register(testUser.email, testUser.password);
+  await authPage.expectToastToContain("Account created successfully!");
+  // Persist the freshly issued session cookies so later tests can reuse the
+  // authenticated context without resubmitting the login form, which reduces
+  // flakiness and keeps the flow deterministic across retries.
+  await persistSessionCookies(page.context());
+});
 
   test("Reject login attempts with invalid credentials", async () => {
     // Use an obviously incorrect password to confirm the UI surfaces the
