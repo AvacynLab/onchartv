@@ -340,7 +340,6 @@ export function __resetInMemoryDbForTests(): void {
   store.financePreferences.clear();
 
   try {
-    hasLoadedPersistedUsers = false;
     if (fs.existsSync(PLAYWRIGHT_USERS_PATH)) {
       fs.rmSync(PLAYWRIGHT_USERS_PATH);
     }
