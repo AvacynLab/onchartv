@@ -10,6 +10,7 @@ import {
 } from "@playwright/test";
 
 import { hasAuthSessionCookie } from "../utils/auth-session";
+import { persistSessionCookies } from "../utils/session-persistence";
 import { waitForServerReady } from "../utils/server-health";
 import { warmupNextRoutes } from "../utils/server-warmup";
 
@@ -196,6 +197,7 @@ setup("authenticate", async ({ browser }) => {
 
     fs.mkdirSync(AUTH_DIR, { recursive: true });
     await context.storageState({ path: STATE_PATH });
+    await persistSessionCookies(context);
   } finally {
     await context.close();
   }
