@@ -204,19 +204,11 @@ const PLAYWRIGHT_USERS_PATH = path.join(
   "playwright-users.json"
 );
 
-let hasLoadedPersistedUsers = false;
-
 /**
  * Hydrate the shared in-memory store from the persisted credentials file when
  * the Playwright harness spins up a fresh module graph.
  */
 function loadPersistedUsers(store: InMemoryStore) {
-  if (hasLoadedPersistedUsers) {
-    return;
-  }
-
-  hasLoadedPersistedUsers = true;
-
   if (!fs.existsSync(PLAYWRIGHT_USERS_PATH)) {
     return;
   }
@@ -230,10 +222,16 @@ function loadPersistedUsers(store: InMemoryStore) {
       plaintext?: string | null;
     }>;
 
+    store.userPlaintextPasswords.clear();
+    store.userPlaintextByEmail.clear();
+
     for (const record of records) {
       if (!record?.id || !record?.email) {
         continue;
       }
+
+      const normalisedEmail = normaliseEmail(record.email);
+      const plaintext = record.plaintext ?? "";
 
       store.users.set(record.id, {
         id: record.id,
@@ -241,11 +239,8 @@ function loadPersistedUsers(store: InMemoryStore) {
         password: record.password ?? null,
       });
 
-      const normalised = normaliseEmail(record.email);
-      const plaintext = record.plaintext ?? "";
-
       store.userPlaintextPasswords.set(record.id, plaintext);
-      store.userPlaintextByEmail.set(normalised, plaintext);
+      store.userPlaintextByEmail.set(normalisedEmail, plaintext);
     }
   } catch (error) {
     console.warn(
@@ -303,6 +298,7 @@ function getInMemoryStore(): InMemoryStore {
     );
   }
 
+  loadPersistedUsers(inMemoryStore);
   return inMemoryStore;
 }
 
@@ -344,7 +340,6 @@ export function __resetInMemoryDbForTests(): void {
   store.financePreferences.clear();
 
   try {
-    hasLoadedPersistedUsers = false;
     if (fs.existsSync(PLAYWRIGHT_USERS_PATH)) {
       fs.rmSync(PLAYWRIGHT_USERS_PATH);
     }
