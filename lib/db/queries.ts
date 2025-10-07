@@ -295,7 +295,25 @@ function getOrCreateInMemoryStore(): InMemoryStore {
  * environments would frequently lose sight of the registration performed in a
  * separate worker, causing `CredentialsSignin` errors mid-suite.
  */
-const PLAYWRIGHT_AUTH_DIR = path.resolve(process.cwd(), "tests/.auth");
+/**
+ * Determine the absolute path to the Playwright credential snapshot.
+ *
+ * The Next.js dev server can execute different module graphs (server actions,
+ * route handlers, API routes) from distinct working directories. Relying on
+ * `process.cwd()` alone therefore caused each graph to read and write its own
+ * `tests/.auth` directory, meaning freshly registered credentials were not
+ * visible when the credentials provider spun up under a different `cwd`. By
+ * anchoring the snapshot directory to a shared project root – propagated via
+ * the Playwright config – every runtime converges on the same persisted file.
+ */
+const PLAYWRIGHT_PROJECT_ROOT =
+  process.env.ONCHARTV_PROJECT_ROOT ??
+  process.env.INIT_CWD ??
+  process.cwd();
+const PLAYWRIGHT_AUTH_DIR = path.resolve(
+  PLAYWRIGHT_PROJECT_ROOT,
+  "tests/.auth"
+);
 const PLAYWRIGHT_USERS_PATH = path.join(
   PLAYWRIGHT_AUTH_DIR,
   "playwright-users.json"
