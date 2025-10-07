@@ -639,12 +639,37 @@ export async function getUser(email: string): Promise<User[]> {
   if (isTestEnvironment) {
     const store = getInMemoryStore();
     const targetEmail = normaliseEmail(email);
-    const matches = Array.from(store.users.values()).filter((currentUser) =>
-      typeof currentUser.email === "string" &&
-      normaliseEmail(currentUser.email) === targetEmail
-    );
+
+    /**
+     * Helper that re-computes the current view of the in-memory store. Using a
+     * function keeps the intent explicit and avoids duplicating the filtering
+     * logic every time we need to reassess the cached records after a forced
+     * reload from disk.
+     */
+    const resolveMatches = () =>
+      Array.from(store.users.values()).filter(
+        (currentUser) =>
+          typeof currentUser.email === "string" &&
+          normaliseEmail(currentUser.email) === targetEmail
+      );
+
+    let matches = resolveMatches();
 
     if (matches.length > 0) {
+      /**
+       * Even when a module graph already holds a matching record we still need
+       * to give the persisted snapshot a chance to refresh the plaintext and
+       * bcrypt hash. Without this additional reload the resolver can continue
+       * serving a stale password if the user was updated by a different module
+       * graph moments earlier (a pattern that surfaces frequently during the
+       * Playwright credential reset flow).
+       */
+      const reloaded = loadPersistedUsers(store, { force: true });
+      if (!reloaded) {
+        return matches;
+      }
+
+      matches = resolveMatches();
       return matches;
     }
 
@@ -661,10 +686,7 @@ export async function getUser(email: string): Promise<User[]> {
       return matches;
     }
 
-    return Array.from(store.users.values()).filter((currentUser) =>
-      typeof currentUser.email === "string" &&
-      normaliseEmail(currentUser.email) === targetEmail
-    );
+    return resolveMatches();
   }
 
   try {
