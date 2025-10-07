@@ -368,6 +368,21 @@ export const FinanceChartArtifact = memo(
       null
     );
     const paletteRef = useRef<ThemePalette>(FALLBACK_PALETTE);
+    /**
+     * Track the mounted state explicitly so asynchronous chart callbacks never
+     * attempt to update React state after the artefact unmounts. The Playwright
+     * traces exposed warnings around "state updates on unmounted components"
+     * when the lightweight-charts listeners fired during teardown, hence the
+     * defensive guard.
+     */
+    const mountedRef = useRef(false);
+
+    useEffect(() => {
+      mountedRef.current = true;
+      return () => {
+        mountedRef.current = false;
+      };
+    }, []);
 
     /**
      * Tears down the imperative chart instance while ensuring all
@@ -596,6 +611,10 @@ export const FinanceChartArtifact = memo(
         });
 
         const crosshairHandler = (param: MouseEventParams<Time>) => {
+          if (!mountedRef.current) {
+            return;
+          }
+
           if (!param || !param.time || !param.seriesData) {
             setHovered(null);
             return;
@@ -616,6 +635,10 @@ export const FinanceChartArtifact = memo(
         };
 
         const clickHandler = (param: MouseEventParams<Time>) => {
+          if (!mountedRef.current) {
+            return;
+          }
+
           if (!param || !param.time || !param.seriesData) {
             return;
           }
@@ -833,6 +856,10 @@ export const FinanceChartArtifact = memo(
     }, [palette, sanitizedOverlays]);
 
     const handleToggleOverlay = (id: string) => {
+      if (!mountedRef.current) {
+        return;
+      }
+
       setOverlayVisibility((prev) => {
         const visible = !(prev[id] ?? true);
         const next = { ...prev, [id]: visible };
@@ -879,6 +906,10 @@ export const FinanceChartArtifact = memo(
     };
 
     const handleChartFocus = () => {
+      if (!mountedRef.current) {
+        return;
+      }
+
       if (!candleSnapshots.length) {
         return;
       }
@@ -892,10 +923,18 @@ export const FinanceChartArtifact = memo(
     };
 
     const handleChartBlur = () => {
+      if (!mountedRef.current) {
+        return;
+      }
+
       setHovered(null);
     };
 
     const handleChartKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (!mountedRef.current) {
+        return;
+      }
+
       if (!candleSnapshots.length) {
         return;
       }

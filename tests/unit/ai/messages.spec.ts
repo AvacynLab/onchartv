@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { formatISO } from "date-fns";
 
 import { convertToModelMessages } from "@/lib/ai/messages/convert-to-model-messages";
@@ -106,6 +106,44 @@ describe("convertToUIMessages", () => {
       ])
     );
     expect(uiMessage.metadata.createdAt).toEqual(formatISO(createdAt));
+  });
+
+  it("ignore les artefacts finance invalides en loggant un avertissement", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const createdAt = new Date("2025-02-20T10:00:00Z");
+
+    const malformedArtifact = {
+      type: "finance.chart" as const,
+      payload: {
+        type: "finance.chart",
+        symbol: "AAPL",
+        timeframe: "1D",
+        overlays: [],
+      },
+    };
+
+    const message: DBMessage = {
+      id: "msg-2",
+      chatId: "chat-1",
+      role: "assistant",
+      parts: [],
+      attachments: [],
+      artifacts: [malformedArtifact],
+      createdAt,
+    } as DBMessage;
+
+    const [uiMessage] = convertToUIMessages([message]);
+
+    expect(uiMessage.parts).toEqual([]);
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[convertToUIMessages] skipped malformed finance artifact",
+      expect.objectContaining({
+        artifactType: "finance.chart",
+        issues: expect.arrayContaining([expect.stringContaining("Required")]),
+      })
+    );
+
+    warnSpy.mockRestore();
   });
 });
 

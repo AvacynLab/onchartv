@@ -74,11 +74,34 @@ jobs:
       - name: Run unit tests
         run: pnpm test
 
+      - name: Start Next.js dev server for Playwright
+        run: |
+          nohup pnpm exec tsx tests/utils/run-next-dev.ts >/tmp/next-dev-ci.log 2>&1 &
+          NEXT_DEV_PID=$!
+          echo "NEXT_DEV_PID=${NEXT_DEV_PID}" >> "$GITHUB_ENV"
+        env:
+          PORT: 3100
+
+      - name: Wait for dev server health
+        run: pnpm exec tsx tests/utils/ci-wait-for-health.ts
+        env:
+          PLAYWRIGHT_TEST_BASE_URL: http://127.0.0.1:3100
+          PORT: 3100
+
       - name: Run Playwright suite
         run: pnpm e2e
         env:
           # Ensure the Playwright server binding matches the GitHub Actions environment.
           PLAYWRIGHT_TEST_BASE_URL: http://127.0.0.1:3100
+          PLAYWRIGHT_MANUAL_SERVER: "true"
+
+      - name: Stop Next.js dev server
+        if: always()
+        run: |
+          if [ -n "${NEXT_DEV_PID:-}" ] && ps -p "${NEXT_DEV_PID}" > /dev/null 2>&1; then
+            kill "${NEXT_DEV_PID}"
+            wait "${NEXT_DEV_PID}" || true
+          fi
 
       # Persist machine-readable outputs for CI dashboards and flaky test triage.
       - name: Upload Vitest coverage report
@@ -106,4 +129,5 @@ jobs:
             playwright-report
             playwright-results
             playwright-traces
+            tests/.logs
           if-no-files-found: warn

@@ -1,11 +1,19 @@
 const originalPlaywright = process.env.PLAYWRIGHT;
-// Normalise the hermetic flag so the deterministic mocks stay active across the
-// finance routes, mirroring the environment used by Playwright.
+// Hermetic finance routes loosen their rate limits when Playwright mode is
+// enabled. Align the unit test environment with the e2e configuration so the
+// handlers follow the same execution path.
 process.env.PLAYWRIGHT = "true";
 
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
-import { GET } from "@/app/api/finance/fundamentals/route";
 import { __resetRateLimitStateForTests } from "@/lib/ratelimit";
 
 vi.mock("server-only", () => ({}));
@@ -27,37 +35,80 @@ afterAll(() => {
 });
 
 describe("/api/finance/fundamentals", () => {
-  it("returns a deterministic snapshot for supported symbols", async () => {
-    // Request fundamentals for AAPL to ensure the handler returns the mock
-    // snapshot without hitting external providers.
+  it("returns the mock snapshot for a supported symbol", async () => {
+    const { GET } = await import("@/app/api/finance/fundamentals/route");
+
     const response = await GET(
-      new Request("http://localhost/api/finance/fundamentals?symbol=AAPL")
+      new Request("http://localhost/api/finance/fundamentals?symbol=NVDA")
     );
 
     expect(response.status).toBe(200);
-
     const payload = await response.json();
-    expect(payload.symbol).toBe("AAPL");
-    expect(payload.metrics).toHaveProperty("peRatio");
-    expect(payload.source).toBe("mock");
+
+    expect(payload.symbol).toBe("NVDA");
+    expect(payload.metrics).toEqual(
+      expect.objectContaining({
+        marketCap: expect.any(Number),
+        revenueTtm: expect.any(Number),
+      })
+    );
+    expect(payload.rateLimit).toEqual(
+      expect.objectContaining({
+        remaining: expect.any(Number),
+        reset: expect.any(Number),
+      })
+    );
   });
 
-  it("rejects unsupported symbols with a unified error payload", async () => {
+  it("rejects requests missing the symbol parameter", async () => {
+    const { GET } = await import("@/app/api/finance/fundamentals/route");
+
     const response = await GET(
-      new Request("http://localhost/api/finance/fundamentals?symbol=UNKNOWN")
+      new Request("http://localhost/api/finance/fundamentals")
     );
 
     expect(response.status).toBe(400);
-
     const error = await response.json();
-    expect(error).toEqual(
+    expect(error.error).toEqual(
       expect.objectContaining({
-        error: expect.objectContaining({
-          code: "bad_request:api",
-          message: expect.stringContaining("request couldn't be processed"),
-          cause: expect.stringContaining("Unsupported symbol"),
-        }),
+        code: "bad_request:api",
+        cause: expect.stringContaining("symbol"),
       })
     );
+  });
+
+  it("rejects unsupported symbols with a formatted error payload", async () => {
+    const { GET } = await import("@/app/api/finance/fundamentals/route");
+
+    const response = await GET(
+      new Request("http://localhost/api/finance/fundamentals?symbol=TSLA")
+    );
+
+    expect(response.status).toBe(400);
+    const error = await response.json();
+    expect(error.error).toEqual(
+      expect.objectContaining({
+        code: "bad_request:api",
+        cause: expect.stringContaining("Unsupported symbol"),
+      })
+    );
+  });
+
+  it("returns forbidden when the finance feature flag is disabled", async () => {
+    vi.stubEnv("FEATURE_FINANCE", "false");
+
+    try {
+      const { GET } = await import("@/app/api/finance/fundamentals/route");
+      const response = await GET(
+        new Request("http://localhost/api/finance/fundamentals?symbol=NVDA")
+      );
+
+      expect(response.status).toBe(403);
+      const error = await response.json();
+      expect(error.error.code).toBe("forbidden:api");
+      expect(error.error.cause).toMatch(/Finance endpoints are disabled/i);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

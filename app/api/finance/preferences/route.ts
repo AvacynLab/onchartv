@@ -1,5 +1,6 @@
 import { auth } from "@/app/(auth)/auth";
 import {
+  assertFinanceFeatureEnabled,
   logRouteLatency,
   now,
   resolveClientKey,
@@ -62,6 +63,7 @@ export async function GET(request: Request): Promise<Response> {
   let userId: string | undefined;
 
   try {
+    assertFinanceFeatureEnabled();
     const rateLimit = enforceRateLimit({
       key: `finance:preferences:get:${clientKey}`,
       limit: 60,
@@ -119,6 +121,7 @@ export async function PATCH(request: Request): Promise<Response> {
   let userId: string | undefined;
 
   try {
+    assertFinanceFeatureEnabled();
     const rateLimit = enforceRateLimit({
       key: `finance:preferences:patch:${clientKey}`,
       limit: 30,

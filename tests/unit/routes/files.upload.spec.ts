@@ -21,7 +21,7 @@ vi.mock("server-only", () => ({}));
 
 vi.mock("@/lib/constants", async () => ({
   ...(await vi.importActual<typeof import("@/lib/constants")>("@/lib/constants")),
-  isTestEnvironment: true,
+  isTestEnvironment: () => true,
 }));
 
 const { authMock } = vi.hoisted(() => ({

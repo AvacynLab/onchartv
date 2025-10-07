@@ -75,7 +75,7 @@ export class ChatPage {
   }
 
   async createNewChat() {
-    await this.page.goto("/", {
+    await this.page.goto("/chat", {
       /**
        * Next.js app router streams the shell before every asset finishes
        * loading, which occasionally blocks the `load` event during cold Turbopack
@@ -83,6 +83,38 @@ export class ChatPage {
        * hermetic Playwright runs without masking legitimate network hangs.
        */
       waitUntil: "domcontentloaded",
+    });
+
+    await this.ensureChatSurfaceReady();
+  }
+
+  /**
+   * Confirm that the chat surface rendered after navigation. The helper guards
+   * against authentication regressions (a redirect to `/login`) and ensures the
+   * input controls are visible before callers attempt to interact with them.
+   */
+  private async ensureChatSurfaceReady() {
+    const currentUrl = new URL(this.page.url());
+
+    if (currentUrl.pathname.startsWith("/login")) {
+      throw new Error(
+        "Expected an authenticated session before visiting /chat, but the app redirected to /login. " +
+          "Ensure tests/setup/auth.setup.ts provisioned credentials via the regular sign-in flow."
+      );
+    }
+
+    await this.page.waitForSelector('[data-testid="multimodal-input"]', {
+      /**
+       * Chat renders a sizeable component tree. Waiting for the primary input
+       * avoids racing against hydration when Playwright runs in parallel.
+       */
+      state: "visible",
+      timeout: 15_000,
+    });
+
+    await this.page.waitForSelector('[data-testid="send-button"]', {
+      state: "visible",
+      timeout: 15_000,
     });
   }
 
@@ -795,6 +827,7 @@ export class ChatPage {
           }
 
           let diagnostic = "";
+          let normalizedDiagnostic = "";
           try {
             // Normalise Playwright's optional `failure()` accessor so the
             // helper can surface the original network error text without
@@ -822,8 +855,49 @@ export class ChatPage {
                 ? (failureDetails as { errorText: string }).errorText.trim()
                 : "";
             diagnostic = failureText ? ` – ${failureText}` : "";
+            normalizedDiagnostic = failureText.toUpperCase();
           } catch {
             diagnostic = "";
+            normalizedDiagnostic = "";
+          }
+
+          // Offline Playwright runs may surface ENETUNREACH/ERR_NETWORK_* when
+          // Chromium blocks requests to the hermetic Next.js server while it is
+          // still compiling. Treat those as soft failures so we can fall back to
+          // DOM-based polling instead of failing the scenario outright.
+          const offlineFailureSignals = [
+            "ENETUNREACH",
+            "ERR_NETWORK_CHANGED",
+            "ERR_INTERNET_DISCONNECTED",
+            "ERR_NETWORK_IO_SUSPENDED",
+            "ERR_CONNECTION_REFUSED",
+            "ERR_CONNECTION_RESET",
+            "ERR_ADDRESS_UNREACHABLE",
+          ];
+
+          if (
+            offlineFailureSignals.some((signal) =>
+              normalizedDiagnostic.includes(signal)
+            )
+          ) {
+            console.warn(
+              "Chat API network request failed in offline mode; falling back to UI polling.",
+              {
+                failure:
+                  diagnostic.length > 0
+                    ? diagnostic.trim().replace(/^–\s*/, "")
+                    : offlineFailureSignals.find((signal) =>
+                        normalizedDiagnostic.includes(signal)
+                      ),
+                url:
+                  typeof candidate?.url === "function"
+                    ? candidate.url()
+                    : undefined,
+              }
+            );
+
+            settle("reject", networkTimeoutMarker);
+            return;
           }
 
           settle(

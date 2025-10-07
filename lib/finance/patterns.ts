@@ -175,6 +175,11 @@ function isLocalMaximum(
   return true;
 }
 
+/**
+ * Groups a support or resistance level with an existing entry when the prices
+ * are sufficiently close. This keeps the artefact output concise by avoiding
+ * duplicate annotations that would otherwise overlap visually.
+ */
 function mergeLevel(
   levels: SupportResistanceLevel[],
   candidate: SupportResistanceLevel,
@@ -190,6 +195,8 @@ function mergeLevel(
     const existing = levels[existingIndex];
     const merged: SupportResistanceLevel = {
       type: existing.type,
+      // Average the price of the grouped levels so the displayed line matches
+      // the midpoint of the zone instead of favouring the newest candidate.
       price: (existing.price + candidate.price) / 2,
       fromTimestamp: Math.min(existing.fromTimestamp, candidate.fromTimestamp),
       toTimestamp: Math.max(existing.toTimestamp, candidate.toTimestamp),

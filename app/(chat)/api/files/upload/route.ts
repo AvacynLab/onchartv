@@ -75,7 +75,7 @@ export async function POST(request: Request) {
     // Get filename from formData since Blob doesn't have name property
     const filename = (formData.get("file") as File).name;
 
-    if (isTestEnvironment) {
+    if (isTestEnvironment()) {
       // Provide a deterministic mocked response when running end-to-end tests.
       // Returning a bundled placeholder asset keeps the chat preview hermetic
       // and avoids network fetches that would fail under Playwright's offline

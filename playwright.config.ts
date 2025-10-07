@@ -11,6 +11,15 @@ config({
   path: ".env.local",
 });
 
+/**
+ * Playwright runs should always expose the flag so server utilities (rate-limit,
+ * finance mocks, etc.) can enable their hermetic paths. CI already sets the
+ * variable but local invocations may omit it, hence the defensive default.
+ */
+if (!process.env.PLAYWRIGHT) {
+  process.env.PLAYWRIGHT = "true";
+}
+
 if (!process.env.NEXT_FONT_GOOGLE_MOCKED_RESPONSES) {
   /**
    * Point Next.js' font loader to a deterministic set of mocked responses so
@@ -132,6 +141,7 @@ const baseURL = manualBaseURL || `http://localhost:${resolvedPort}`;
 const fullyParallel = !isHermeticPlaywrightRun;
 
 export default defineConfig({
+  globalSetup: "./tests/utils/playwright-global-setup.ts",
   testDir: "./tests",
   fullyParallel,
   forbidOnly: !!process.env.CI,
@@ -196,6 +206,7 @@ export default defineConfig({
            * Google Fonts, both of which are unavailable in CI.
            */
           PLAYWRIGHT: "true",
+          HERMETIC_CHAT_PROVIDER: "true",
           /**
            * Expose the public Playwright flag to the dev server so client-side
            * bundles (e.g. Pyodide loader, avatar fallbacks) can disable remote

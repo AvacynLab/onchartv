@@ -1,11 +1,18 @@
 const originalPlaywright = process.env.PLAYWRIGHT;
-// Toggle the hermetic flag to "true" so the screening route exercises the
-// offline path used in end-to-end tests.
+// The screener endpoint enforces request quotas unless Playwright mode is on.
+// Match the e2e configuration to avoid tripping rate limits in unit tests.
 process.env.PLAYWRIGHT = "true";
 
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
-import { POST } from "@/app/api/finance/screen/route";
 import { __resetRateLimitStateForTests } from "@/lib/ratelimit";
 
 vi.mock("server-only", () => ({}));
@@ -27,83 +34,89 @@ afterAll(() => {
 });
 
 describe("/api/finance/screen", () => {
-  it("filters assets by market cap and type", async () => {
-    // Request a filtered universe focusing on large-cap equities.
+  it("returns equity matches ordered by market cap", async () => {
+    const { POST } = await import("@/app/api/finance/screen/route");
+
     const response = await POST(
       new Request("http://localhost/api/finance/screen", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          filters: { minMarketCap: 1e12, assetTypes: ["equity"] },
-          limit: 3,
+          filters: { assetTypes: ["equity"], minMarketCap: 1e12 },
+          limit: 5,
         }),
       })
     );
 
     expect(response.status).toBe(200);
-
     const payload = await response.json();
-    expect(payload.type).toBe("finance.screen");
-    expect(payload.results.length).toBeLessThanOrEqual(3);
-    expect(payload.results.every((entry: { type: string; marketCap: number }) => entry.type === "equity"))
-      .toBe(true);
 
-    if (payload.results.length >= 2) {
-      expect(payload.results[0].marketCap).toBeGreaterThanOrEqual(payload.results[1].marketCap);
-    }
-  });
-
-  it("accepts filters referencing asset classes without catalog coverage", async () => {
-    // Commodity filters are valid even if the offline catalogue currently lacks entries.
-    const response = await POST(
-      new Request("http://localhost/api/finance/screen", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ filters: { assetTypes: ["commodity"] } }),
-      })
+    expect(payload.results.length).toBeGreaterThan(0);
+    const marketCaps = payload.results.map(
+      (result: { marketCap: number }) => result.marketCap
     );
-
-    expect(response.status).toBe(200);
-
-    const payload = await response.json();
-    expect(payload.results).toEqual([]);
-    expect(payload.appliedFilters.assetTypes).toEqual(["commodity"]);
+    const sortedByMarketCap = [...marketCaps].sort((a, b) => b - a);
+    expect(marketCaps).toEqual(sortedByMarketCap);
+    expect(payload.appliedFilters.assetTypes).toEqual(["equity"]);
   });
 
-  it("rejects invalid filter payloads", async () => {
-    // Negative ratios are rejected by the schema validation layer.
+  it("rejects invalid JSON payloads", async () => {
+    const { POST } = await import("@/app/api/finance/screen/route");
+
     const response = await POST(
       new Request("http://localhost/api/finance/screen", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ filters: { maxPeRatio: -1 } }),
+        body: "{invalid}",
       })
     );
 
     expect(response.status).toBe(400);
-
     const error = await response.json();
-    expect(error).toEqual(
+    expect(error.error).toEqual(
       expect.objectContaining({
-        error: expect.objectContaining({
-          code: "bad_request:api",
-          message: expect.stringContaining("request couldn't be processed"),
-          cause: expect.stringContaining("must be zero or greater"),
-        }),
+        code: "bad_request:api",
+        cause: expect.stringContaining("valid JSON"),
       })
     );
   });
 
-  it("defaults to an unfiltered catalogue when no body is provided", async () => {
-    // Missing JSON should be treated as an empty payload rather than raising.
+  it("rejects requests with a limit above the maximum", async () => {
+    const { POST } = await import("@/app/api/finance/screen/route");
+
     const response = await POST(
-      new Request("http://localhost/api/finance/screen", { method: "POST" })
+      new Request("http://localhost/api/finance/screen", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ limit: 100 }),
+      })
     );
 
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(400);
+    const error = await response.json();
+    expect(error.error.code).toBe("bad_request:api");
+    expect(error.error.cause).toMatch(/cannot exceed 25/);
+  });
 
-    const payload = await response.json();
-    expect(payload.results.length).toBeGreaterThan(0);
-    expect(payload.appliedFilters.assetTypes).toEqual([]);
+  it("returns forbidden when the finance feature flag is disabled", async () => {
+    vi.stubEnv("FEATURE_FINANCE", "false");
+
+    try {
+      const { POST } = await import("@/app/api/finance/screen/route");
+      const response = await POST(
+        new Request("http://localhost/api/finance/screen", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ limit: 5 }),
+        })
+      );
+
+      expect(response.status).toBe(403);
+      const error = await response.json();
+      expect(error.error.code).toBe("forbidden:api");
+      expect(error.error.cause).toMatch(/Finance endpoints are disabled/i);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

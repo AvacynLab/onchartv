@@ -43,6 +43,19 @@ describe("/api/finance/history", () => {
     expect(payload.ohlcv[0]).toHaveProperty("close");
   });
 
+  it("normalises lowercase timeframe inputs before validation", async () => {
+    const response = await GET(
+      new Request(
+        "http://localhost/api/finance/history?symbol=AAPL&timeframe=1d&limit=2"
+      )
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.timeframe).toBe("1D");
+    expect(payload.count).toBe(2);
+  });
+
   it("rejects unsupported timeframes", async () => {
     const response = await GET(
       new Request(
@@ -107,6 +120,32 @@ describe("/api/finance/history", () => {
     expect(error.error.cause).toMatch(/positive integer/);
   });
 
+  it("rejects blank symbols after trimming whitespace", async () => {
+    const response = await GET(
+      new Request(
+        "http://localhost/api/finance/history?symbol=%20%20%20&limit=1"
+      )
+    );
+
+    expect(response.status).toBe(400);
+    const error = await response.json();
+    expect(error.error.code).toBe("bad_request:api");
+    expect(error.error.cause).toMatch(/symbol must not be empty/);
+  });
+
+  it("rejects malformed from parameters with a descriptive error", async () => {
+    const response = await GET(
+      new Request(
+        "http://localhost/api/finance/history?symbol=AAPL&from=not-a-date"
+      )
+    );
+
+    expect(response.status).toBe(400);
+    const error = await response.json();
+    expect(error.error.code).toBe("bad_request:api");
+    expect(error.error.cause).toMatch(/Field 'from' must be a valid ISO date/i);
+  });
+
   it("rejects ranges where 'from' is later than 'to'", async () => {
     const response = await GET(
       new Request(
@@ -118,5 +157,22 @@ describe("/api/finance/history", () => {
     const error = await response.json();
     expect(error.error.code).toBe("bad_request:api");
     expect(error.error.cause).toMatch(/earlier than 'to'/);
+  });
+
+  it("returns a forbidden error when the finance feature flag is disabled", async () => {
+    vi.stubEnv("FEATURE_FINANCE", "false");
+
+    try {
+      const response = await GET(
+        new Request("http://localhost/api/finance/history?symbol=AAPL")
+      );
+
+      expect(response.status).toBe(403);
+      const error = await response.json();
+      expect(error.error.code).toBe("forbidden:api");
+      expect(error.error.cause).toMatch(/Finance endpoints are disabled/i);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

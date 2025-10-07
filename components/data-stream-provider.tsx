@@ -38,3 +38,12 @@ export function useDataStream() {
   }
   return context;
 }
+
+/**
+ * Expose a non-throwing variant of the data stream context so that
+ * components rendered in isolation (for instance within tests) can
+ * gracefully skip streaming logic until the provider is mounted.
+ */
+export function useOptionalDataStream() {
+  return useContext(DataStreamContext);
+}

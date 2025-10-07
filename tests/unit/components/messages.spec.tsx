@@ -9,10 +9,18 @@ import type { ChatMessage } from "@/lib/types";
 
 const noop = () => {};
 
-vi.mock("@/components/message", () => ({
-  PreviewMessage: ({ message }: { message: ChatMessage }) => (
+const previewMessageSpy = vi.fn(
+  ({ message }: { message: ChatMessage }) => (
     <div data-testid={`message-${message.role}`}>{message.id}</div>
-  ),
+  )
+);
+
+vi.mock("@/components/message", () => ({
+  PreviewMessage: (props: { message: ChatMessage }) => {
+    previewMessageSpy(props);
+    const { message } = props;
+    return <div data-testid={`message-${message.role}`}>{message.id}</div>;
+  },
   ThinkingMessage: () => <div data-testid="thinking-message" />,
 }));
 
@@ -103,6 +111,7 @@ beforeEach(() => {
   mockUseMessages.mockReset();
   hookState = createHookState();
   mockUseMessages.mockReturnValue(hookState);
+  previewMessageSpy.mockClear();
 });
 
 afterAll(() => {
@@ -162,6 +171,7 @@ describe("Messages", () => {
       role: "user",
       parts: [{ type: "text", text: "Salut" }],
       metadata: { createdAt: new Date().toISOString() },
+      artifacts: null,
     } as unknown as ChatMessage;
 
     render(
@@ -181,6 +191,42 @@ describe("Messages", () => {
 
     expect(screen.getByTestId("message-user")).toBeInTheDocument();
     expect(screen.queryByTestId("chat-message-fallback")).not.toBeInTheDocument();
+    expect(previewMessageSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.objectContaining({ artifacts: [] }),
+      })
+    );
+  });
+
+  it("normalise les artefacts avant de les propager aux enfants", () => {
+    const assistantMessage = {
+      id: "msg-2",
+      role: "assistant",
+      parts: [{ type: "text", text: "Voici un artefact" }],
+      metadata: { createdAt: new Date().toISOString() },
+      artifacts: undefined,
+    } as unknown as ChatMessage;
+
+    render(
+      <Messages
+        chatId="chat-1"
+        isArtifactVisible={false}
+        isReadonly={false}
+        messages={[assistantMessage]}
+        regenerate={noop as any}
+        selectedModelId="model"
+        setMessages={noop as any}
+        status="idle"
+        votes={[]}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    expect(previewMessageSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.objectContaining({ artifacts: [] }),
+      })
+    );
   });
 
   it("affiche le bouton de scroll lorsque l’utilisateur s’éloigne du bas", () => {

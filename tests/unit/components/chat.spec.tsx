@@ -22,6 +22,7 @@ let latestArtifactMessages: ChatMessage[] | undefined;
 let latestUseChatConfig: any;
 let storedStream: unknown[] = [];
 const setDataStreamMock = vi.fn();
+let shouldExposeDataStream = true;
 
 vi.mock("@/components/toast", () => ({
   toast: (...args: unknown[]) => toastMock(...args),
@@ -123,19 +124,25 @@ vi.mock("@/components/artifact", () => ({
 }));
 
 vi.mock("@/components/data-stream-provider", () => ({
-  useDataStream: () => ({
-    dataStream: storedStream,
-    setDataStream: (updater: unknown) => {
-      setDataStreamMock(updater);
-      if (typeof updater === "function") {
-        storedStream = (updater as (current: unknown[]) => unknown[])(
-          Array.isArray(storedStream) ? storedStream : []
-        );
-      } else {
-        storedStream = Array.isArray(updater) ? updater : [];
-      }
-    },
-  }),
+  useOptionalDataStream: () => {
+    if (!shouldExposeDataStream) {
+      return null;
+    }
+
+    return {
+      dataStream: storedStream,
+      setDataStream: (updater: unknown) => {
+        setDataStreamMock(updater);
+        if (typeof updater === "function") {
+          storedStream = (updater as (current: unknown[]) => unknown[])(
+            Array.isArray(storedStream) ? storedStream : []
+          );
+        } else {
+          storedStream = Array.isArray(updater) ? updater : [];
+        }
+      },
+    };
+  },
 }));
 
 vi.mock("@ai-sdk/react", () => ({
@@ -181,6 +188,7 @@ beforeEach(() => {
   resumeStreamMock.mockReset();
   toastMock.mockReset();
   setDataStreamMock.mockReset();
+  shouldExposeDataStream = true;
 });
 
 afterEach(() => {
@@ -286,6 +294,33 @@ describe("Chat", () => {
       latestUseChatConfig.onData?.({
         type: "chunk",
         data: { content: "late" },
+      });
+    });
+
+    expect(setDataStreamMock).not.toHaveBeenCalled();
+  });
+
+  it("ignore les fragments lorsque le provider de stream est absent", async () => {
+    shouldExposeDataStream = false;
+    mockMessages = [];
+
+    render(
+      <Chat
+        autoResume={false}
+        id="chat-4"
+        initialChatModel="model"
+        initialLastContext={undefined}
+        initialMessages={[]}
+        initialVisibilityType="private"
+        isReadonly={false}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    await act(async () => {
+      latestUseChatConfig.onData?.({
+        type: "chunk",
+        data: { content: "ghost" },
       });
     });
 

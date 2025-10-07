@@ -39,6 +39,24 @@ const BASE_PARAMETERS: BacktestParameters = {
 };
 
 describe("runBacktest", () => {
+  it("returns default metrics when provided an empty dataset", () => {
+    const result = runBacktest([], BASE_PARAMETERS);
+
+    expect(result.trades).toEqual([]);
+    expect(result.equityCurve).toEqual([]);
+    expect(result.metrics).toEqual({
+      totalReturn: 0,
+      cagr: 0,
+      maxDrawdown: 0,
+      winRate: 0,
+      averageWin: 0,
+      averageLoss: 0,
+      sharpe: 0,
+      profitFactor: 0,
+      trades: 0,
+    });
+  });
+
   it("returns a flat equity curve and zeroed metrics when no trades trigger", () => {
     const candles: OHLCV[] = [
       candle(1, 100),
@@ -96,5 +114,83 @@ describe("runBacktest", () => {
     // Commissions are charged on entry and exit, shrinking the net PnL.
     expect(trade.netPnl).toBeLessThan(trade.grossPnl);
     expect(result.metrics.trades).toBe(result.trades.length);
+  });
+
+  it("handles oversized moving average windows by staying flat", () => {
+    /**
+     * Keep the market structure intentionally short so the slow MA never
+     * receives enough samples to emit non-null values. This mirrors the
+     * boundary condition hit when the assistant asks for a 200-period overlay
+     * on a dataset that only spans a few sessions.
+     */
+    const candles: OHLCV[] = [
+      candle(1, 100),
+      candle(2, 101),
+      candle(3, 102),
+      candle(4, 103),
+      candle(5, 104),
+    ];
+
+    const result = runBacktest(candles, {
+      ...BASE_PARAMETERS,
+      strategy: {
+        type: "sma-crossover",
+        params: { fastPeriod: 5, slowPeriod: 25 },
+      },
+    });
+
+    expect(result.trades).toHaveLength(0);
+    expect(result.metrics.trades).toBe(0);
+    expect(result.metrics.winRate).toBe(0);
+    expect(result.metrics.totalReturn).toBe(0);
+    expect(result.metrics.maxDrawdown).toBe(0);
+    expect(result.equityCurve).toHaveLength(candles.length);
+    expect(
+      result.equityCurve.every(
+        (point) => point.equity === BASE_PARAMETERS.risk.initialCapital
+      )
+    ).toBe(true);
+  });
+
+  it("degrades performance gracefully under extreme fees and slippage", () => {
+    /**
+     * The price path trends strongly higher so the crossover opens a long
+     * position. We then crank fees/slippage to stress the arithmetic and ensure
+     * metrics remain finite instead of exploding to +/-Infinity.
+     */
+    const candles: OHLCV[] = [
+      candle(1, 100),
+      candle(2, 102),
+      candle(3, 104),
+      candle(4, 106),
+      candle(5, 108),
+      candle(6, 110),
+      candle(7, 111),
+      candle(8, 112),
+      candle(9, 114),
+      candle(10, 116),
+    ];
+
+    const result = runBacktest(candles, {
+      ...BASE_PARAMETERS,
+      risk: {
+        initialCapital: 10_000,
+        quantity: 10,
+        commissionPerTrade: 500,
+        slippageBps: 250,
+      },
+    });
+
+    expect(result.trades.length).toBeGreaterThan(0);
+    const metrics = result.metrics;
+
+    expect(Number.isFinite(metrics.totalReturn)).toBe(true);
+    expect(Number.isFinite(metrics.cagr)).toBe(true);
+    expect(Number.isFinite(metrics.maxDrawdown)).toBe(true);
+    expect(Number.isFinite(metrics.profitFactor)).toBe(true);
+    expect(Number.isFinite(metrics.sharpe)).toBe(true);
+
+    const tradePnls = result.trades.map((trade) => trade.netPnl);
+    expect(tradePnls.every((value) => Number.isFinite(value))).toBe(true);
   });
 });

@@ -1,1 +1,1 @@
-ALTER TABLE "Chat" ADD COLUMN "lastContext" jsonb;
+ALTER TABLE "Chat" ADD COLUMN IF NOT EXISTS "lastContext" jsonb;

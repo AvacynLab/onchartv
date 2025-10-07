@@ -44,7 +44,7 @@ export default function Page() {
          * so authenticated routes stay accessible during the subsequent
          * Playwright steps.
          */
-        const destination = state.redirectTo ?? "/";
+        const destination = state.redirectTo ?? "/chat";
 
         try {
           await updateSession();

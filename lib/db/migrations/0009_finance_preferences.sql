@@ -1,4 +1,6 @@
-CREATE TABLE "FinancePreference" (
+-- Idempotent guard so the preference table can be provisioned multiple times
+-- without failing when pipelines rerun the migration.
+CREATE TABLE IF NOT EXISTS "FinancePreference" (
   "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   "userId" uuid NOT NULL,
   "markets" jsonb NOT NULL DEFAULT '[]'::jsonb,
@@ -10,4 +12,4 @@ CREATE TABLE "FinancePreference" (
   CONSTRAINT "FinancePreference_userId_User_id_fk" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE
 );
 
-CREATE UNIQUE INDEX "FinancePreference_user_unique" ON "FinancePreference" ("userId");
+CREATE UNIQUE INDEX IF NOT EXISTS "FinancePreference_user_unique" ON "FinancePreference" ("userId");

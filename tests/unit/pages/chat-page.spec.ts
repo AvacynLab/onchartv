@@ -34,13 +34,49 @@ const createMockResponse = ({
 type MockResponse = ReturnType<typeof createMockResponse>;
 
 describe("ChatPage navigation", () => {
-  it("waits for DOM content to avoid hanging on streamed assets", async () => {
-    const goto = vi.fn().mockResolvedValue(undefined);
-    const chatPage = new ChatPage({ goto } as unknown as Page);
+  it("navigates directly to /chat and waits for the chat controls", async () => {
+    let currentUrl = "http://localhost:3000/chat";
+    const goto = vi.fn().mockImplementation(async () => {
+      currentUrl = "http://localhost:3000/chat";
+    });
+    const waitForSelector = vi.fn().mockResolvedValue(undefined);
+
+    const chatPage = new ChatPage({
+      goto: goto as unknown as Page["goto"],
+      waitForSelector: waitForSelector as unknown as Page["waitForSelector"],
+      url: () => currentUrl,
+    } as unknown as Page);
 
     await chatPage.createNewChat();
 
-    expect(goto).toHaveBeenCalledWith("/", { waitUntil: "domcontentloaded" });
+    expect(goto).toHaveBeenCalledWith("/chat", { waitUntil: "domcontentloaded" });
+    expect(waitForSelector).toHaveBeenCalledWith(
+      '[data-testid="multimodal-input"]',
+      expect.objectContaining({ state: "visible", timeout: 15_000 })
+    );
+    expect(waitForSelector).toHaveBeenCalledWith(
+      '[data-testid="send-button"]',
+      expect.objectContaining({ state: "visible", timeout: 15_000 })
+    );
+  });
+
+  it("throws when the navigation falls back to /login", async () => {
+    let currentUrl = "http://localhost:3000/login";
+    const goto = vi.fn().mockImplementation(async () => {
+      currentUrl = "http://localhost:3000/login";
+    });
+    const waitForSelector = vi.fn();
+
+    const chatPage = new ChatPage({
+      goto: goto as unknown as Page["goto"],
+      waitForSelector: waitForSelector as unknown as Page["waitForSelector"],
+      url: () => currentUrl,
+    } as unknown as Page);
+
+    await expect(chatPage.createNewChat()).rejects.toThrow(
+      /redirected to \/login/
+    );
+    expect(waitForSelector).not.toHaveBeenCalled();
   });
 });
 
@@ -170,6 +206,81 @@ describe("ChatPage.waitForChatApiResponse", () => {
         "Chat API request failed before receiving a response – net::ERR_ABORTED"
       );
     } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back to UI polling when the network error indicates an offline transport", async () => {
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const toastWaitFor = vi.fn().mockImplementation(
+        () => new Promise(() => {})
+      );
+      const toastInnerText = vi.fn().mockResolvedValue("");
+      const waitForFunction = vi.fn().mockResolvedValue(undefined);
+
+      const harness = createEventHarness();
+      (harness.page.getByTestId as ReturnType<typeof vi.fn>).mockImplementation(
+        (testId: string) => {
+          if (testId === "toast") {
+            return {
+              waitFor: toastWaitFor,
+              innerText: toastInnerText,
+            } as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
+          throw new Error(`Unexpected test id ${testId}`);
+        }
+      );
+
+      const chatPage = new ChatPage(harness.page);
+      (chatPage as any).pendingAssistantSnapshot = {
+        count: 0,
+        latestArtifactCount: 0,
+        latestMessageId: null,
+        latestMessageText: "",
+      };
+
+      (harness.page.waitForFunction as ReturnType<typeof vi.fn>).mockImplementation(
+        (...args: Parameters<Page["waitForFunction"]>) =>
+          waitForFunction(...args)
+      );
+
+      const waitPromise = (chatPage as any).waitForChatApiResponse();
+
+      await harness.emitFailure({
+        method: () => "POST",
+        url: () => "http://localhost:3000/api/chat",
+        failure: () => ({ errorText: "net::ENETUNREACH" }),
+      });
+
+      await expect(waitPromise).resolves.toBeUndefined();
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        "Chat API network request failed in offline mode; falling back to UI polling.",
+        expect.objectContaining({
+          failure: "net::ENETUNREACH",
+          url: "http://localhost:3000/api/chat",
+        })
+      );
+      expect(toastWaitFor).toHaveBeenCalledWith({
+        state: "visible",
+        timeout: 45_000,
+      });
+      expect(waitForFunction).toHaveBeenCalledWith(
+        expect.any(Function),
+        {
+          baselineCount: 0,
+          baselineLatestId: null,
+          baselineLatestText: "",
+          baselineArtifactCount: 0,
+        },
+        { timeout: 45_000 }
+      );
+    } finally {
+      warnSpy.mockRestore();
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
     }

@@ -1,6 +1,12 @@
 import { z } from "zod";
 
-import { assertSupportedSymbol, logRouteLatency, now, resolveClientKey } from "@/lib/finance/api-utils";
+import {
+  assertFinanceFeatureEnabled,
+  assertSupportedSymbol,
+  logRouteLatency,
+  now,
+  resolveClientKey,
+} from "@/lib/finance/api-utils";
 import { getMarketDataAdapter } from "@/lib/finance/server-adapter";
 import { enforceRateLimit } from "@/lib/ratelimit";
 import { ChatSDKError } from "@/lib/errors";
@@ -24,6 +30,7 @@ export async function GET(request: Request): Promise<Response> {
   let symbol: string | undefined;
 
   try {
+    assertFinanceFeatureEnabled();
     const rateLimit = enforceRateLimit({
       key: `finance:quote:${clientKey}`,
       limit: 60,

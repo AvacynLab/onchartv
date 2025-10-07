@@ -282,9 +282,7 @@ function persistUsers(store: InMemoryStore) {
   }
 }
 
-const inMemoryStore: InMemoryStore | null = isTestEnvironment
-  ? getOrCreateInMemoryStore()
-  : null;
+let inMemoryStore: InMemoryStore | null = null;
 
 /**
  * Helper ensuring we only touch the in-memory store in the Playwright setup.
@@ -292,10 +290,14 @@ const inMemoryStore: InMemoryStore | null = isTestEnvironment
  * data required by the deterministic tests.
  */
 function getInMemoryStore(): InMemoryStore {
-  if (!inMemoryStore) {
+  if (!isTestEnvironment()) {
     throw new Error(
       "Attempted to access the in-memory database outside the test environment"
     );
+  }
+
+  if (!inMemoryStore) {
+    inMemoryStore = getOrCreateInMemoryStore();
   }
 
   loadPersistedUsers(inMemoryStore);
@@ -311,7 +313,7 @@ function getInMemoryStore(): InMemoryStore {
  * cases.
  */
 export function __resetInMemoryDbForTests(): void {
-  if (!isTestEnvironment) {
+  if (!isTestEnvironment()) {
     throw new Error(
       "Attempted to reset the in-memory database outside the test environment"
     );
@@ -386,14 +388,54 @@ const cloneFinancePreference = (
   };
 };
 
-// biome-ignore lint: Forbidden non-null assertion.
-const client = isTestEnvironment ? null : postgres(process.env.POSTGRES_URL!);
-const db = client
-  ? drizzle(client)
-  : ({} as ReturnType<typeof drizzle>);
+type DrizzleClient = ReturnType<typeof drizzle>;
+
+let postgresClient: ReturnType<typeof postgres> | null = null;
+let drizzleClient: DrizzleClient | null = null;
+
+/**
+ * Lazily resolve the Postgres client so unit tests that toggle the hermetic
+ * flag after importing this module do not eagerly connect to production
+ * infrastructure. When the Playwright markers are active the helper returns
+ * `null`, signalling that callers should fall back to the in-memory store.
+ */
+function getDatabase(): DrizzleClient | null {
+  if (isTestEnvironment()) {
+    return null;
+  }
+
+  if (!postgresClient) {
+    // biome-ignore lint/style/noNonNullAssertion: POSTGRES_URL is validated at runtime.
+    postgresClient = postgres(process.env.POSTGRES_URL!);
+  }
+
+  if (!drizzleClient) {
+    drizzleClient = drizzle(postgresClient);
+  }
+
+  return drizzleClient;
+}
+
+/**
+ * Helper ensuring callers never receive a falsy database handle in production
+ * code-paths. When the hermetic environment is active we rely on the in-memory
+ * store instead of Postgres, so invoking this helper signals a programming
+ * error that warrants an explicit failure.
+ */
+function getRequiredDatabase(): DrizzleClient {
+  const database = getDatabase();
+  if (!database) {
+    throw new ChatSDKError(
+      "config:postgres_unavailable",
+      "Attempted to access the Postgres client while the hermetic test database is active"
+    );
+  }
+
+  return database;
+}
 
 export async function getUser(email: string): Promise<User[]> {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     const targetEmail = normaliseEmail(email);
     return Array.from(store.users.values()).filter((currentUser) =>
@@ -403,7 +445,8 @@ export async function getUser(email: string): Promise<User[]> {
   }
 
   try {
-    return await db.select().from(user).where(eq(user.email, email));
+    const database = getRequiredDatabase();
+    return await database.select().from(user).where(eq(user.email, email));
   } catch (_error) {
     throw new ChatSDKError(
       "bad_request:database",
@@ -413,7 +456,7 @@ export async function getUser(email: string): Promise<User[]> {
 }
 
 function getInMemoryPlaintextPassword(email: string): string | undefined {
-  if (!isTestEnvironment) {
+  if (!isTestEnvironment()) {
     return undefined;
   }
 
@@ -453,7 +496,7 @@ export function getTestUserPlaintextPassword(email: string): string | undefined 
 }
 
 export async function createUser(email: string, password: string) {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     const hashedPassword = generateHashedPassword(password);
     const targetEmail = normaliseEmail(email);
@@ -493,14 +536,18 @@ export async function createUser(email: string, password: string) {
   const hashedPassword = generateHashedPassword(password);
 
   try {
-    return await db.insert(user).values({ email, password: hashedPassword });
+    const database = getRequiredDatabase();
+    return await database.insert(user).values({
+      email,
+      password: hashedPassword,
+    });
   } catch (_error) {
     throw new ChatSDKError("bad_request:database", "Failed to create user");
   }
 }
 
 export async function createGuestUser() {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     const id = generateUUID();
     const email = `guest-${Date.now()}`;
@@ -519,7 +566,8 @@ export async function createGuestUser() {
   const password = generateHashedPassword(generateUUID());
 
   try {
-    return await db.insert(user).values({ email, password }).returning({
+    const database = getRequiredDatabase();
+    return await database.insert(user).values({ email, password }).returning({
       id: user.id,
       email: user.email,
     });
@@ -542,7 +590,7 @@ export async function saveChat({
   title: string;
   visibility: VisibilityType;
 }) {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     const chatRecord: Chat = {
       id,
@@ -559,7 +607,8 @@ export async function saveChat({
   }
 
   try {
-    return await db.insert(chat).values({
+    const database = getRequiredDatabase();
+    return await database.insert(chat).values({
       id,
       createdAt: new Date(),
       userId,
@@ -572,7 +621,7 @@ export async function saveChat({
 }
 
 export async function deleteChatById({ id }: { id: string }) {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     const chatToDelete = store.chats.get(id) ?? null;
 
@@ -595,11 +644,12 @@ export async function deleteChatById({ id }: { id: string }) {
   }
 
   try {
-    await db.delete(vote).where(eq(vote.chatId, id));
-    await db.delete(message).where(eq(message.chatId, id));
-    await db.delete(stream).where(eq(stream.chatId, id));
+    const database = getRequiredDatabase();
+    await database.delete(vote).where(eq(vote.chatId, id));
+    await database.delete(message).where(eq(message.chatId, id));
+    await database.delete(stream).where(eq(stream.chatId, id));
 
-    const [chatsDeleted] = await db
+    const [chatsDeleted] = await database
       .delete(chat)
       .where(eq(chat.id, id))
       .returning();
@@ -623,7 +673,7 @@ export async function getChatsByUserId({
   startingAfter: string | null;
   endingBefore: string | null;
 }) {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     const allChats = Array.from(store.chats.values()).filter(
       (currentChat) => currentChat.userId === id
@@ -674,8 +724,10 @@ export async function getChatsByUserId({
   try {
     const extendedLimit = limit + 1;
 
+    const database = getRequiredDatabase();
+
     const query = (whereCondition?: SQL<any>) =>
-      db
+      database
         .select()
         .from(chat)
         .where(
@@ -689,7 +741,7 @@ export async function getChatsByUserId({
     let filteredChats: Chat[] = [];
 
     if (startingAfter) {
-      const [selectedChat] = await db
+      const [selectedChat] = await database
         .select()
         .from(chat)
         .where(eq(chat.id, startingAfter))
@@ -704,7 +756,7 @@ export async function getChatsByUserId({
 
       filteredChats = await query(gt(chat.createdAt, selectedChat.createdAt));
     } else if (endingBefore) {
-      const [selectedChat] = await db
+      const [selectedChat] = await database
         .select()
         .from(chat)
         .where(eq(chat.id, endingBefore))
@@ -737,13 +789,17 @@ export async function getChatsByUserId({
 }
 
 export async function getChatById({ id }: { id: string }) {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     return store.chats.get(id) ?? null;
   }
 
   try {
-    const [selectedChat] = await db.select().from(chat).where(eq(chat.id, id));
+    const database = getRequiredDatabase();
+    const [selectedChat] = await database
+      .select()
+      .from(chat)
+      .where(eq(chat.id, id));
     if (!selectedChat) {
       return null;
     }
@@ -755,7 +811,7 @@ export async function getChatById({ id }: { id: string }) {
 }
 
 export async function saveMessages({ messages }: { messages: DBMessage[] }) {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
 
     for (const messageRecord of messages) {
@@ -769,14 +825,15 @@ export async function saveMessages({ messages }: { messages: DBMessage[] }) {
   }
 
   try {
-    return await db.insert(message).values(messages);
+    const database = getRequiredDatabase();
+    return await database.insert(message).values(messages);
   } catch (_error) {
     throw new ChatSDKError("bad_request:database", "Failed to save messages");
   }
 }
 
 export async function getMessagesByChatId({ id }: { id: string }) {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     return Array.from(store.messages.values())
       .filter((messageRecord) => messageRecord.chatId === id)
@@ -788,7 +845,8 @@ export async function getMessagesByChatId({ id }: { id: string }) {
   }
 
   try {
-    return await db
+    const database = getRequiredDatabase();
+    return await database
       .select()
       .from(message)
       .where(eq(message.chatId, id))
@@ -810,7 +868,7 @@ export async function voteMessage({
   messageId: string;
   type: "up" | "down";
 }) {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     const voteKey = makeVoteKey(chatId, messageId);
     store.votes.set(voteKey, {
@@ -823,18 +881,19 @@ export async function voteMessage({
   }
 
   try {
-    const [existingVote] = await db
+    const database = getRequiredDatabase();
+    const [existingVote] = await database
       .select()
       .from(vote)
       .where(and(eq(vote.messageId, messageId)));
 
     if (existingVote) {
-      return await db
+      return await database
         .update(vote)
         .set({ isUpvoted: type === "up" })
         .where(and(eq(vote.messageId, messageId), eq(vote.chatId, chatId)));
     }
-    return await db.insert(vote).values({
+    return await database.insert(vote).values({
       chatId,
       messageId,
       isUpvoted: type === "up",
@@ -845,7 +904,7 @@ export async function voteMessage({
 }
 
 export async function getVotesByChatId({ id }: { id: string }) {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     return Array.from(store.votes.values()).filter(
       (voteRecord) => voteRecord.chatId === id
@@ -853,7 +912,8 @@ export async function getVotesByChatId({ id }: { id: string }) {
   }
 
   try {
-    return await db.select().from(vote).where(eq(vote.chatId, id));
+    const database = getRequiredDatabase();
+    return await database.select().from(vote).where(eq(vote.chatId, id));
   } catch (_error) {
     throw new ChatSDKError(
       "bad_request:database",
@@ -875,7 +935,7 @@ export async function saveDocument({
   content: string;
   userId: string;
 }) {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     const documentRecord = {
       id,
@@ -897,7 +957,8 @@ export async function saveDocument({
   }
 
   try {
-    return await db
+    const database = getRequiredDatabase();
+    return await database
       .insert(document)
       .values({
         id,
@@ -914,7 +975,7 @@ export async function saveDocument({
 }
 
 export async function getDocumentsById({ id }: { id: string }) {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     const documents = store.documents.get(id) ?? [];
     return [...documents].sort(
@@ -939,7 +1000,7 @@ export async function getDocumentsById({ id }: { id: string }) {
 }
 
 export async function getDocumentById({ id }: { id: string }) {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     const documents = store.documents.get(id) ?? [];
     return documents.at(-1);
@@ -968,7 +1029,7 @@ export async function deleteDocumentsByIdAfterTimestamp({
   id: string;
   timestamp: Date;
 }) {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     const documents = store.documents.get(id) ?? [];
     const remainingDocuments = documents.filter(
@@ -1016,7 +1077,7 @@ export async function saveSuggestions({
 }: {
   suggestions: Suggestion[];
 }) {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     for (const suggestionRecord of suggestions) {
       const records = store.suggestions.get(suggestionRecord.documentId) ?? [];
@@ -1028,7 +1089,8 @@ export async function saveSuggestions({
   }
 
   try {
-    return await db.insert(suggestion).values(suggestions);
+    const database = getRequiredDatabase();
+    return await database.insert(suggestion).values(suggestions);
   } catch (_error) {
     throw new ChatSDKError(
       "bad_request:database",
@@ -1042,13 +1104,14 @@ export async function getSuggestionsByDocumentId({
 }: {
   documentId: string;
 }) {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     return [...(store.suggestions.get(documentId) ?? [])];
   }
 
   try {
-    return await db
+    const database = getRequiredDatabase();
+    return await database
       .select()
       .from(suggestion)
       .where(and(eq(suggestion.documentId, documentId)));
@@ -1061,14 +1124,15 @@ export async function getSuggestionsByDocumentId({
 }
 
 export async function getMessageById({ id }: { id: string }) {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     const messageRecord = store.messages.get(id);
     return messageRecord ? [messageRecord] : [];
   }
 
   try {
-    return await db.select().from(message).where(eq(message.id, id));
+    const database = getRequiredDatabase();
+    return await database.select().from(message).where(eq(message.id, id));
   } catch (_error) {
     throw new ChatSDKError(
       "bad_request:database",
@@ -1084,7 +1148,7 @@ export async function deleteMessagesByChatIdAfterTimestamp({
   chatId: string;
   timestamp: Date;
 }) {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     const messagesToDelete = Array.from(store.messages.values()).filter(
       (messageRecord) =>
@@ -1101,7 +1165,8 @@ export async function deleteMessagesByChatIdAfterTimestamp({
   }
 
   try {
-    const messagesToDelete = await db
+    const database = getRequiredDatabase();
+    const messagesToDelete = await database
       .select({ id: message.id })
       .from(message)
       .where(
@@ -1113,13 +1178,13 @@ export async function deleteMessagesByChatIdAfterTimestamp({
     );
 
     if (messageIds.length > 0) {
-      await db
+      await database
         .delete(vote)
         .where(
           and(eq(vote.chatId, chatId), inArray(vote.messageId, messageIds))
         );
 
-      return await db
+      return await database
         .delete(message)
         .where(
           and(eq(message.chatId, chatId), inArray(message.id, messageIds))
@@ -1140,7 +1205,7 @@ export async function updateChatVisiblityById({
   chatId: string;
   visibility: "private" | "public";
 }) {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     const chatRecord = store.chats.get(chatId);
     if (chatRecord) {
@@ -1151,7 +1216,11 @@ export async function updateChatVisiblityById({
   }
 
   try {
-    return await db.update(chat).set({ visibility }).where(eq(chat.id, chatId));
+    const database = getRequiredDatabase();
+    return await database
+      .update(chat)
+      .set({ visibility })
+      .where(eq(chat.id, chatId));
   } catch (_error) {
     throw new ChatSDKError(
       "bad_request:database",
@@ -1168,7 +1237,7 @@ export async function updateChatLastContextById({
   // Store merged server-enriched usage object
   context: AppUsage;
 }) {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     const chatRecord = store.chats.get(chatId);
     if (chatRecord) {
@@ -1199,7 +1268,7 @@ export async function getMessageCountByUserId({
   id: string;
   differenceInHours: number;
 }) {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     const threshold = Date.now() - differenceInHours * 60 * 60 * 1000;
 
@@ -1257,7 +1326,7 @@ export async function createStreamId({
   streamId: string;
   chatId: string;
 }) {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     const streams = store.streams.get(chatId) ?? [];
     streams.push({ id: streamId, chatId, createdAt: new Date() });
@@ -1282,7 +1351,7 @@ export async function createStreamId({
 }
 
 export async function getStreamIdsByChatId({ chatId }: { chatId: string }) {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     const streams = store.streams.get(chatId) ?? [];
     return streams.map(({ id }) => id);
@@ -1322,7 +1391,7 @@ export async function upsertAsset(input: UpsertAssetInput): Promise<Asset> {
   const normalisedExchange = normaliseExchange(input.exchange);
   const normalisedCurrency = normaliseCurrency(input.currency);
 
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     const key = makeAssetKey(normalisedSymbol, normalisedExchange);
     const existingId = store.assetsBySymbolExchange.get(key);
@@ -1390,7 +1459,7 @@ export async function getAssetBySymbol({
   const normalisedSymbol = normaliseSymbol(symbol);
   const normalisedExchange = normaliseExchange(exchange);
 
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     const key = makeAssetKey(normalisedSymbol, normalisedExchange);
     const assetId = store.assetsBySymbolExchange.get(key);
@@ -1430,7 +1499,7 @@ export interface CreateStrategyInput {
 export async function createStrategy(
   input: CreateStrategyInput
 ): Promise<Strategy> {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     const id = generateUUID();
     const record: Strategy = {
@@ -1485,7 +1554,7 @@ export interface CreateStrategyVersionInput {
 export async function createStrategyVersion(
   input: CreateStrategyVersionInput
 ): Promise<StrategyVersion> {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     const id = generateUUID();
     const record: StrategyVersion = {
@@ -1541,7 +1610,7 @@ export interface CreateBacktestRunInput {
 export async function createBacktestRun(
   input: CreateBacktestRunInput
 ): Promise<BacktestRun> {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     const id = generateUUID();
     const record: BacktestRun = {
@@ -1601,7 +1670,7 @@ export async function listBacktestsByStrategy({
   strategyId: string;
   limit?: number;
 }): Promise<BacktestRun[]> {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     const relevantVersionIds = new Set(
       Array.from(store.strategyVersions.values())
@@ -1649,7 +1718,7 @@ export async function getFinancePreferencesByUserId({
 }: {
   userId: string;
 }): Promise<FinancePreference | null> {
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     const record = store.financePreferences.get(userId) ?? null;
     return record ? cloneFinancePreference(record) : null;
@@ -1689,7 +1758,7 @@ export async function upsertFinancePreferences(
   })) as FinancePreference["indicators"];
   const now = new Date();
 
-  if (isTestEnvironment) {
+  if (isTestEnvironment()) {
     const store = getInMemoryStore();
     const existing = store.financePreferences.get(input.userId);
 

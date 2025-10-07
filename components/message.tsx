@@ -32,21 +32,16 @@ import {
   buildBacktestSlashCommand,
   buildExplainCandlePrompt,
 } from "@/lib/finance/artifact-commands";
-import type {
-  FinanceArtifact,
-  FinanceBacktestArtifact,
-  FinanceChartArtifact,
+import {
+  financeArtifactSchema,
+  type FinanceArtifact,
+  type FinanceBacktestArtifact,
+  type FinanceChartArtifact,
 } from "@/lib/finance/types";
 import { useChatComposer } from "./chat-composer-context";
 
 const isFinanceArtifact = (value: unknown): value is FinanceArtifact => {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "type" in value &&
-    typeof (value as { type: unknown }).type === "string" &&
-    (value as { type: string }).type.startsWith("finance.")
-  );
+  return financeArtifactSchema.safeParse(value).success;
 };
 
 const PurePreviewMessage = ({
