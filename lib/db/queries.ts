@@ -984,7 +984,8 @@ export async function getDocumentsById({ id }: { id: string }) {
   }
 
   try {
-    const documents = await db
+    const database = getRequiredDatabase();
+    const documents = await database
       .select()
       .from(document)
       .where(eq(document.id, id))
@@ -1007,7 +1008,8 @@ export async function getDocumentById({ id }: { id: string }) {
   }
 
   try {
-    const [selectedDocument] = await db
+    const database = getRequiredDatabase();
+    const [selectedDocument] = await database
       .select()
       .from(document)
       .where(eq(document.id, id))
@@ -1051,7 +1053,9 @@ export async function deleteDocumentsByIdAfterTimestamp({
   }
 
   try {
-    await db
+    const database = getRequiredDatabase();
+
+    await database
       .delete(suggestion)
       .where(
         and(
@@ -1060,7 +1064,7 @@ export async function deleteDocumentsByIdAfterTimestamp({
         )
       );
 
-    return await db
+    return await database
       .delete(document)
       .where(and(eq(document.id, id), gt(document.createdAt, timestamp)))
       .returning();
@@ -1248,7 +1252,9 @@ export async function updateChatLastContextById({
   }
 
   try {
-    return await db
+    const database = getRequiredDatabase();
+
+    return await database
       .update(chat)
       .set({ lastContext: context })
       .where(eq(chat.id, chatId));
@@ -1297,7 +1303,8 @@ export async function getMessageCountByUserId({
       Date.now() - differenceInHours * 60 * 60 * 1000
     );
 
-    const [stats] = await db
+    const database = getRequiredDatabase();
+    const [stats] = await database
       .select({ count: count(message.id) })
       .from(message)
       .innerJoin(chat, eq(message.chatId, chat.id))
@@ -1339,7 +1346,9 @@ export async function createStreamId({
   }
 
   try {
-    await db
+    const database = getRequiredDatabase();
+
+    await database
       .insert(stream)
       .values({ id: streamId, chatId, createdAt: new Date() });
   } catch (_error) {
@@ -1358,7 +1367,8 @@ export async function getStreamIdsByChatId({ chatId }: { chatId: string }) {
   }
 
   try {
-    const streamIds = await db
+    const database = getRequiredDatabase();
+    const streamIds = await database
       .select({ id: stream.id })
       .from(stream)
       .where(eq(stream.chatId, chatId))
@@ -1416,7 +1426,8 @@ export async function upsertAsset(input: UpsertAssetInput): Promise<Asset> {
   }
 
   try {
-    const [record] = await db
+    const database = getRequiredDatabase();
+    const [record] = await database
       .insert(asset)
       .values({
         symbol: normalisedSymbol,
@@ -1467,7 +1478,8 @@ export async function getAssetBySymbol({
   }
 
   try {
-    const [record] = await db
+    const database = getRequiredDatabase();
+    const [record] = await database
       .select()
       .from(asset)
       .where(
@@ -1516,7 +1528,8 @@ export async function createStrategy(
   }
 
   try {
-    const [record] = await db
+    const database = getRequiredDatabase();
+    const [record] = await database
       .insert(strategy)
       .values({
         userId: input.userId,
@@ -1570,7 +1583,8 @@ export async function createStrategyVersion(
   }
 
   try {
-    const [record] = await db
+    const database = getRequiredDatabase();
+    const [record] = await database
       .insert(strategyVersion)
       .values({
         strategyId: input.strategyId,
@@ -1632,7 +1646,8 @@ export async function createBacktestRun(
   }
 
   try {
-    const [record] = await db
+    const database = getRequiredDatabase();
+    const [record] = await database
       .insert(backtestRun)
       .values({
         strategyVersionId: input.strategyVersionId,
@@ -1691,7 +1706,8 @@ export async function listBacktestsByStrategy({
   }
 
   try {
-    const rows = await db
+    const database = getRequiredDatabase();
+    const rows = await database
       .select({ run: backtestRun })
       .from(backtestRun)
       .innerJoin(
@@ -1725,7 +1741,8 @@ export async function getFinancePreferencesByUserId({
   }
 
   try {
-    const [record] = await db
+    const database = getRequiredDatabase();
+    const [record] = await database
       .select()
       .from(financePreference)
       .where(eq(financePreference.userId, userId))
@@ -1792,7 +1809,8 @@ export async function upsertFinancePreferences(
   }
 
   try {
-    const [record] = await db
+    const database = getRequiredDatabase();
+    const [record] = await database
       .insert(financePreference)
       .values({
         userId: input.userId,

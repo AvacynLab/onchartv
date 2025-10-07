@@ -22,14 +22,17 @@ export type NextDevCommand = {
  * server in test harnesses. Only the keys that influence the command selection
  * are surfaced here to simplify unit tests.
  */
-export type NextDevEnvironment = Pick<
-  NodeJS.ProcessEnv,
-  | "PLAYWRIGHT"
-  | "CI_PLAYWRIGHT"
-  | "PLAYWRIGHT_MANUAL_SERVER"
-  | "HERMETIC_CHAT_PROVIDER"
-> &
-  NodeJS.ProcessEnv;
+export type NextDevEnvironment =
+  & Partial<
+      Pick<
+        NodeJS.ProcessEnv,
+        | "PLAYWRIGHT"
+        | "CI_PLAYWRIGHT"
+        | "PLAYWRIGHT_MANUAL_SERVER"
+        | "HERMETIC_CHAT_PROVIDER"
+      >
+    >
+  & NodeJS.ProcessEnv;
 
 /**
  * Determine which command the Playwright helper should use to start the Next.js

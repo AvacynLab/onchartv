@@ -7,13 +7,17 @@ import {
   type Browser,
   type BrowserContext,
   type Page,
+  type APIResponse,
 } from "@playwright/test";
 
 import { hasAuthSessionCookie } from "../utils/auth-session";
 import { persistSessionCookies } from "../utils/session-persistence";
 import { waitForServerReady } from "../utils/server-health";
 import { warmupNextRoutes } from "../utils/server-warmup";
-import { loginWithCredentialsCallback } from "../utils/programmatic-login";
+import {
+  loginWithCredentialsCallback,
+  type ResponseLike,
+} from "../utils/programmatic-login";
 import { withStepTiming } from "../utils/timing";
 
 const AUTH_DIR = path.resolve(__dirname, "../.auth");
@@ -59,6 +63,22 @@ async function ensureLoggedIn(
 ) {
   const context = page.context();
 
+  const toResponseLike = async (
+    executor: Promise<APIResponse>
+  ): Promise<ResponseLike> => {
+    const response = await executor;
+    return {
+      ok: () => response.ok(),
+      status: () => response.status(),
+      json: () => response.json(),
+      text: () => response.text(),
+      headers: () =>
+        response
+          .headersArray()
+          .map(({ name, value }) => ({ name, value })),
+    };
+  };
+
   /**
    * Registration already performs a credentials sign-in via the server
    * action. When the session cookie exists we can skip the manual login to
@@ -80,8 +100,10 @@ async function ensureLoggedIn(
     email: creds.email,
     password: creds.password,
     request: {
-      get: (url, options) => context.request.get(url, options),
-      post: (url, options) => context.request.post(url, options),
+      get: (url, options) =>
+        toResponseLike(context.request.get(url, options)),
+      post: (url, options) =>
+        toResponseLike(context.request.post(url, options)),
     },
     readCookies: () => context.cookies(),
     hasSessionCookie: hasAuthSessionCookie,
