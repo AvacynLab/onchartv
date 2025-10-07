@@ -1,16 +1,28 @@
-import assert from "node:assert/strict";
-import test, { describe } from "node:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const originalPlaywright = process.env.PLAYWRIGHT;
-const originalCiPlaywright = process.env.CI_PLAYWRIGHT;
-process.env.PLAYWRIGHT = process.env.PLAYWRIGHT ?? "true";
+import { resolveCredentialsUser } from "@/lib/auth/credentials-verify";
+
+const ROUTE_PATH = "../../../app/api/tests/auth/reset-password/route";
 
 async function loadRoute() {
-  return await import("../../../app/api/tests/auth/reset-password/route");
+  return await import(ROUTE_PATH);
 }
 
 describe("POST /api/tests/auth/reset-password", () => {
-  test("rejects requests outside the Playwright environment", async () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.unstubAllEnvs();
+    vi.stubEnv("PLAYWRIGHT", "true");
+    vi.stubEnv("CI_PLAYWRIGHT", "true");
+    vi.doMock("server-only", () => ({}));
+  });
+
+  afterEach(() => {
+    vi.resetModules();
+    vi.unstubAllEnvs();
+  });
+
+  it("rejects requests outside the Playwright environment", async () => {
     delete process.env.PLAYWRIGHT;
     delete process.env.CI_PLAYWRIGHT;
 
@@ -22,20 +34,15 @@ describe("POST /api/tests/auth/reset-password", () => {
       })
     );
 
-    assert.equal(response.status, 403);
-    const payload = (await response.json()) as { error?: { code?: string } };
-    assert.equal(payload.error?.code, "forbidden");
-
-    process.env.PLAYWRIGHT = originalPlaywright ?? "true";
-    if (originalCiPlaywright) {
-      process.env.CI_PLAYWRIGHT = originalCiPlaywright;
-    } else {
-      delete process.env.CI_PLAYWRIGHT;
-    }
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "forbidden" },
+    });
   });
 
-  test("returns 404 when the requested user does not exist", async () => {
+  it("returns 404 when the requested user does not exist", async () => {
     const { POST } = await loadRoute();
+
     const response = await POST(
       new Request("http://localhost/api/tests/auth/reset-password", {
         method: "POST",
@@ -43,14 +50,17 @@ describe("POST /api/tests/auth/reset-password", () => {
       })
     );
 
-    assert.equal(response.status, 404);
-    const payload = (await response.json()) as { error?: { code?: string } };
-    assert.equal(payload.error?.code, "not_found");
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "not_found" },
+    });
   });
 
-  test("updates the stored hash when the user exists", async () => {
+  it("updates the stored hash when the user exists", async () => {
     const { POST } = await loadRoute();
-    const queries = await import("../../../lib/db/queries");
+    const queries = await import("@/lib/db/queries");
+
+    await queries.__resetInMemoryDbForTests();
 
     const email = "playwright-reset@example.com";
     await queries.createUser(email, "initial-password");
@@ -62,14 +72,21 @@ describe("POST /api/tests/auth/reset-password", () => {
       })
     );
 
-    assert.equal(response.status, 200);
-    const payload = (await response.json()) as { status?: string };
-    assert.equal(payload.status, "updated");
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ status: "updated" });
 
-    const users = await queries.getUser(email);
-    assert.equal(users.length, 1);
-    const updatedUser = users[0]!;
-    assert.notEqual(updatedUser.password, null);
+    const [updatedUser] = await queries.getUser(email);
+    expect(updatedUser?.password).not.toBeNull();
+
+    const dependencies = {
+      getUser: queries.getUser,
+      createUser: queries.createUser,
+      getTestUserPlaintextPassword: queries.getTestUserPlaintextPassword,
+      getPersistedTestUserByEmail: queries.getPersistedTestUserByEmail,
+      updateTestUserPassword: queries.updateTestUserPassword,
+    } satisfies Parameters<typeof resolveCredentialsUser>[2];
+
+    const resolved = await resolveCredentialsUser(email, "new-password", dependencies);
+    expect(resolved?.email).toBe(email);
   });
 });
-

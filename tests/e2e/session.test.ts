@@ -77,6 +77,7 @@ test.describe.serial("Login and Registration", () => {
   });
 
   test("Log into account that exists", async ({ page }) => {
+    await authPage.resetPassword(testUser.email, testUser.password);
     await authPage.login(testUser.email, testUser.password);
 
     await waitForChatDashboard(page);
@@ -84,6 +85,7 @@ test.describe.serial("Login and Registration", () => {
   });
 
   test("Display user email in user menu", async ({ page }) => {
+    await authPage.resetPassword(testUser.email, testUser.password);
     await authPage.login(testUser.email, testUser.password);
 
     await waitForChatDashboard(page);
@@ -94,12 +96,14 @@ test.describe.serial("Login and Registration", () => {
   });
 
   test("Log out as non-guest user", async () => {
+    await authPage.resetPassword(testUser.email, testUser.password);
     await authPage.logout(testUser.email, testUser.password);
   });
 
   test("Do not navigate to /register for authenticated users", async ({
     page,
   }) => {
+    await authPage.resetPassword(testUser.email, testUser.password);
     await authPage.login(testUser.email, testUser.password);
     await waitForChatDashboard(page);
 
@@ -108,6 +112,7 @@ test.describe.serial("Login and Registration", () => {
   });
 
   test("Do not navigate to /login for authenticated users", async ({ page }) => {
+    await authPage.resetPassword(testUser.email, testUser.password);
     await authPage.login(testUser.email, testUser.password);
     await waitForChatDashboard(page);
 

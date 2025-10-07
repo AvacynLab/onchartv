@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
-import { createUser, getUser } from "@/lib/db/queries";
+import { getUser, updateTestUserPassword } from "@/lib/db/queries";
 
 const RESET_SCHEMA = z.object({
   email: z.string().email(),
@@ -59,7 +59,22 @@ export async function POST(request: Request) {
     );
   }
 
-  await createUser(payload.email, payload.password);
+  const didUpdate = await updateTestUserPassword(
+    payload.email,
+    payload.password
+  );
+
+  if (!didUpdate) {
+    return NextResponse.json(
+      {
+        error: {
+          code: "update_failed",
+          message: "Failed to refresh the stored credentials for the test user.",
+        },
+      },
+      { status: 500 }
+    );
+  }
 
   return NextResponse.json({ status: "updated" });
 }

@@ -266,6 +266,7 @@ describe("loadPersistedUsers", () => {
       createUser: queries.createUser,
       getTestUserPlaintextPassword: queries.getTestUserPlaintextPassword,
       getPersistedTestUserByEmail: queries.getPersistedTestUserByEmail,
+      updateTestUserPassword: queries.updateTestUserPassword,
     } satisfies Parameters<typeof resolveCredentialsUser>[2];
 
     expect(
@@ -279,6 +280,7 @@ describe("loadPersistedUsers", () => {
       createUser: reloadedQueries.createUser,
       getTestUserPlaintextPassword: reloadedQueries.getTestUserPlaintextPassword,
       getPersistedTestUserByEmail: reloadedQueries.getPersistedTestUserByEmail,
+      updateTestUserPassword: reloadedQueries.updateTestUserPassword,
     } satisfies Parameters<typeof resolveCredentialsUser>[2];
 
     const resolved = await resolveCredentialsUser(
@@ -304,6 +306,8 @@ describe("loadPersistedUsers", () => {
       getUser: queries.getUser,
       createUser: queries.createUser,
       getTestUserPlaintextPassword: queries.getTestUserPlaintextPassword,
+      getPersistedTestUserByEmail: queries.getPersistedTestUserByEmail,
+      updateTestUserPassword: queries.updateTestUserPassword,
     } satisfies Parameters<typeof resolveCredentialsUser>[2];
 
     const writerQueries = await reloadQueries({ resetProcessStore: true });

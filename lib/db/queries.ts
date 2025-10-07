@@ -804,6 +804,60 @@ export async function createUser(email: string, password: string) {
   }
 }
 
+/**
+ * Refresh the hashed and plaintext credentials for an existing user account.
+ * The helper keeps the in-memory Playwright store and persisted snapshot in
+ * sync so that subsequent logins observe the updated secret even when served
+ * by a different Next.js module graph.
+ */
+export async function updateTestUserPassword(
+  email: string,
+  password: string
+): Promise<boolean> {
+  if (isTestEnvironment) {
+    const store = getInMemoryStore();
+    const targetEmail = normaliseEmail(email);
+    const hashedPassword = generateHashedPassword(password);
+
+    for (const [userId, currentUser] of store.users.entries()) {
+      if (
+        typeof currentUser.email === "string" &&
+        normaliseEmail(currentUser.email) === targetEmail
+      ) {
+        store.users.set(userId, {
+          ...currentUser,
+          email: currentUser.email ?? email,
+          password: hashedPassword,
+        });
+        store.userPlaintextPasswords.set(userId, password);
+        store.userPlaintextByEmail.set(targetEmail, password);
+
+        persistUsers(store);
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  const hashedPassword = generateHashedPassword(password);
+
+  try {
+    const updated = await db
+      .update(user)
+      .set({ password: hashedPassword })
+      .where(eq(user.email, email))
+      .returning({ id: user.id });
+
+    return updated.length > 0;
+  } catch (_error) {
+    throw new ChatSDKError(
+      "bad_request:database",
+      "Failed to update user password"
+    );
+  }
+}
+
 export async function createGuestUser() {
   if (isTestEnvironment) {
     const store = getInMemoryStore();

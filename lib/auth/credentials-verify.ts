@@ -30,6 +30,7 @@ type CredentialsDependencies = {
   createUser: typeof import("@/lib/db/queries")["createUser"];
   getTestUserPlaintextPassword: typeof import("@/lib/db/queries")["getTestUserPlaintextPassword"];
   getPersistedTestUserByEmail: typeof import("@/lib/db/queries")["getPersistedTestUserByEmail"];
+  updateTestUserPassword: typeof import("@/lib/db/queries")["updateTestUserPassword"];
 };
 
 async function resolveDependencies(
@@ -39,7 +40,8 @@ async function resolveDependencies(
     overrides?.getUser &&
     overrides?.createUser &&
     overrides?.getTestUserPlaintextPassword &&
-    overrides?.getPersistedTestUserByEmail
+    overrides?.getPersistedTestUserByEmail &&
+    overrides?.updateTestUserPassword
   ) {
     return overrides as CredentialsDependencies;
   }
@@ -55,6 +57,8 @@ async function resolveDependencies(
     getPersistedTestUserByEmail:
       overrides?.getPersistedTestUserByEmail ??
       queries.getPersistedTestUserByEmail,
+    updateTestUserPassword:
+      overrides?.updateTestUserPassword ?? queries.updateTestUserPassword,
   } satisfies CredentialsDependencies;
 }
 
@@ -68,6 +72,7 @@ export async function resolveCredentialsUser(
     createUser,
     getTestUserPlaintextPassword,
     getPersistedTestUserByEmail,
+    updateTestUserPassword,
   } = await resolveDependencies(overrides);
 
   const shouldLogDebug = isTestEnvironment && Boolean(process.env.CI_PLAYWRIGHT);
@@ -115,7 +120,10 @@ export async function resolveCredentialsUser(
     }
 
     try {
-      await createUser(email, password);
+      const didUpdate = await updateTestUserPassword(email, password);
+      if (!didUpdate) {
+        await createUser(email, password);
+      }
       const [refreshedUser] = await getUser(email);
       if (refreshedUser) {
         return refreshedUser;
@@ -239,7 +247,10 @@ export async function resolveCredentialsUser(
      * for the test account may become stale. Refresh the stored credentials and
      * read the user back so downstream consumers receive the up-to-date record.
      */
-    await createUser(email, password);
+    const didUpdate = await updateTestUserPassword(email, password);
+    if (!didUpdate) {
+      await createUser(email, password);
+    }
 
     const [refreshedUser] = await getUser(email);
 
