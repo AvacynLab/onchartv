@@ -29,8 +29,6 @@ type CredentialsDependencies = {
   getUser: typeof import("@/lib/db/queries")["getUser"];
   createUser: typeof import("@/lib/db/queries")["createUser"];
   getTestUserPlaintextPassword: typeof import("@/lib/db/queries")["getTestUserPlaintextPassword"];
-  getPersistedTestUserByEmail: typeof import("@/lib/db/queries")["getPersistedTestUserByEmail"];
-  updateTestUserPassword: typeof import("@/lib/db/queries")["updateTestUserPassword"];
 };
 
 async function resolveDependencies(
@@ -39,9 +37,7 @@ async function resolveDependencies(
   if (
     overrides?.getUser &&
     overrides?.createUser &&
-    overrides?.getTestUserPlaintextPassword &&
-    overrides?.getPersistedTestUserByEmail &&
-    overrides?.updateTestUserPassword
+    overrides?.getTestUserPlaintextPassword
   ) {
     return overrides as CredentialsDependencies;
   }
@@ -54,11 +50,6 @@ async function resolveDependencies(
     getTestUserPlaintextPassword:
       overrides?.getTestUserPlaintextPassword ??
       queries.getTestUserPlaintextPassword,
-    getPersistedTestUserByEmail:
-      overrides?.getPersistedTestUserByEmail ??
-      queries.getPersistedTestUserByEmail,
-    updateTestUserPassword:
-      overrides?.updateTestUserPassword ?? queries.updateTestUserPassword,
   } satisfies CredentialsDependencies;
 }
 
@@ -67,97 +58,8 @@ export async function resolveCredentialsUser(
   password: string,
   overrides?: Partial<CredentialsDependencies>
 ): Promise<User | null> {
-  const {
-    getUser,
-    createUser,
-    getTestUserPlaintextPassword,
-    getPersistedTestUserByEmail,
-    updateTestUserPassword,
-  } = await resolveDependencies(overrides);
-
-  const shouldLogDebug = isTestEnvironment && Boolean(process.env.CI_PLAYWRIGHT);
-  const logDebug = (event: string, context: Record<string, unknown> = {}) => {
-    if (!shouldLogDebug) {
-      return;
-    }
-
-    console.error("[auth][debug] credentials-resolver", {
-      event,
-      email,
-      ...context,
-    });
-  };
-
-  /**
-   * Fallback to the persisted Playwright snapshot when the in-memory store has
-   * not yet hydrated. Turbopack occasionally loads credentials handlers before
-   * the shared store observes recently registered users, so reading the disk
-   * snapshot keeps the login flow deterministic across module graphs.
-   */
-  const attemptReloadFromPersistedSnapshot = async (
-    candidateUser: User | undefined
-  ) => {
-    if (!isTestEnvironment) {
-      return null;
-    }
-
-    const persisted = getPersistedTestUserByEmail(email);
-    if (!persisted) {
-      return null;
-    }
-
-    const persistedPlaintext =
-      typeof persisted.plaintext === "string" ? persisted.plaintext : "";
-
-    const plaintextMatchesPersisted = persistedPlaintext === password;
-    const hashedMatchesPersisted =
-      !plaintextMatchesPersisted &&
-      typeof persisted.password === "string" &&
-      compareSync(password, persisted.password);
-
-    if (!plaintextMatchesPersisted && !hashedMatchesPersisted) {
-      return null;
-    }
-
-    try {
-      const didUpdate = await updateTestUserPassword(email, password);
-      if (!didUpdate) {
-        await createUser(email, password);
-      }
-      const [refreshedUser] = await getUser(email);
-      if (refreshedUser) {
-        return refreshedUser;
-      }
-    } catch (error) {
-      if (!isTestEnvironment) {
-        throw error;
-      }
-    }
-
-    if (persisted.password) {
-      if (candidateUser?.id) {
-        return {
-          ...candidateUser,
-          password: persisted.password,
-        };
-      }
-
-      return {
-        id: persisted.id,
-        email: persisted.email,
-        password: persisted.password,
-      } as User;
-    }
-
-    if (candidateUser && hashedMatchesPersisted && !candidateUser.password) {
-      return {
-        ...candidateUser,
-        password: persisted.password ?? candidateUser.password ?? null,
-      };
-    }
-
-    return candidateUser ?? null;
-  };
+  const { getUser, createUser, getTestUserPlaintextPassword } =
+    await resolveDependencies(overrides);
 
   const users = await getUser(email);
 
@@ -184,24 +86,12 @@ export async function resolveCredentialsUser(
     }
 
     /**
-     * Attempt to hydrate the in-memory store from the persisted Playwright
-     * snapshot before failing the login. Turbopack can route credentials
-     * requests through module graphs that have not yet seen the registration
-     * write, so falling back to disk keeps the flow deterministic.
-     */
-    const persistedFallback = await attemptReloadFromPersistedSnapshot(undefined);
-    if (persistedFallback) {
-      return persistedFallback;
-    }
-
-    /**
      * Match the timing characteristics of a failed lookup by still hashing the
      * candidate password. This mirrors the mitigation applied by NextAuth's
      * default adapter and keeps the observable timing behaviour consistent
      * between successful and failed attempts.
      */
     compareSync(password, DUMMY_PASSWORD);
-    logDebug("user-not-found", { attemptedCreate: isTestEnvironment });
     return null;
   }
 
@@ -213,23 +103,6 @@ export async function resolveCredentialsUser(
     if (!hasLookedUpPlaintext) {
       cachedPlaintext = getTestUserPlaintextPassword(email);
       hasLookedUpPlaintext = true;
-    }
-
-    if (typeof cachedPlaintext === "string" && cachedPlaintext.length > 0) {
-      return cachedPlaintext;
-    }
-
-    if (isTestEnvironment) {
-      const persisted = getPersistedTestUserByEmail(email);
-
-      if (
-        persisted &&
-        typeof persisted.plaintext === "string" &&
-        persisted.plaintext.length > 0
-      ) {
-        cachedPlaintext = persisted.plaintext;
-        return cachedPlaintext;
-      }
     }
 
     return cachedPlaintext;
@@ -247,10 +120,7 @@ export async function resolveCredentialsUser(
      * for the test account may become stale. Refresh the stored credentials and
      * read the user back so downstream consumers receive the up-to-date record.
      */
-    const didUpdate = await updateTestUserPassword(email, password);
-    if (!didUpdate) {
-      await createUser(email, password);
-    }
+    await createUser(email, password);
 
     const [refreshedUser] = await getUser(email);
 
@@ -301,9 +171,6 @@ export async function resolveCredentialsUser(
     }
 
     compareSync(password, DUMMY_PASSWORD);
-    logDebug("missing-password", {
-      plaintextMatch: plaintextMatches(),
-    });
     return null;
   }
 
@@ -328,15 +195,7 @@ export async function resolveCredentialsUser(
     return user;
   }
 
-  const persistedUser = await attemptReloadFromPersistedSnapshot(user);
-  if (persistedUser) {
-    return persistedUser;
-  }
-
   compareSync(password, DUMMY_PASSWORD);
-  logDebug("password-mismatch", {
-    plaintextMatch: plaintextMatches(),
-  });
   return null;
 }
 

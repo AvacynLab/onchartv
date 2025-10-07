@@ -197,14 +197,6 @@ export default defineConfig({
            */
           PLAYWRIGHT: "true",
           /**
-           * Surface the repository root so every Next.js compilation graph can
-           * resolve the shared Playwright credential snapshot using an
-           * identical absolute path. Without this the distinct module graphs
-           * could compute different `process.cwd()` values and read/write
-           * isolated `.auth` directories, breaking deterministic logins.
-           */
-          ONCHARTV_PROJECT_ROOT: __dirname,
-          /**
            * Expose the public Playwright flag to the dev server so client-side
            * bundles (e.g. Pyodide loader, avatar fallbacks) can disable remote
            * fetches during hermetic runs. The flag mirrors the environment that

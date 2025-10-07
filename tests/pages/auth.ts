@@ -8,26 +8,6 @@ export class AuthPage {
     this.page = page;
   }
 
-  /**
-   * Reset the credentials for a deterministic Playwright account by invoking
-   * the test-only password reset endpoint. The helper keeps the E2E suite in
-   * sync with the registration flow even after negative login scenarios mutate
-   * the in-memory store, ensuring subsequent tests interact with a known good
-   * password hash before attempting to sign in through the UI.
-   */
-  async resetPassword(email: string, password: string) {
-    const response = await this.page.request.post(
-      "/api/tests/auth/reset-password",
-      {
-        data: { email, password },
-      }
-    );
-
-    expect(response.status(), "password reset request should succeed").toBe(200);
-    const payload = (await response.json()) as { status?: string };
-    expect(payload.status).toBe("updated");
-  }
-
   async gotoLogin() {
     await this.page.context().clearCookies();
     await this.page.goto("/login");

@@ -120,100 +120,6 @@ function normaliseEmail(value: string): string {
   return value.trim().toLowerCase();
 }
 
-function shouldLogPlaywrightAuthInstrumentation(): boolean {
-  const flag = process.env.DEBUG_PLAYWRIGHT_AUTH;
-
-  if (typeof flag !== "string") {
-    return false;
-  }
-
-  const normalised = flag.trim().toLowerCase();
-  return normalised === "1" || normalised === "true" || normalised === "yes";
-}
-
-type PlaywrightStoreSummary = {
-  totalUsers: number;
-  totalPlaintextPasswords: number;
-  totalEmails: number;
-  sampleUserIds: string[];
-  sampleEmails: string[];
-  target?: {
-    email: string;
-    presentInUsers: boolean;
-    presentInPlaintext: boolean;
-    plaintextLength: number | null;
-    userId: string | null;
-  };
-};
-
-/**
- * Build a compact snapshot of the Playwright in-memory store so we can inspect
- * whether the expected user has been persisted across the distinct Next.js
- * runtimes. The summary deliberately limits the number of IDs/emails surfaced
- * to avoid dumping the whole fixture set in logs.
- */
-function summarisePlaywrightStore(
-  store: InMemoryStore,
-  options?: { targetEmail?: string }
-): PlaywrightStoreSummary {
-  const sampleUserIds = Array.from(store.users.keys()).slice(0, 5);
-  const sampleEmails = Array.from(store.userPlaintextByEmail.keys()).slice(0, 5);
-
-  const summary: PlaywrightStoreSummary = {
-    totalUsers: store.users.size,
-    totalPlaintextPasswords: store.userPlaintextPasswords.size,
-    totalEmails: store.userPlaintextByEmail.size,
-    sampleUserIds,
-    sampleEmails,
-  };
-
-  if (options?.targetEmail) {
-    const normalisedTarget = normaliseEmail(options.targetEmail);
-    let targetUserId: string | null = null;
-
-    for (const [id, record] of store.users.entries()) {
-      if (normaliseEmail(record.email ?? "") === normalisedTarget) {
-        targetUserId = id;
-        break;
-      }
-    }
-
-    const plaintext = store.userPlaintextByEmail.get(normalisedTarget);
-
-    summary.target = {
-      email: normalisedTarget,
-      presentInUsers: targetUserId !== null,
-      presentInPlaintext: store.userPlaintextByEmail.has(normalisedTarget),
-      plaintextLength:
-        typeof plaintext === "string" ? plaintext.length : plaintext ? String(plaintext).length : null,
-      userId: targetUserId,
-    };
-  }
-
-  return summary;
-}
-
-/**
- * Emit a structured log describing the Playwright user store when debugging is
- * explicitly enabled. The helper keeps the side-effect centralised so
- * production builds avoid noisy console output.
- */
-function logPlaywrightStoreSnapshot(reason: string, store: InMemoryStore): void {
-  if (!shouldLogPlaywrightAuthInstrumentation()) {
-    return;
-  }
-
-  const targetEmail = process.env.DEBUG_PLAYWRIGHT_USER;
-  const summary = summarisePlaywrightStore(store, {
-    targetEmail: typeof targetEmail === "string" ? targetEmail : undefined,
-  });
-
-  console.info("[auth][debug] Playwright user store snapshot", {
-    reason,
-    ...summary,
-  });
-}
-
 function setSharedInMemoryStore(store: InMemoryStore): InMemoryStore {
   /**
    * Older dev servers may have initialised the shared store before this field
@@ -244,14 +150,12 @@ function getOrCreateInMemoryStore(): InMemoryStore {
       processWithStore.__ONCHARTV_IN_MEMORY_STORE__
     );
     loadPersistedUsers(store);
-    logPlaywrightStoreSnapshot("process-cache", store);
     return store;
   }
 
   if (globalThis.__ONCHARTV_IN_MEMORY_STORE__) {
     const store = setSharedInMemoryStore(globalThis.__ONCHARTV_IN_MEMORY_STORE__);
     loadPersistedUsers(store);
-    logPlaywrightStoreSnapshot("global-cache", store);
     return store;
   }
 
@@ -284,7 +188,6 @@ function getOrCreateInMemoryStore(): InMemoryStore {
 
   const shared = setSharedInMemoryStore(store);
   loadPersistedUsers(shared);
-  logPlaywrightStoreSnapshot("fresh-store", shared);
   return shared;
 }
 
@@ -295,81 +198,19 @@ function getOrCreateInMemoryStore(): InMemoryStore {
  * environments would frequently lose sight of the registration performed in a
  * separate worker, causing `CredentialsSignin` errors mid-suite.
  */
-/**
- * Determine the absolute path to the Playwright credential snapshot.
- *
- * The Next.js dev server can execute different module graphs (server actions,
- * route handlers, API routes) from distinct working directories. Relying on
- * `process.cwd()` alone therefore caused each graph to read and write its own
- * `tests/.auth` directory, meaning freshly registered credentials were not
- * visible when the credentials provider spun up under a different `cwd`. By
- * anchoring the snapshot directory to a shared project root – propagated via
- * the Playwright config – every runtime converges on the same persisted file.
- */
-const PLAYWRIGHT_PROJECT_ROOT =
-  process.env.ONCHARTV_PROJECT_ROOT ??
-  process.env.INIT_CWD ??
-  process.cwd();
-const PLAYWRIGHT_AUTH_DIR = path.resolve(
-  PLAYWRIGHT_PROJECT_ROOT,
-  "tests/.auth"
-);
+const PLAYWRIGHT_AUTH_DIR = path.resolve(process.cwd(), "tests/.auth");
 const PLAYWRIGHT_USERS_PATH = path.join(
   PLAYWRIGHT_AUTH_DIR,
   "playwright-users.json"
 );
 
 /**
- * Track the most recent modification timestamp of the persisted Playwright
- * credentials snapshot. When the timestamp changes we reload the cached users
- * so independent Next.js module graphs (server actions vs route handlers)
- * converge on the same credential set without depending on shared memory.
- */
-let persistedUsersMtimeMs = 0;
-
-/**
  * Hydrate the shared in-memory store from the persisted credentials file when
  * the Playwright harness spins up a fresh module graph.
  */
-type LoadPersistedUsersOptions = {
-  /**
-   * Force the persisted snapshot to be re-read even when the recorded
-   * modification timestamp has not advanced. The flag is used as a
-   * last-resort hydration step when a caller observes a cache miss after
-   * loading the optimistic in-memory store, which can happen when two module
-   * graphs race to read the snapshot within the same millisecond.
-   */
-  force?: boolean;
-};
-
-function loadPersistedUsers(
-  store: InMemoryStore,
-  options: LoadPersistedUsersOptions = {}
-): boolean {
+function loadPersistedUsers(store: InMemoryStore) {
   if (!fs.existsSync(PLAYWRIGHT_USERS_PATH)) {
-    persistedUsersMtimeMs = 0;
-    return false;
-  }
-
-  let currentMtimeMs = 0;
-
-  try {
-    const stats = fs.statSync(PLAYWRIGHT_USERS_PATH);
-    currentMtimeMs = Number(stats.mtimeMs) || 0;
-  } catch (error) {
-    console.warn(
-      "Failed to stat persisted Playwright users",
-      error
-    );
-    return false;
-  }
-
-  if (
-    !options.force &&
-    currentMtimeMs !== 0 &&
-    currentMtimeMs <= persistedUsersMtimeMs
-  ) {
-    return false;
+    return;
   }
 
   try {
@@ -389,91 +230,24 @@ function loadPersistedUsers(
         continue;
       }
 
+      const normalisedEmail = normaliseEmail(record.email);
+      const plaintext = record.plaintext ?? "";
+
       store.users.set(record.id, {
         id: record.id,
         email: record.email,
-        password: typeof record.password === "string" ? record.password : null,
+        password: record.password ?? null,
       });
 
-      const normalised = normaliseEmail(record.email);
-      const plaintext =
-        typeof record.plaintext === "string" ? record.plaintext : "";
-
       store.userPlaintextPasswords.set(record.id, plaintext);
-      store.userPlaintextByEmail.set(normalised, plaintext);
+      store.userPlaintextByEmail.set(normalisedEmail, plaintext);
     }
-
-    persistedUsersMtimeMs = currentMtimeMs;
-    return true;
   } catch (error) {
     console.warn(
       "Failed to hydrate Playwright users from persisted store",
       error
     );
-    return false;
   }
-}
-
-/**
- * Minimal snapshot describing a Playwright persisted credential record.
- * The helper functions below reuse the structure to bridge independent
- * Next.js module graphs that cannot rely on shared in-memory state.
- */
-type PersistedUserSnapshot = {
-  id: string;
-  email: string;
-  password: string | null;
-  plaintext?: string | null;
-};
-
-/**
- * Read the persisted Playwright credential snapshot directly from disk.
- * The loader is intentionally lightweight so fallback paths can reload the
- * credentials even when the optimistic in-memory store has not yet hydrated.
- */
-function readPersistedUsersFromDisk(): PersistedUserSnapshot[] | null {
-  if (!fs.existsSync(PLAYWRIGHT_USERS_PATH)) {
-    return null;
-  }
-
-  try {
-    const raw = fs.readFileSync(PLAYWRIGHT_USERS_PATH, "utf-8");
-    const parsed = JSON.parse(raw) as PersistedUserSnapshot[] | null;
-
-    if (!Array.isArray(parsed)) {
-      return null;
-    }
-
-    return parsed;
-  } catch (error) {
-    console.warn("Failed to parse persisted Playwright users", error);
-    return null;
-  }
-}
-
-/**
- * Surface the persisted Playwright credential record associated with the
- * provided email address. The helper keeps NextAuth workers deterministic when
- * Turbopack isolates them in module graphs that cannot observe the shared
- * in-memory store directly.
- */
-export function getPersistedTestUserByEmail(
-  email: string
-): PersistedUserSnapshot | undefined {
-  if (!isTestEnvironment) {
-    return undefined;
-  }
-
-  const snapshot = readPersistedUsersFromDisk();
-  if (!snapshot) {
-    return undefined;
-  }
-
-  const targetEmail = normaliseEmail(email);
-  return snapshot.find((record) =>
-    typeof record?.email === "string" &&
-    normaliseEmail(record.email) === targetEmail
-  );
 }
 
 /**
@@ -503,20 +277,6 @@ function persistUsers(store: InMemoryStore) {
       JSON.stringify(payload, null, 2),
       "utf-8"
     );
-
-    try {
-      const stats = fs.statSync(PLAYWRIGHT_USERS_PATH);
-      const updatedMtimeMs = Number(stats.mtimeMs) || 0;
-
-      if (updatedMtimeMs > 0) {
-        persistedUsersMtimeMs = updatedMtimeMs;
-      }
-    } catch (error) {
-      console.warn(
-        "Failed to refresh Playwright users timestamp",
-        error
-      );
-    }
   } catch (error) {
     console.warn("Failed to persist Playwright users", error);
   }
@@ -539,8 +299,6 @@ function getInMemoryStore(): InMemoryStore {
   }
 
   loadPersistedUsers(inMemoryStore);
-  logPlaywrightStoreSnapshot("lazy-hydration", inMemoryStore);
-
   return inMemoryStore;
 }
 
@@ -582,7 +340,7 @@ export function __resetInMemoryDbForTests(): void {
   store.financePreferences.clear();
 
   try {
-    persistedUsersMtimeMs = 0;
+    hasLoadedPersistedUsers = false;
     if (fs.existsSync(PLAYWRIGHT_USERS_PATH)) {
       fs.rmSync(PLAYWRIGHT_USERS_PATH);
     }
@@ -639,54 +397,10 @@ export async function getUser(email: string): Promise<User[]> {
   if (isTestEnvironment) {
     const store = getInMemoryStore();
     const targetEmail = normaliseEmail(email);
-
-    /**
-     * Helper that re-computes the current view of the in-memory store. Using a
-     * function keeps the intent explicit and avoids duplicating the filtering
-     * logic every time we need to reassess the cached records after a forced
-     * reload from disk.
-     */
-    const resolveMatches = () =>
-      Array.from(store.users.values()).filter(
-        (currentUser) =>
-          typeof currentUser.email === "string" &&
-          normaliseEmail(currentUser.email) === targetEmail
-      );
-
-    let matches = resolveMatches();
-
-    if (matches.length > 0) {
-      /**
-       * Even when a module graph already holds a matching record we still need
-       * to give the persisted snapshot a chance to refresh the plaintext and
-       * bcrypt hash. Without this additional reload the resolver can continue
-       * serving a stale password if the user was updated by a different module
-       * graph moments earlier (a pattern that surfaces frequently during the
-       * Playwright credential reset flow).
-       */
-      const reloaded = loadPersistedUsers(store, { force: true });
-      if (!reloaded) {
-        return matches;
-      }
-
-      matches = resolveMatches();
-      return matches;
-    }
-
-    /**
-     * When two module graphs access the persisted snapshot within the same
-     * millisecond the filesystem timestamp may not advance, causing the eager
-     * hydration in `getInMemoryStore` to short-circuit. Force a refresh so the
-     * login flow can observe users that were registered in a neighbouring
-     * graph moments earlier.
-     */
-    const reloaded = loadPersistedUsers(store, { force: true });
-
-    if (!reloaded) {
-      return matches;
-    }
-
-    return resolveMatches();
+    return Array.from(store.users.values()).filter((currentUser) =>
+      typeof currentUser.email === "string" &&
+      normaliseEmail(currentUser.email) === targetEmail
+    );
   }
 
   try {
@@ -713,66 +427,26 @@ function getInMemoryPlaintextPassword(email: string): string | undefined {
     return directLookup;
   }
 
-  const resolveFromStore = () => {
-    for (const [userId, currentUser] of store.users.entries()) {
-      if (
-        typeof currentUser.email === "string" &&
-        normaliseEmail(currentUser.email) === targetEmail
-      ) {
-        const plainPassword = store.userPlaintextPasswords.get(userId);
-        if (typeof plainPassword === "string" && plainPassword.length > 0) {
-          /**
-           * Persist the freshly recovered plaintext so the direct map short-
-           * circuits future lookups, keeping the hot login path inexpensive.
-           */
-          store.userPlaintextByEmail.set(targetEmail, plainPassword);
-          return plainPassword;
-        }
-
-        return undefined;
-      }
-    }
-
-    return undefined;
-  };
-
-  const lookup = resolveFromStore();
-  if (lookup) {
-    return lookup;
-  }
-
-  const reloaded = loadPersistedUsers(store, { force: true });
-  if (!reloaded) {
-    /**
-     * When the persisted snapshot has not advanced yet we still attempt to
-     * source the plaintext password directly from disk. This covers the case
-     * where a neighbouring module graph has already persisted the credentials
-     * but the optimistic in-memory cache has not observed the update, which
-     * previously caused the credentials resolver to believe the plaintext did
-     * not exist and reject an otherwise valid login attempt.
-     */
-    const persisted = getPersistedTestUserByEmail(email);
-
+  for (const [userId, currentUser] of store.users.entries()) {
     if (
-      persisted &&
-      typeof persisted.plaintext === "string" &&
-      persisted.plaintext.length > 0
+      typeof currentUser.email === "string" &&
+      normaliseEmail(currentUser.email) === targetEmail
     ) {
-      const normalisedTarget = normaliseEmail(email);
-
-      store.userPlaintextByEmail.set(normalisedTarget, persisted.plaintext);
-
-      if (typeof persisted.id === "string" && persisted.id.length > 0) {
-        store.userPlaintextPasswords.set(persisted.id, persisted.plaintext);
+      const plainPassword = store.userPlaintextPasswords.get(userId);
+      if (typeof plainPassword === "string" && plainPassword.length > 0) {
+        /**
+         * Persist the freshly recovered plaintext so the direct map short-
+         * circuits future lookups, keeping the hot login path inexpensive.
+         */
+        store.userPlaintextByEmail.set(targetEmail, plainPassword);
+        return plainPassword;
       }
 
-      return persisted.plaintext;
+      return undefined;
     }
-
-    return undefined;
   }
 
-  return resolveFromStore();
+  return undefined;
 }
 
 export function getTestUserPlaintextPassword(email: string): string | undefined {
@@ -823,60 +497,6 @@ export async function createUser(email: string, password: string) {
     return await db.insert(user).values({ email, password: hashedPassword });
   } catch (_error) {
     throw new ChatSDKError("bad_request:database", "Failed to create user");
-  }
-}
-
-/**
- * Refresh the hashed and plaintext credentials for an existing user account.
- * The helper keeps the in-memory Playwright store and persisted snapshot in
- * sync so that subsequent logins observe the updated secret even when served
- * by a different Next.js module graph.
- */
-export async function updateTestUserPassword(
-  email: string,
-  password: string
-): Promise<boolean> {
-  if (isTestEnvironment) {
-    const store = getInMemoryStore();
-    const targetEmail = normaliseEmail(email);
-    const hashedPassword = generateHashedPassword(password);
-
-    for (const [userId, currentUser] of store.users.entries()) {
-      if (
-        typeof currentUser.email === "string" &&
-        normaliseEmail(currentUser.email) === targetEmail
-      ) {
-        store.users.set(userId, {
-          ...currentUser,
-          email: currentUser.email ?? email,
-          password: hashedPassword,
-        });
-        store.userPlaintextPasswords.set(userId, password);
-        store.userPlaintextByEmail.set(targetEmail, password);
-
-        persistUsers(store);
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  const hashedPassword = generateHashedPassword(password);
-
-  try {
-    const updated = await db
-      .update(user)
-      .set({ password: hashedPassword })
-      .where(eq(user.email, email))
-      .returning({ id: user.id });
-
-    return updated.length > 0;
-  } catch (_error) {
-    throw new ChatSDKError(
-      "bad_request:database",
-      "Failed to update user password"
-    );
   }
 }
 
@@ -2142,14 +1762,3 @@ export async function upsertFinancePreferences(
     );
   }
 }
-
-/**
- * Test-only exports so unit tests can validate the debugging helpers without
- * relying on private module internals.
- */
-export const __summarisePlaywrightStoreForTests = summarisePlaywrightStore;
-export const __loadPersistedUsersForTests = loadPersistedUsers;
-export function __getInMemoryStoreForTests(): InMemoryStore {
-  return getInMemoryStore();
-}
-export type __InMemoryStoreForTests = InMemoryStore;

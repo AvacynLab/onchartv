@@ -17,8 +17,6 @@ test("resolveCredentialsUser returns null when the user does not exist", async (
       [] as Array<{ id: string; email: string; password: string | null }>,
     createUser: async () => {},
     getTestUserPlaintextPassword: () => undefined as string | undefined,
-    getPersistedTestUserByEmail: () => undefined,
-    updateTestUserPassword: async () => false,
   } satisfies Parameters<typeof resolveCredentialsUser>[2];
 
   const result = await resolveCredentialsUser(
@@ -30,150 +28,6 @@ test("resolveCredentialsUser returns null when the user does not exist", async (
   assert.equal(result, null);
 });
 
-test(
-  "resolveCredentialsUser hydrates persisted snapshot when initial lookup misses",
-  async () => {
-    const email = "persisted@example.com";
-    const password = "secret";
-    const hashedPassword = generateHashedPassword(password);
-
-    let getUserCalls = 0;
-    let createUserCalls = 0;
-
-    const { resolveCredentialsUser } = await loadCredentialsModule();
-
-    const overrides = {
-      getUser: async () => {
-        getUserCalls += 1;
-        if (getUserCalls === 1) {
-          return [] as Array<{ id: string; email: string; password: string | null }>;
-        }
-
-        return [
-          { id: "persisted-id", email, password: hashedPassword } as {
-            id: string;
-            email: string;
-            password: string;
-          },
-        ];
-      },
-      createUser: async () => {
-        createUserCalls += 1;
-      },
-      getTestUserPlaintextPassword: () => undefined,
-      getPersistedTestUserByEmail: () => ({
-        id: "persisted-id",
-        email,
-        password: hashedPassword,
-        plaintext: password,
-      }),
-      updateTestUserPassword: async () => false,
-    } satisfies Parameters<typeof resolveCredentialsUser>[2];
-
-    const result = await resolveCredentialsUser(email, password, overrides);
-
-    assert.equal(result?.id, "persisted-id");
-    assert.equal(createUserCalls >= 1, true);
-    assert.equal(getUserCalls >= 2, true);
-  }
-);
-
-test(
-  "resolveCredentialsUser falls back to persisted hash when plaintext is missing",
-  async () => {
-    const email = "persisted-hash@example.com";
-    const password = "secret";
-    const staleHash = generateHashedPassword("old-secret");
-    const refreshedHash = generateHashedPassword(password);
-
-    let getUserCalls = 0;
-    let createUserCalls = 0;
-
-    const { resolveCredentialsUser } = await loadCredentialsModule();
-
-    const overrides = {
-      getUser: async () => {
-        getUserCalls += 1;
-
-        if (getUserCalls === 1) {
-          return [
-            { id: "persisted-id", email, password: staleHash } as {
-              id: string;
-              email: string;
-              password: string;
-            },
-          ];
-        }
-
-        return [
-          { id: "persisted-id", email, password: refreshedHash } as {
-            id: string;
-            email: string;
-            password: string;
-          },
-        ];
-      },
-      createUser: async () => {
-        createUserCalls += 1;
-      },
-      getTestUserPlaintextPassword: () => undefined,
-      getPersistedTestUserByEmail: () => ({
-        id: "persisted-id",
-        email,
-        password: refreshedHash,
-        plaintext: null,
-      }),
-      updateTestUserPassword: async () => false,
-    } satisfies Parameters<typeof resolveCredentialsUser>[2];
-
-    const result = await resolveCredentialsUser(email, password, overrides);
-
-    assert.equal(createUserCalls, 1);
-    assert.equal(getUserCalls >= 2, true);
-    assert.equal(result?.password, refreshedHash);
-  }
-);
-
-test(
-  "resolveCredentialsUser reads persisted plaintext when the in-memory cache misses",
-  async () => {
-    const email = "persisted-plaintext@example.com";
-    const password = "secret";
-    const hashedPassword = generateHashedPassword(password);
-
-    let getUserCalls = 0;
-
-    const { resolveCredentialsUser } = await loadCredentialsModule();
-
-    const overrides = {
-      getUser: async () => {
-        getUserCalls += 1;
-        return [
-          { id: "persisted-id", email, password: hashedPassword } as {
-            id: string;
-            email: string;
-            password: string;
-          },
-        ];
-      },
-      createUser: async () => {},
-      getTestUserPlaintextPassword: () => undefined,
-      getPersistedTestUserByEmail: () => ({
-        id: "persisted-id",
-        email,
-        password: hashedPassword,
-        plaintext: password,
-      }),
-      updateTestUserPassword: async () => false,
-    } satisfies Parameters<typeof resolveCredentialsUser>[2];
-
-    const result = await resolveCredentialsUser(email, password, overrides);
-
-    assert.equal(getUserCalls, 1);
-    assert.equal(result?.password, hashedPassword);
-  }
-);
-
 test("resolveCredentialsUser refreshes stale hashes when plaintext matches", async () => {
   const email = "user@example.com";
   const password = "secret";
@@ -181,35 +35,26 @@ test("resolveCredentialsUser refreshes stale hashes when plaintext matches", asy
   const refreshedHash = generateHashedPassword(password);
 
   let getUserCalls = 0;
-  let updatePasswordCalls = 0;
+  let createUserCalls = 0;
 
   const { resolveCredentialsUser } = await loadCredentialsModule();
 
   const overrides = {
-    getUser: async () => { 
+    getUser: async () => {
       getUserCalls += 1;
       return getUserCalls === 1
         ? [{ id: "user-id", email, password: staleHash } as any]
         : [{ id: "user-id", email, password: refreshedHash } as any];
     },
     createUser: async () => {
-      throw new Error("createUser should not run when the password update succeeds");
+      createUserCalls += 1;
     },
     getTestUserPlaintextPassword: () => password,
-    getPersistedTestUserByEmail: () => undefined,
-    updateTestUserPassword: async () => {
-      updatePasswordCalls += 1;
-      return true;
-    },
   } satisfies Parameters<typeof resolveCredentialsUser>[2];
 
   const result = await resolveCredentialsUser(email, password, overrides);
 
-  assert.equal(
-    updatePasswordCalls,
-    1,
-    "updateTestUserPassword should refresh the stored hash"
-  );
+  assert.equal(createUserCalls, 1, "createUser should refresh the stored hash");
   assert.equal(
     getUserCalls,
     2,
@@ -231,8 +76,6 @@ test("resolveCredentialsUser returns null when plaintext fallback does not match
       throw new Error("createUser should not be called");
     },
     getTestUserPlaintextPassword: () => "different",
-    getPersistedTestUserByEmail: () => undefined,
-    updateTestUserPassword: async () => false,
   } satisfies Parameters<typeof resolveCredentialsUser>[2];
 
   const result = await resolveCredentialsUser(email, password, overrides);
@@ -263,8 +106,6 @@ test(
         createUserCalls += 1;
       },
       getTestUserPlaintextPassword: () => undefined,
-      getPersistedTestUserByEmail: () => undefined,
-      updateTestUserPassword: async () => false,
     } satisfies Parameters<typeof resolveCredentialsUser>[2];
 
     const result = await resolveCredentialsUser(email, password, overrides);
@@ -298,8 +139,6 @@ test("resolveCredentialsUser prefers the provided dependency overrides", async (
       plaintextLookupCalls += 1;
       return undefined;
     },
-    getPersistedTestUserByEmail: () => undefined,
-    updateTestUserPassword: async () => false,
   } satisfies Parameters<typeof resolveCredentialsUser>[2];
 
   const result = await resolveCredentialsUser(email, password, overrides);
@@ -327,15 +166,8 @@ test(
         refreshAttempts += 1;
         throw new Error("refresh should not be required when plaintext matches");
       },
-    getTestUserPlaintextPassword: () => password,
-    getPersistedTestUserByEmail: () => ({
-      id: "user-id",
-      email,
-      password: staleHash,
-      plaintext: password,
-    }),
-    updateTestUserPassword: async () => false,
-  } satisfies Parameters<typeof resolveCredentialsUser>[2];
+      getTestUserPlaintextPassword: () => password,
+    } satisfies Parameters<typeof resolveCredentialsUser>[2];
 
     const result = await resolveCredentialsUser(email, password, overrides);
 
