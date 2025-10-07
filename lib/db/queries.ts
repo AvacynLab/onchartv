@@ -703,6 +703,32 @@ function getInMemoryPlaintextPassword(email: string): string | undefined {
 
   const reloaded = loadPersistedUsers(store, { force: true });
   if (!reloaded) {
+    /**
+     * When the persisted snapshot has not advanced yet we still attempt to
+     * source the plaintext password directly from disk. This covers the case
+     * where a neighbouring module graph has already persisted the credentials
+     * but the optimistic in-memory cache has not observed the update, which
+     * previously caused the credentials resolver to believe the plaintext did
+     * not exist and reject an otherwise valid login attempt.
+     */
+    const persisted = getPersistedTestUserByEmail(email);
+
+    if (
+      persisted &&
+      typeof persisted.plaintext === "string" &&
+      persisted.plaintext.length > 0
+    ) {
+      const normalisedTarget = normaliseEmail(email);
+
+      store.userPlaintextByEmail.set(normalisedTarget, persisted.plaintext);
+
+      if (typeof persisted.id === "string" && persisted.id.length > 0) {
+        store.userPlaintextPasswords.set(persisted.id, persisted.plaintext);
+      }
+
+      return persisted.plaintext;
+    }
+
     return undefined;
   }
 

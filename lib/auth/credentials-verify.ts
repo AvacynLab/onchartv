@@ -207,6 +207,23 @@ export async function resolveCredentialsUser(
       hasLookedUpPlaintext = true;
     }
 
+    if (typeof cachedPlaintext === "string" && cachedPlaintext.length > 0) {
+      return cachedPlaintext;
+    }
+
+    if (isTestEnvironment) {
+      const persisted = getPersistedTestUserByEmail(email);
+
+      if (
+        persisted &&
+        typeof persisted.plaintext === "string" &&
+        persisted.plaintext.length > 0
+      ) {
+        cachedPlaintext = persisted.plaintext;
+        return cachedPlaintext;
+      }
+    }
+
     return cachedPlaintext;
   };
 

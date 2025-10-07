@@ -131,6 +131,45 @@ test(
   }
 );
 
+test(
+  "resolveCredentialsUser reads persisted plaintext when the in-memory cache misses",
+  async () => {
+    const email = "persisted-plaintext@example.com";
+    const password = "secret";
+    const hashedPassword = generateHashedPassword(password);
+
+    let getUserCalls = 0;
+
+    const { resolveCredentialsUser } = await loadCredentialsModule();
+
+    const overrides = {
+      getUser: async () => {
+        getUserCalls += 1;
+        return [
+          { id: "persisted-id", email, password: hashedPassword } as {
+            id: string;
+            email: string;
+            password: string;
+          },
+        ];
+      },
+      createUser: async () => {},
+      getTestUserPlaintextPassword: () => undefined,
+      getPersistedTestUserByEmail: () => ({
+        id: "persisted-id",
+        email,
+        password: hashedPassword,
+        plaintext: password,
+      }),
+    } satisfies Parameters<typeof resolveCredentialsUser>[2];
+
+    const result = await resolveCredentialsUser(email, password, overrides);
+
+    assert.equal(getUserCalls, 1);
+    assert.equal(result?.password, hashedPassword);
+  }
+);
+
 test("resolveCredentialsUser refreshes stale hashes when plaintext matches", async () => {
   const email = "user@example.com";
   const password = "secret";
