@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, type Page, errors as playwrightErrors } from "@playwright/test";
+import {
+  expect,
+  type Page,
+  type Locator,
+  errors as playwrightErrors,
+} from "@playwright/test";
 import { chatModels, type ChatModel } from "@/lib/ai/models";
 
 /**
@@ -20,6 +25,19 @@ const CHAT_ID_REGEX = /\/chat\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[
  */
 const CHAT_STREAM_PATH_REGEX = /^\/api\/chat\/[\w-]+\/stream$/;
 
+/**
+ * Snapshot of the assistant timeline captured right before triggering a new
+ * generation. Defining the shape up front allows helper methods to reference
+ * the type without relying on the `this` context — a pattern that keeps the
+ * file compliant with `noImplicitThis` during the Next.js type-checking phase.
+ */
+type AssistantSnapshot = {
+  count: number;
+  latestMessageId: string | null;
+  latestMessageText: string;
+  latestArtifactCount: number;
+};
+
 export class ChatPage {
   /**
    * Surface the Playwright assertion helper so unit tests can substitute a
@@ -35,14 +53,7 @@ export class ChatPage {
    * so the helper recognises both brand-new bubbles and updates to the latest
    * message content or attached artefacts.
    */
-  private pendingAssistantSnapshot:
-    | {
-        count: number;
-        latestMessageId: string | null;
-        latestMessageText: string;
-        latestArtifactCount: number;
-      }
-    | null = null;
+  private pendingAssistantSnapshot: AssistantSnapshot | null = null;
 
   /**
    * Track the most recent vote request so the helper can await the matching
@@ -1015,7 +1026,7 @@ export class ChatPage {
     baseline,
     timeoutMs,
   }: {
-    baseline: NonNullable<typeof this.pendingAssistantSnapshot>;
+    baseline: AssistantSnapshot;
     timeoutMs: number;
   }): Promise<void> {
     const deadline = Date.now() + timeoutMs;
