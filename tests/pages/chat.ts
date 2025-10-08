@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, type Page, errors as playwrightErrors } from "@playwright/test";
-import { chatModels } from "@/lib/ai/models";
+import { chatModels, type ChatModel } from "@/lib/ai/models";
 
 /**
  * Validate that the current page URL ends with a chat identifier without
@@ -455,9 +455,10 @@ export class ChatPage {
 
     await selectorTrigger.click();
 
-    const selectorItem = this.page.getByTestId(
-      `model-selector-item-${chatModelId}`
-    );
+    const selectorItem = await this.resolveModelSelectorItem({
+      chatModel,
+      timeoutMs: 60_000,
+    });
 
     await expect(selectorItem).toBeVisible({ timeout: 60_000 });
     await selectorItem.click();
@@ -953,71 +954,9 @@ export class ChatPage {
       throw error;
     });
 
-    const rawStreamingPromise = this.page
-      .waitForFunction(
-        (args: {
-          baselineCount: number;
-          baselineLatestId: string | null;
-          baselineLatestText: string;
-          baselineArtifactCount: number;
-        }) => {
-          const assistantNodes = Array.from(
-            document.querySelectorAll<HTMLElement>(
-              '[data-testid="message-assistant"]'
-            )
-          );
-
-          if (assistantNodes.length > args.baselineCount) {
-            return true;
-          }
-
-          if (assistantNodes.length > 0) {
-            const latestAssistant = assistantNodes[assistantNodes.length - 1];
-            const latestId = latestAssistant.getAttribute("data-message-id");
-
-            if (latestId && latestId !== args.baselineLatestId) {
-              return true;
-            }
-
-            const latestText =
-              latestAssistant
-                .querySelector<HTMLElement>('[data-testid="message-content"]')
-                ?.innerText.trim() ?? "";
-
-            if (
-              latestText.length > 0 &&
-              latestText !== args.baselineLatestText
-            ) {
-              return true;
-            }
-
-            const latestArtifactCount =
-              latestAssistant.querySelectorAll('[data-testid$="-artifact"]').length;
-
-            if (latestArtifactCount > args.baselineArtifactCount) {
-              return true;
-            }
-          }
-
-          const loadingCount = document.querySelectorAll(
-            '[data-testid="message-assistant-loading"]'
-          ).length;
-
-          return loadingCount > 0;
-        },
-        {
-          baselineCount: baseline.count,
-          baselineLatestId: baseline.latestMessageId,
-          baselineLatestText: baseline.latestMessageText,
-          baselineArtifactCount: baseline.latestArtifactCount,
-        },
-        { timeout: timeoutMs }
-      )
-      .then(() => {
-        // The UI started streaming (spinner, text, or artefact delta).
-      });
-    const streamingPromise = rawStreamingPromise.catch((error) => {
-      throw error;
+    const streamingPromise = this.pollForStreamingChange({
+      baseline,
+      timeoutMs,
     });
 
     try {
@@ -1029,8 +968,106 @@ export class ChatPage {
       throw error;
     } finally {
       rawToastPromise.catch(() => {});
-      rawStreamingPromise.catch(() => {});
+      streamingPromise.catch(() => {});
     }
+  }
+
+  private async resolveModelSelectorItem({
+    chatModel,
+    timeoutMs,
+  }: {
+    chatModel: ChatModel;
+    timeoutMs: number;
+  }): Promise<Locator> {
+    const deadline = Date.now() + timeoutMs;
+    const testIdLocator = this.page.getByTestId(
+      `model-selector-item-${chatModel.id}`
+    );
+    const optionLocator = this.page
+      .getByRole("option", { name: chatModel.name })
+      .first();
+    const menuItemLocator = this.page
+      .getByRole("menuitem", { name: chatModel.name })
+      .first();
+
+    while (Date.now() < deadline) {
+      if ((await testIdLocator.count().catch(() => 0)) > 0) {
+        return testIdLocator.first();
+      }
+
+      if ((await optionLocator.count().catch(() => 0)) > 0) {
+        return optionLocator;
+      }
+
+      if ((await menuItemLocator.count().catch(() => 0)) > 0) {
+        return menuItemLocator;
+      }
+
+      await this.page.waitForTimeout(100);
+    }
+
+    throw new Error(
+      `Unable to locate the model selector option for "${chatModel.name}".`
+    );
+  }
+
+  private async pollForStreamingChange({
+    baseline,
+    timeoutMs,
+  }: {
+    baseline: NonNullable<typeof this.pendingAssistantSnapshot>;
+    timeoutMs: number;
+  }): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    const assistantLocator = this.page.getByTestId("message-assistant");
+    const spinnerLocator = this.page.getByTestId("message-assistant-loading");
+
+    while (Date.now() < deadline) {
+      const [assistantCount, spinnerCount] = await Promise.all([
+        assistantLocator.count().catch(() => 0),
+        spinnerLocator.count().catch(() => 0),
+      ]);
+
+      if (spinnerCount > 0) {
+        return;
+      }
+
+      if (assistantCount > baseline.count) {
+        return;
+      }
+
+      if (assistantCount > 0) {
+        const latestAssistant = assistantLocator.nth(assistantCount - 1);
+        const [latestId, latestText, latestArtifactCount] = await Promise.all([
+          latestAssistant.getAttribute("data-message-id").catch(() => null),
+          latestAssistant
+            .getByTestId("message-content")
+            .innerText()
+            .then((value) => value.trim())
+            .catch(() => ""),
+          latestAssistant
+            .locator('[data-testid$="-artifact"]')
+            .count()
+            .catch(() => 0),
+        ]);
+
+        if (latestId && latestId !== baseline.latestMessageId) {
+          return;
+        }
+
+        if (latestText && latestText !== baseline.latestMessageText) {
+          return;
+        }
+
+        if (latestArtifactCount > baseline.latestArtifactCount) {
+          return;
+        }
+      }
+
+      await this.page.waitForTimeout(200);
+    }
+
+    throw new Error("Timed out waiting for chat UI to start streaming");
   }
 
   private async waitForVoteRequest(direction: "up" | "down"): Promise<void> {

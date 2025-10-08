@@ -1,6 +1,8 @@
 import type { Page } from "@playwright/test";
 import { describe, expect, it, vi } from "vitest";
 
+import { chatModels } from "@/lib/ai/models";
+
 import { ChatPage } from "../../pages/chat";
 
 type MockResponseOptions = {
@@ -98,6 +100,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
         throw new Error(`Unexpected test id access: ${testId}`);
       }),
       waitForFunction: vi.fn(),
+      waitForTimeout: vi.fn().mockResolvedValue(undefined),
     } satisfies Partial<Page>;
 
     const emit = async (event: "response" | "requestfailed", payload: any) => {
@@ -293,7 +296,11 @@ describe("ChatPage.waitForChatApiResponse", () => {
         () => new Promise(() => {})
       );
       const toastInnerText = vi.fn().mockResolvedValue("");
-      const waitForFunction = vi.fn().mockResolvedValue(undefined);
+      const assistantCount = vi.fn().mockResolvedValue(0);
+      let spinnerCalls = 0;
+      const spinnerCount = vi
+        .fn()
+        .mockImplementation(async () => (spinnerCalls++ === 0 ? 1 : 0));
 
       const harness = createEventHarness();
       (harness.page.getByTestId as ReturnType<typeof vi.fn>).mockImplementation(
@@ -302,6 +309,19 @@ describe("ChatPage.waitForChatApiResponse", () => {
             return {
               waitFor: toastWaitFor,
               innerText: toastInnerText,
+            } as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
+          if (testId === "message-assistant") {
+            return {
+              count: assistantCount,
+              nth: vi.fn(),
+            } as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
+          if (testId === "message-assistant-loading") {
+            return {
+              count: spinnerCount,
             } as unknown as ReturnType<Page["getByTestId"]>;
           }
 
@@ -316,10 +336,6 @@ describe("ChatPage.waitForChatApiResponse", () => {
         latestMessageId: null,
         latestMessageText: "",
       };
-      (harness.page.waitForFunction as ReturnType<typeof vi.fn>).mockImplementation(
-        (...args: Parameters<Page["waitForFunction"]>) =>
-          waitForFunction(...args)
-      );
 
       const waitPromise = (chatPage as any).waitForChatApiResponse();
 
@@ -330,20 +346,12 @@ describe("ChatPage.waitForChatApiResponse", () => {
         state: "visible",
         timeout: 45_000,
       });
+      expect(spinnerCount).toHaveBeenCalled();
+      expect(assistantCount).toHaveBeenCalled();
       expect(
         (harness.page.getByTestId as ReturnType<typeof vi.fn>).mock.calls
           .flat()
       ).not.toContain("stop-button");
-      expect(waitForFunction).toHaveBeenCalledWith(
-        expect.any(Function),
-        {
-          baselineCount: 0,
-          baselineLatestId: null,
-          baselineLatestText: "",
-          baselineArtifactCount: 0,
-        },
-        { timeout: 45_000 }
-      );
     } finally {
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
@@ -353,13 +361,22 @@ describe("ChatPage.waitForChatApiResponse", () => {
   it("throws a descriptive timeout error when the UI never indicates streaming", async () => {
     vi.useFakeTimers();
     try {
-      const streamingTimeout = new Error("Timeout 45000ms exceeded");
-
       const toastWaitFor = vi.fn().mockImplementation(
         () => new Promise(() => {})
       );
       const toastInnerText = vi.fn().mockResolvedValue("");
-      const waitForFunction = vi.fn().mockRejectedValue(streamingTimeout);
+
+      const assistantCount = vi.fn().mockResolvedValue(1);
+      const latestAssistant = {
+        getAttribute: vi.fn().mockResolvedValue("assistant-1"),
+        getByTestId: vi.fn().mockReturnValue({
+          innerText: vi.fn().mockResolvedValue("Thinking..."),
+        }),
+        locator: vi.fn().mockReturnValue({
+          count: vi.fn().mockResolvedValue(0),
+        }),
+      };
+      const spinnerCount = vi.fn().mockResolvedValue(0);
 
       const harness = createEventHarness();
       (harness.page.getByTestId as ReturnType<typeof vi.fn>).mockImplementation(
@@ -368,6 +385,19 @@ describe("ChatPage.waitForChatApiResponse", () => {
             return {
               waitFor: toastWaitFor,
               innerText: toastInnerText,
+            } as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
+          if (testId === "message-assistant") {
+            return {
+              count: assistantCount,
+              nth: vi.fn().mockReturnValue(latestAssistant),
+            } as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
+          if (testId === "message-assistant-loading") {
+            return {
+              count: spinnerCount,
             } as unknown as ReturnType<Page["getByTestId"]>;
           }
 
@@ -382,17 +412,17 @@ describe("ChatPage.waitForChatApiResponse", () => {
         latestMessageId: "assistant-1",
         latestMessageText: "Thinking...",
       } as const;
-      (harness.page.waitForFunction as ReturnType<typeof vi.fn>).mockImplementation(
-        (...args: Parameters<Page["waitForFunction"]>) =>
-          waitForFunction(...args)
-      );
 
       let caughtError: unknown;
       try {
-        await (chatPage as any).waitForUiStreamingFallback(
+        const waitPromise = (chatPage as any).waitForUiStreamingFallback(
           baselineSnapshot,
           45_000
         );
+
+        await vi.advanceTimersByTimeAsync(45_000);
+
+        await waitPromise;
       } catch (error) {
         caughtError = error;
       }
@@ -405,20 +435,9 @@ describe("ChatPage.waitForChatApiResponse", () => {
         state: "visible",
         timeout: 45_000,
       });
-      expect(
-        (harness.page.getByTestId as ReturnType<typeof vi.fn>).mock.calls
-          .flat()
-      ).not.toContain("stop-button");
-      expect(waitForFunction).toHaveBeenCalledWith(
-        expect.any(Function),
-        {
-          baselineCount: baselineSnapshot.count,
-          baselineLatestId: baselineSnapshot.latestMessageId,
-          baselineLatestText: baselineSnapshot.latestMessageText,
-          baselineArtifactCount: baselineSnapshot.latestArtifactCount,
-        },
-        { timeout: 45_000 }
-      );
+      expect(assistantCount).toHaveBeenCalled();
+      expect(latestAssistant.getAttribute).toHaveBeenCalled();
+      expect(spinnerCount).toHaveBeenCalled();
     } finally {
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
@@ -988,5 +1007,112 @@ describe("ChatPage generation helpers", () => {
     expect(messageEditorSendButton.waitFor).toHaveBeenNthCalledWith(2, {
       state: "detached",
     });
+  });
+});
+
+describe("ChatPage.resolveModelSelectorItem", () => {
+  const reasoningModel = chatModels.find(
+    (model) => model.id === "chat-model-reasoning"
+  )!;
+
+  it("returns the data-testid locator when present", async () => {
+    const testIdLocator = {
+      count: vi.fn().mockResolvedValue(1),
+      first: vi.fn().mockReturnThis(),
+    };
+    const optionLocator = {
+      count: vi.fn().mockResolvedValue(0),
+      first: vi.fn().mockReturnThis(),
+    };
+    const menuItemLocator = {
+      count: vi.fn().mockResolvedValue(0),
+      first: vi.fn().mockReturnThis(),
+    };
+    const page = {
+      getByTestId: vi.fn().mockReturnValue(testIdLocator),
+      getByRole: vi
+        .fn()
+        .mockImplementation((role: string) =>
+          role === "option" ? optionLocator : menuItemLocator
+        ),
+      waitForTimeout: vi.fn().mockResolvedValue(undefined),
+    } as unknown as Page;
+
+    const chatPage = new ChatPage(page);
+    const resolved = await (chatPage as any).resolveModelSelectorItem({
+      chatModel: reasoningModel,
+      timeoutMs: 100,
+    });
+
+    expect(resolved).toBe(testIdLocator);
+    expect(testIdLocator.first).toHaveBeenCalled();
+    expect(optionLocator.count).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the option role when the test id is absent", async () => {
+    const testIdLocator = {
+      count: vi.fn().mockResolvedValue(0),
+      first: vi.fn().mockReturnThis(),
+    };
+    const optionLocator = {
+      count: vi.fn().mockResolvedValue(1),
+      first: vi.fn().mockReturnThis(),
+    };
+    const menuItemLocator = {
+      count: vi.fn().mockResolvedValue(0),
+      first: vi.fn().mockReturnThis(),
+    };
+    const page = {
+      getByTestId: vi.fn().mockReturnValue(testIdLocator),
+      getByRole: vi
+        .fn()
+        .mockImplementation((role: string) =>
+          role === "option" ? optionLocator : menuItemLocator
+        ),
+      waitForTimeout: vi.fn().mockResolvedValue(undefined),
+    } as unknown as Page;
+
+    const chatPage = new ChatPage(page);
+    const resolved = await (chatPage as any).resolveModelSelectorItem({
+      chatModel: reasoningModel,
+      timeoutMs: 100,
+    });
+
+    expect(resolved).toBe(optionLocator);
+    expect(optionLocator.first).toHaveBeenCalled();
+    expect(menuItemLocator.count).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the menu item role when neither test id nor option exist", async () => {
+    const testIdLocator = {
+      count: vi.fn().mockResolvedValue(0),
+      first: vi.fn().mockReturnThis(),
+    };
+    const optionLocator = {
+      count: vi.fn().mockResolvedValue(0),
+      first: vi.fn().mockReturnThis(),
+    };
+    const menuItemLocator = {
+      count: vi.fn().mockResolvedValue(1),
+      first: vi.fn().mockReturnThis(),
+    };
+    const page = {
+      getByTestId: vi.fn().mockReturnValue(testIdLocator),
+      getByRole: vi
+        .fn()
+        .mockImplementation((role: string) =>
+          role === "option" ? optionLocator : menuItemLocator
+        ),
+      waitForTimeout: vi.fn().mockResolvedValue(undefined),
+    } as unknown as Page;
+
+    const chatPage = new ChatPage(page);
+    const resolved = await (chatPage as any).resolveModelSelectorItem({
+      chatModel: reasoningModel,
+      timeoutMs: 100,
+    });
+
+    expect(resolved).toBe(menuItemLocator);
+    expect(menuItemLocator.first).toHaveBeenCalled();
   });
 });
