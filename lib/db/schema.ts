@@ -319,11 +319,12 @@ export const backtestRun = pgTable(
     createdAt: timestamp("createdAt").notNull().defaultNow(),
   },
   (table) => ({
-    assetTimeframePeriodIdx: index("BacktestRun_asset_tf_start_idx").on(
-      table.assetId,
-      table.timeframe,
-      table.periodStart,
-    ),
+    // Maintain the composite index used by the API when deduplicating recent
+    // runs. The name mirrors the requirement in the shared checklist so future
+    // migrations stay aligned with the documented contract.
+    assetTimeframePeriodIdx: index(
+      "BacktestRun_asset_timeframe_period_idx",
+    ).on(table.assetId, table.timeframe, table.periodStart),
     strategyVersionIdx: index("BacktestRun_strategyVersion_idx").on(
       table.strategyVersionId,
     ),

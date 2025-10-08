@@ -4,7 +4,12 @@ import { ChatSDKError } from "@/lib/errors";
 import { FINANCE_ASSET_CATALOG } from "@/lib/finance/catalog";
 import { FUNDAMENTAL_SNAPSHOTS } from "@/lib/finance/mock-data";
 import { enforceRateLimit } from "@/lib/ratelimit";
-import { logRouteLatency, now, resolveClientKey } from "@/lib/finance/api-utils";
+import {
+  assertFinanceFeatureEnabled,
+  logRouteLatency,
+  now,
+  resolveClientKey,
+} from "@/lib/finance/api-utils";
 import { logError } from "@/lib/logging";
 import type { Asset } from "@/lib/db/schema";
 
@@ -66,6 +71,7 @@ export async function POST(request: Request): Promise<Response> {
   let filters: Record<string, unknown> | undefined;
 
   try {
+    assertFinanceFeatureEnabled();
     const rateLimit = enforceRateLimit({
       key: `finance:screen:${clientKey}`,
       limit: 30,

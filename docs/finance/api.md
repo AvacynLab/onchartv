@@ -30,7 +30,12 @@ reliably without external network calls.
   Les réponses réussies incluent `rateLimit: { remaining, reset }` pour faciliter
   le suivi côté client.
 - Les erreurs retournent toujours un corps `{ "error": { "code", "message" } }`
-  avec un statut HTTP cohérent (`400`, `401`, `403`, `429`, `500`).
+  avec un statut HTTP cohérent :
+  - `400` pour les validations échouées (`bad_request:api`).
+  - `401`/`403` pour les accès non autorisés.
+  - `404` lorsque la ressource n’existe pas.
+  - `429` en cas de dépassement de quota.
+  - `500` pour les erreurs inattendues (`internal_error:api`).
 
 ## `GET /api/finance/quote`
 
@@ -207,14 +212,56 @@ reliably without external network calls.
 
 ## `POST /api/finance/screen`
 
-Voir [`lib/finance/types.ts`](../../lib/finance/types.ts) pour la structure des
-filtres et `components/finance/screener-artifact.tsx` pour la représentation côté
-UI. Le payload renvoie un objet `{ matches, criteria, rateLimit, source }`.
+| Paramètre           | Type            | Description                                                             |
+|---------------------|-----------------|-------------------------------------------------------------------------|
+| filters.minMarketCap | number _(opt.)_ | Capitalisation minimum (USD).                                           |
+| filters.maxPeRatio  | number _(opt.)_ | Ratio P/E maximum (les valeurs négatives sont ignorées).                |
+| filters.assetTypes  | string[] _(opt.)_ | Sous-ensemble de `equity`, `crypto`, `fx`, `etf`, `index`, `commodity`. |
+| limit               | number _(opt.)_ | Nombre de résultats (défaut `10`, maximum `25`).                        |
+
+```jsonc
+{
+  "type": "finance.screen",
+  "totalMatches": 12,
+  "results": [
+    {
+      "symbol": "NVDA",
+      "name": "NVIDIA Corporation",
+      "type": "equity",
+      "exchange": "NASDAQ",
+      "marketCap": 2.1e12,
+      "peRatio": 24.3,
+      "dividendYield": 0.012
+    }
+  ],
+  "appliedFilters": {
+    "minMarketCap": 1000000000,
+    "maxPeRatio": 40,
+    "assetTypes": ["equity"]
+  },
+  "rateLimit": { "remaining": 29, "reset": 1736208060 },
+  "source": "mock"
+}
+```
 
 ## `GET /api/finance/preferences`
 
-Les préférences utilisateur sont accessibles et modifiables via `GET` et `PATCH`.
-Les deux routes nécessitent une session authentifiée et retournent
-`preferences`, `createdAt`, `updatedAt`, `rateLimit` et `source` (`default` ou
-`database`).
+| Route  | Description                                                               |
+|--------|---------------------------------------------------------------------------|
+| GET    | Retourne les préférences actuelles (`showNews`, `defaultTimeframe`, ...). |
+| PATCH  | Met à jour les préférences en respectant le schéma Zod `financePreferencesSchema`. |
+
+```jsonc
+{
+  "preferences": {
+    "showNews": true,
+    "defaultTimeframe": "1D",
+    "defaultIndicators": ["sma-50", "sma-200"]
+  },
+  "createdAt": "2025-03-01T12:00:00Z",
+  "updatedAt": "2025-03-01T12:00:00Z",
+  "rateLimit": { "remaining": 29, "reset": 1736208060 },
+  "source": "database"
+}
+```
 

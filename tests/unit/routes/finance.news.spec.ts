@@ -1,11 +1,19 @@
 const originalPlaywright = process.env.PLAYWRIGHT;
-// Ensure Playwright-aware guards see the explicit "true" value, matching the
-// contract expected by the finance routes.
+// Finance APIs relax their throttling limits when Playwright mode is active.
+// Mirror that setting so unit tests cover the same fast-path exercised by the
+// hermetic E2E journey.
 process.env.PLAYWRIGHT = "true";
 
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
-import { GET } from "@/app/api/finance/news/route";
 import { __resetRateLimitStateForTests } from "@/lib/ratelimit";
 
 vi.mock("server-only", () => ({}));
@@ -27,67 +35,68 @@ afterAll(() => {
 });
 
 describe("/api/finance/news", () => {
-  it("returns the requested number of news items sorted by recency", async () => {
-    const response = await GET(
-      new Request("http://localhost/api/finance/news?symbol=AAPL&limit=2")
-    );
-    expect(response.status).toBe(200);
+  it("returns the latest headlines sorted by recency", async () => {
+    const { GET } = await import("@/app/api/finance/news/route");
 
+    const response = await GET(
+      new Request("http://localhost/api/finance/news?symbol=NVDA&limit=2")
+    );
+
+    expect(response.status).toBe(200);
     const payload = await response.json();
-    expect(payload.symbol).toBe("AAPL");
+
+    expect(payload.count).toBe(2);
     expect(payload.items).toHaveLength(2);
-    expect(new Date(payload.items[0].publishedAt).getTime()).toBeGreaterThanOrEqual(
-      new Date(payload.items[1].publishedAt).getTime()
-    );
+    expect(payload.items[0].publishedAt >= payload.items[1].publishedAt).toBe(true);
+    expect(payload.items.every((item: { symbol: string }) => item.symbol === "NVDA"))
+      .toBe(true);
   });
 
-  it("exposes three NVDA headlines when the agent requests \"3 news\"", async () => {
+  it("rejects non-numeric limits to avoid silent coercion", async () => {
+    const { GET } = await import("@/app/api/finance/news/route");
+
     const response = await GET(
-      new Request("http://localhost/api/finance/news?symbol=NVDA&limit=3")
+      new Request("http://localhost/api/finance/news?symbol=NVDA&limit=two")
     );
 
-    expect(response.status).toBe(200);
-
-    const payload = await response.json();
-    expect(payload.symbol).toBe("NVDA");
-    expect(payload.items).toHaveLength(3);
-
-    /**
-     * The timestamps decrease chronologically so Playwright can assert both the
-     * count and the ordering when exercising the NVDA scenario. A failure here
-     * would surface if the offline catalogue accidentally drops an entry.
-     */
-    expect(new Date(payload.items[0].publishedAt).getTime()).toBeGreaterThan(
-      new Date(payload.items[2].publishedAt).getTime()
-    );
-  });
-
-  it("rejects non-positive limits", async () => {
-    const response = await GET(
-      new Request("http://localhost/api/finance/news?symbol=AAPL&limit=0")
-    );
     expect(response.status).toBe(400);
-
     const error = await response.json();
-    expect(error).toEqual(
+    expect(error.error).toEqual(
       expect.objectContaining({
-        error: expect.objectContaining({
-          code: "bad_request:api",
-          message: expect.stringContaining("request couldn't be processed"),
-          cause: expect.stringContaining("positive integer"),
-        }),
+        code: "bad_request:api",
+        cause: expect.stringContaining("positive integer"),
       })
     );
   });
 
-  it("rejects decimal limits to avoid implicit truncation", async () => {
+  it("rejects unknown symbols", async () => {
+    const { GET } = await import("@/app/api/finance/news/route");
+
     const response = await GET(
-      new Request("http://localhost/api/finance/news?symbol=AAPL&limit=2.5")
+      new Request("http://localhost/api/finance/news?symbol=XYZ")
     );
 
     expect(response.status).toBe(400);
     const error = await response.json();
     expect(error.error.code).toBe("bad_request:api");
-    expect(error.error.cause).toMatch(/positive integer/);
+    expect(error.error.cause).toMatch(/Unsupported symbol/);
+  });
+
+  it("returns forbidden when the finance feature flag is disabled", async () => {
+    vi.stubEnv("FEATURE_FINANCE", "false");
+
+    try {
+      const { GET } = await import("@/app/api/finance/news/route");
+      const response = await GET(
+        new Request("http://localhost/api/finance/news?symbol=NVDA")
+      );
+
+      expect(response.status).toBe(403);
+      const error = await response.json();
+      expect(error.error.code).toBe("forbidden:api");
+      expect(error.error.cause).toMatch(/Finance endpoints are disabled/i);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

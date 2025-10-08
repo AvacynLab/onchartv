@@ -3,6 +3,7 @@ import { z } from "zod";
 import { auth } from "@/app/(auth)/auth";
 import {
   assertSupportedSymbol,
+  assertFinanceFeatureEnabled,
   logRouteLatency,
   now,
   parseIsoToEpochSeconds,
@@ -23,6 +24,8 @@ import { enforceRateLimit } from "@/lib/ratelimit";
 import type { BacktestParameters } from "@/lib/finance/types";
 
 const SUPPORTED_TIMEFRAMES = ["1D"] as const;
+const MAX_BACKTEST_RANGE_DAYS = 5_000;
+const SECONDS_PER_DAY = 86_400;
 
 const requestSchema = z.object({
   symbol: z
@@ -83,6 +86,7 @@ export async function POST(request: Request): Promise<Response> {
   const clientKey = resolveClientKey(request);
 
   try {
+    assertFinanceFeatureEnabled();
     const rateLimit = enforceRateLimit({
       key: `finance:backtest:${clientKey}`,
       limit: 15,
@@ -127,6 +131,18 @@ export async function POST(request: Request): Promise<Response> {
     const series = FINANCE_SERIES[metadata.symbol];
     const fromEpoch = parseIsoToEpochSeconds(payload.period.from, "period.from");
     const toEpoch = parseIsoToEpochSeconds(payload.period.to, "period.to");
+    const maxSpanSeconds = MAX_BACKTEST_RANGE_DAYS * SECONDS_PER_DAY;
+    const effectiveFrom = fromEpoch ?? series[0]!.timestamp;
+    const effectiveTo = toEpoch ?? series[series.length - 1]!.timestamp;
+    const requestedSpanSeconds = effectiveTo - effectiveFrom;
+
+    if (requestedSpanSeconds > maxSpanSeconds) {
+      throw new ChatSDKError(
+        "bad_request:api",
+        `Requested period exceeds the maximum supported duration of ${MAX_BACKTEST_RANGE_DAYS} days.`
+      );
+    }
+
     const range = resolveRange(series, fromEpoch, toEpoch);
     const candles = series.filter(
       (candle) => candle.timestamp >= range.from && candle.timestamp <= range.to

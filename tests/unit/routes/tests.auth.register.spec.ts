@@ -102,3 +102,47 @@ describe("POST /api/tests/auth/register", () => {
     expect(createUserMock).not.toHaveBeenCalled();
   });
 });
+
+describe("GET /api/tests/auth/register", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    process.env = { ...envBackup };
+  });
+
+  afterEach(() => {
+    process.env = envBackup;
+  });
+
+  it("returns a readiness payload when Playwright flags are present", async () => {
+    process.env.PLAYWRIGHT = "true";
+
+    const { GET } = await import("@/app/api/tests/auth/register/route");
+
+    const response = await GET(
+      new Request("https://example.com/api/tests/auth/register")
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "ready",
+      allowedMethods: ["POST"],
+      message: "Use POST to provision test accounts during Playwright runs.",
+    });
+  });
+
+  it("rejects readiness probes outside automation runs", async () => {
+    process.env.PLAYWRIGHT = "false";
+    process.env.CI_PLAYWRIGHT = "false";
+
+    const { GET } = await import("@/app/api/tests/auth/register/route");
+
+    const response = await GET(
+      new Request("https://example.com/api/tests/auth/register")
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "forbidden" },
+    });
+  });
+});

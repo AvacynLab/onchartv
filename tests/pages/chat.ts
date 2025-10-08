@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, type Page, errors as playwrightErrors } from "@playwright/test";
-import { chatModels } from "@/lib/ai/models";
+import {
+  expect,
+  type Page,
+  type Locator,
+  errors as playwrightErrors,
+} from "@playwright/test";
+import { chatModels, type ChatModel } from "@/lib/ai/models";
 
 /**
  * Validate that the current page URL ends with a chat identifier without
@@ -20,6 +25,19 @@ const CHAT_ID_REGEX = /\/chat\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[
  */
 const CHAT_STREAM_PATH_REGEX = /^\/api\/chat\/[\w-]+\/stream$/;
 
+/**
+ * Snapshot of the assistant timeline captured right before triggering a new
+ * generation. Defining the shape up front allows helper methods to reference
+ * the type without relying on the `this` context — a pattern that keeps the
+ * file compliant with `noImplicitThis` during the Next.js type-checking phase.
+ */
+type AssistantSnapshot = {
+  count: number;
+  latestMessageId: string | null;
+  latestMessageText: string;
+  latestArtifactCount: number;
+};
+
 export class ChatPage {
   /**
    * Surface the Playwright assertion helper so unit tests can substitute a
@@ -35,14 +53,7 @@ export class ChatPage {
    * so the helper recognises both brand-new bubbles and updates to the latest
    * message content or attached artefacts.
    */
-  private pendingAssistantSnapshot:
-    | {
-        count: number;
-        latestMessageId: string | null;
-        latestMessageText: string;
-        latestArtifactCount: number;
-      }
-    | null = null;
+  private pendingAssistantSnapshot: AssistantSnapshot | null = null;
 
   /**
    * Track the most recent vote request so the helper can await the matching
@@ -75,7 +86,7 @@ export class ChatPage {
   }
 
   async createNewChat() {
-    await this.page.goto("/", {
+    await this.page.goto("/chat", {
       /**
        * Next.js app router streams the shell before every asset finishes
        * loading, which occasionally blocks the `load` event during cold Turbopack
@@ -83,6 +94,38 @@ export class ChatPage {
        * hermetic Playwright runs without masking legitimate network hangs.
        */
       waitUntil: "domcontentloaded",
+    });
+
+    await this.ensureChatSurfaceReady();
+  }
+
+  /**
+   * Confirm that the chat surface rendered after navigation. The helper guards
+   * against authentication regressions (a redirect to `/login`) and ensures the
+   * input controls are visible before callers attempt to interact with them.
+   */
+  private async ensureChatSurfaceReady() {
+    const currentUrl = new URL(this.page.url());
+
+    if (currentUrl.pathname.startsWith("/login")) {
+      throw new Error(
+        "Expected an authenticated session before visiting /chat, but the app redirected to /login. " +
+          "Ensure tests/setup/auth.setup.ts provisioned credentials via the regular sign-in flow."
+      );
+    }
+
+    await this.page.waitForSelector('[data-testid="multimodal-input"]', {
+      /**
+       * Chat renders a sizeable component tree. Waiting for the primary input
+       * avoids racing against hydration when Playwright runs in parallel.
+       */
+      state: "visible",
+      timeout: 15_000,
+    });
+
+    await this.page.waitForSelector('[data-testid="send-button"]', {
+      state: "visible",
+      timeout: 15_000,
     });
   }
 
@@ -423,9 +466,10 @@ export class ChatPage {
 
     await selectorTrigger.click();
 
-    const selectorItem = this.page.getByTestId(
-      `model-selector-item-${chatModelId}`
-    );
+    const selectorItem = await this.resolveModelSelectorItem({
+      chatModel,
+      timeoutMs: 60_000,
+    });
 
     await expect(selectorItem).toBeVisible({ timeout: 60_000 });
     await selectorItem.click();
@@ -795,6 +839,7 @@ export class ChatPage {
           }
 
           let diagnostic = "";
+          let normalizedDiagnostic = "";
           try {
             // Normalise Playwright's optional `failure()` accessor so the
             // helper can surface the original network error text without
@@ -822,8 +867,49 @@ export class ChatPage {
                 ? (failureDetails as { errorText: string }).errorText.trim()
                 : "";
             diagnostic = failureText ? ` – ${failureText}` : "";
+            normalizedDiagnostic = failureText.toUpperCase();
           } catch {
             diagnostic = "";
+            normalizedDiagnostic = "";
+          }
+
+          // Offline Playwright runs may surface ENETUNREACH/ERR_NETWORK_* when
+          // Chromium blocks requests to the hermetic Next.js server while it is
+          // still compiling. Treat those as soft failures so we can fall back to
+          // DOM-based polling instead of failing the scenario outright.
+          const offlineFailureSignals = [
+            "ENETUNREACH",
+            "ERR_NETWORK_CHANGED",
+            "ERR_INTERNET_DISCONNECTED",
+            "ERR_NETWORK_IO_SUSPENDED",
+            "ERR_CONNECTION_REFUSED",
+            "ERR_CONNECTION_RESET",
+            "ERR_ADDRESS_UNREACHABLE",
+          ];
+
+          if (
+            offlineFailureSignals.some((signal) =>
+              normalizedDiagnostic.includes(signal)
+            )
+          ) {
+            console.warn(
+              "Chat API network request failed in offline mode; falling back to UI polling.",
+              {
+                failure:
+                  diagnostic.length > 0
+                    ? diagnostic.trim().replace(/^–\s*/, "")
+                    : offlineFailureSignals.find((signal) =>
+                        normalizedDiagnostic.includes(signal)
+                      ),
+                url:
+                  typeof candidate?.url === "function"
+                    ? candidate.url()
+                    : undefined,
+              }
+            );
+
+            settle("reject", networkTimeoutMarker);
+            return;
           }
 
           settle(
@@ -879,71 +965,9 @@ export class ChatPage {
       throw error;
     });
 
-    const rawStreamingPromise = this.page
-      .waitForFunction(
-        (args: {
-          baselineCount: number;
-          baselineLatestId: string | null;
-          baselineLatestText: string;
-          baselineArtifactCount: number;
-        }) => {
-          const assistantNodes = Array.from(
-            document.querySelectorAll<HTMLElement>(
-              '[data-testid="message-assistant"]'
-            )
-          );
-
-          if (assistantNodes.length > args.baselineCount) {
-            return true;
-          }
-
-          if (assistantNodes.length > 0) {
-            const latestAssistant = assistantNodes[assistantNodes.length - 1];
-            const latestId = latestAssistant.getAttribute("data-message-id");
-
-            if (latestId && latestId !== args.baselineLatestId) {
-              return true;
-            }
-
-            const latestText =
-              latestAssistant
-                .querySelector<HTMLElement>('[data-testid="message-content"]')
-                ?.innerText.trim() ?? "";
-
-            if (
-              latestText.length > 0 &&
-              latestText !== args.baselineLatestText
-            ) {
-              return true;
-            }
-
-            const latestArtifactCount =
-              latestAssistant.querySelectorAll('[data-testid$="-artifact"]').length;
-
-            if (latestArtifactCount > args.baselineArtifactCount) {
-              return true;
-            }
-          }
-
-          const loadingCount = document.querySelectorAll(
-            '[data-testid="message-assistant-loading"]'
-          ).length;
-
-          return loadingCount > 0;
-        },
-        {
-          baselineCount: baseline.count,
-          baselineLatestId: baseline.latestMessageId,
-          baselineLatestText: baseline.latestMessageText,
-          baselineArtifactCount: baseline.latestArtifactCount,
-        },
-        { timeout: timeoutMs }
-      )
-      .then(() => {
-        // The UI started streaming (spinner, text, or artefact delta).
-      });
-    const streamingPromise = rawStreamingPromise.catch((error) => {
-      throw error;
+    const streamingPromise = this.pollForStreamingChange({
+      baseline,
+      timeoutMs,
     });
 
     try {
@@ -955,8 +979,106 @@ export class ChatPage {
       throw error;
     } finally {
       rawToastPromise.catch(() => {});
-      rawStreamingPromise.catch(() => {});
+      streamingPromise.catch(() => {});
     }
+  }
+
+  private async resolveModelSelectorItem({
+    chatModel,
+    timeoutMs,
+  }: {
+    chatModel: ChatModel;
+    timeoutMs: number;
+  }): Promise<Locator> {
+    const deadline = Date.now() + timeoutMs;
+    const testIdLocator = this.page.getByTestId(
+      `model-selector-item-${chatModel.id}`
+    );
+    const optionLocator = this.page
+      .getByRole("option", { name: chatModel.name })
+      .first();
+    const menuItemLocator = this.page
+      .getByRole("menuitem", { name: chatModel.name })
+      .first();
+
+    while (Date.now() < deadline) {
+      if ((await testIdLocator.count().catch(() => 0)) > 0) {
+        return testIdLocator.first();
+      }
+
+      if ((await optionLocator.count().catch(() => 0)) > 0) {
+        return optionLocator;
+      }
+
+      if ((await menuItemLocator.count().catch(() => 0)) > 0) {
+        return menuItemLocator;
+      }
+
+      await this.page.waitForTimeout(100);
+    }
+
+    throw new Error(
+      `Unable to locate the model selector option for "${chatModel.name}".`
+    );
+  }
+
+  private async pollForStreamingChange({
+    baseline,
+    timeoutMs,
+  }: {
+    baseline: AssistantSnapshot;
+    timeoutMs: number;
+  }): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    const assistantLocator = this.page.getByTestId("message-assistant");
+    const spinnerLocator = this.page.getByTestId("message-assistant-loading");
+
+    while (Date.now() < deadline) {
+      const [assistantCount, spinnerCount] = await Promise.all([
+        assistantLocator.count().catch(() => 0),
+        spinnerLocator.count().catch(() => 0),
+      ]);
+
+      if (spinnerCount > 0) {
+        return;
+      }
+
+      if (assistantCount > baseline.count) {
+        return;
+      }
+
+      if (assistantCount > 0) {
+        const latestAssistant = assistantLocator.nth(assistantCount - 1);
+        const [latestId, latestText, latestArtifactCount] = await Promise.all([
+          latestAssistant.getAttribute("data-message-id").catch(() => null),
+          latestAssistant
+            .getByTestId("message-content")
+            .innerText()
+            .then((value) => value.trim())
+            .catch(() => ""),
+          latestAssistant
+            .locator('[data-testid$="-artifact"]')
+            .count()
+            .catch(() => 0),
+        ]);
+
+        if (latestId && latestId !== baseline.latestMessageId) {
+          return;
+        }
+
+        if (latestText && latestText !== baseline.latestMessageText) {
+          return;
+        }
+
+        if (latestArtifactCount > baseline.latestArtifactCount) {
+          return;
+        }
+      }
+
+      await this.page.waitForTimeout(200);
+    }
+
+    throw new Error("Timed out waiting for chat UI to start streaming");
   }
 
   private async waitForVoteRequest(direction: "up" | "down"): Promise<void> {

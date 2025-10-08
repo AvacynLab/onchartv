@@ -16,7 +16,6 @@ import { getUsage } from "tokenlens/helpers";
 import type { Session } from "next-auth";
 
 import { auth, type UserType } from "@/app/(auth)/auth";
-import { assertRegularChatUser } from "@/lib/chat/authorization";
 import type { VisibilityType } from "@/components/visibility-selector";
 import { entitlementsByUserType } from "@/lib/ai/entitlements";
 import { shouldFetchTokenlensCatalog } from "@/lib/ai/tokenlens";
@@ -35,7 +34,7 @@ import {
   type StreamTextOptions,
   __test as streamChatResponseTestUtils,
 } from "@/lib/ai/stream-chat-response";
-import { isProductionEnvironment } from "@/lib/constants";
+import { isProductionEnvironment, isTestEnvironment } from "@/lib/constants";
 import {
   createStreamId,
   getFinancePreferencesByUserId,
@@ -106,6 +105,39 @@ const resolveGlobalStreamContext = () => {
 };
 
 const textDecoder = new TextDecoder();
+
+type RegularSessionValidationResult =
+  | {
+      ok: true;
+      session: Session;
+      user: Session["user"] & { type: "regular"; id: string };
+    }
+  | { ok: false; response: Response };
+
+/**
+ * Validate the resolved session against the regular-user contract expected by
+ * the chat API. Returning a discriminated union keeps the call sites concise
+ * while still enforcing the explicit `session.user.type !== "regular"` guard
+ * mandated by the brief. The helper deliberately avoids throwing so callers
+ * can surface formatted JSON errors without depending on exception handling.
+ */
+function validateRegularSession(
+  session: Session | null | undefined
+): RegularSessionValidationResult {
+  if (!session?.user) {
+    return { ok: false, response: new ChatSDKError("unauthorized:chat").toResponse() };
+  }
+
+  if (session.user.type !== "regular") {
+    return { ok: false, response: new ChatSDKError("forbidden:auth").toResponse() };
+  }
+
+  return {
+    ok: true,
+    session: session as Session,
+    user: session.user as Session["user"] & { type: "regular"; id: string },
+  };
+}
 
 class InMemoryResumableStream {
   private readonly reader: ReadableStreamDefaultReader<unknown>;
@@ -427,6 +459,11 @@ export function getStreamContext() {
     return cached;
   }
 
+  if (isTestEnvironment()) {
+    const inMemoryContext = createInMemoryResumableStreamContext();
+    return cacheStreamContext(inMemoryContext);
+  }
+
   let resolvedContext: ResumableStreamContext;
 
   try {
@@ -486,23 +523,16 @@ export async function POST(request: Request) {
     /**
      * Validate the session upfront so downstream persistence only executes for
      * fully authorised users. This keeps the API responses deterministic and
-     * avoids leaking whether a chat exists to guests.
+     * avoids leaking whether a chat exists to guests while still honouring the
+     * mandated regular-user gate.
      */
-    let sessionUser: ReturnType<typeof assertRegularChatUser>;
-    let ensuredSession: Session;
+    const sessionValidation = validateRegularSession(session);
 
-    try {
-      sessionUser = assertRegularChatUser(session);
-      // The assertion above guarantees a populated session; narrow the type so
-      // downstream tooling integrations receive the full session contract.
-      ensuredSession = session as Session;
-    } catch (error) {
-      if (error instanceof ChatSDKError) {
-        return error.toResponse();
-      }
-
-      throw error;
+    if (!sessionValidation.ok) {
+      return sessionValidation.response;
     }
+
+    const { user: sessionUser, session: ensuredSession } = sessionValidation;
 
     const userType: UserType = sessionUser.type;
 
@@ -847,18 +877,13 @@ export async function DELETE(request: Request) {
   }
 
   const session = await auth();
+  const sessionValidation = validateRegularSession(session);
 
-  let sessionUser: ReturnType<typeof assertRegularChatUser>;
-
-  try {
-    sessionUser = assertRegularChatUser(session);
-  } catch (error) {
-    if (error instanceof ChatSDKError) {
-      return error.toResponse();
-    }
-
-    throw error;
+  if (!sessionValidation.ok) {
+    return sessionValidation.response;
   }
+
+  const { user: sessionUser } = sessionValidation;
 
   const chat = await getChatById({ id });
 

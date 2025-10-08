@@ -60,7 +60,7 @@ describe("finance database schema", () => {
     const indexes = mapIndexes(backtestRun);
 
     expect(indexes).toContainEqual({
-      name: "BacktestRun_asset_tf_start_idx",
+      name: "BacktestRun_asset_timeframe_period_idx",
       columns: ["assetId", "timeframe", "periodStart"],
       unique: false,
     });

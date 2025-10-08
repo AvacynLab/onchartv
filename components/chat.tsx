@@ -20,7 +20,7 @@ import {
   ChatComposerProvider,
 } from "./chat-composer-context";
 import { Artifact } from "./artifact";
-import { useDataStream } from "./data-stream-provider";
+import { useOptionalDataStream } from "./data-stream-provider";
 import { Messages } from "./messages";
 import { MultimodalInput } from "./multimodal-input";
 import { getChatHistoryPaginationKey } from "./sidebar-history";
@@ -52,7 +52,14 @@ export function Chat({
   });
 
   const { mutate } = useSWRConfig();
-  const { setDataStream } = useDataStream();
+  /**
+   * Le contexte de stream peut être absent lorsque le composant est monté en
+   * isolation (tests unitaires, storybook). Nous le lisons donc de manière
+   * opportuniste et basculons en mode no-op lorsque le provider n'est pas
+   * disponible afin d'éviter toute exception côté client.
+   */
+  const dataStreamContext = useOptionalDataStream();
+  const setDataStream = dataStreamContext?.setDataStream;
 
   /**
    * Nous suivons l'état de montage du composant afin d'éviter toute mise à jour
@@ -105,7 +112,7 @@ export function Chat({
       },
     }),
     onData: (dataPart) => {
-      if (!isComponentMountedRef.current || !dataPart) {
+      if (!isComponentMountedRef.current || !dataPart || !setDataStream) {
         return;
       }
 
@@ -122,7 +129,9 @@ export function Chat({
       }
     },
     onFinish: () => {
-      mutate(unstable_serialize(getChatHistoryPaginationKey));
+      if (typeof mutate === "function") {
+        mutate(unstable_serialize(getChatHistoryPaginationKey));
+      }
     },
     onError: (error) => {
       if (error instanceof ChatSDKError) {

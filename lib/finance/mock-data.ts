@@ -1,5 +1,10 @@
 import { generateMockSeries } from "./data-adapter";
-import type { CandleSeries } from "./types";
+import type {
+  CandleSeries,
+  FinanceSymbol,
+  FundamentalSnapshot,
+  MockNewsItem,
+} from "./types";
 
 /**
  * Canonical catalogue of symbols supported by the offline finance tools. The
@@ -15,7 +20,6 @@ export const FINANCE_SYMBOLS = [
   "EURUSD",
 ] as const;
 
-export type FinanceSymbol = (typeof FINANCE_SYMBOLS)[number];
 
 /**
  * Deterministic OHLCV series keyed by symbol. The mock generator produces daily
@@ -82,17 +86,6 @@ export const FINANCE_SERIES: Record<FinanceSymbol, CandleSeries> = {
   }),
 };
 
-export interface FundamentalSnapshot {
-  readonly symbol: FinanceSymbol;
-  readonly marketCap: number;
-  readonly peRatio: number;
-  readonly dividendYield: number;
-  readonly revenueTtm: number;
-  readonly grossMargin: number;
-  readonly netMargin: number;
-  readonly debtToEquity: number;
-}
-
 /**
  * Lightweight fundamental metrics derived from public filings. Values are
  * rounded and static – the goal is to give the agent enough material to explain
@@ -150,17 +143,6 @@ export const FUNDAMENTAL_SNAPSHOTS: Record<FinanceSymbol, FundamentalSnapshot> =
     debtToEquity: 0.12,
   },
 };
-
-export interface MockNewsItem {
-  readonly id: string;
-  readonly symbol: FinanceSymbol;
-  readonly source: string;
-  readonly title: string;
-  readonly url: string;
-  readonly summary: string;
-  readonly publishedAt: string;
-  readonly sentiment: "positive" | "neutral" | "negative";
-}
 
 /**
  * Curated news headlines summarised for offline consumption. Timestamps are ISO
@@ -263,3 +245,5 @@ export const NEWS_ITEMS: readonly MockNewsItem[] = [
     sentiment: "neutral",
   },
 ];
+
+export type { FinanceSymbol, FundamentalSnapshot, MockNewsItem } from "./types";

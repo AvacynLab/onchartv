@@ -7,12 +7,18 @@ import {
   type Browser,
   type BrowserContext,
   type Page,
+  type APIResponse,
 } from "@playwright/test";
 
 import { hasAuthSessionCookie } from "../utils/auth-session";
 import { persistSessionCookies } from "../utils/session-persistence";
 import { waitForServerReady } from "../utils/server-health";
 import { warmupNextRoutes } from "../utils/server-warmup";
+import {
+  loginWithCredentialsCallback,
+  type ResponseLike,
+} from "../utils/programmatic-login";
+import { withStepTiming } from "../utils/timing";
 
 const AUTH_DIR = path.resolve(__dirname, "../.auth");
 const STATE_PATH = path.join(AUTH_DIR, "state.json");
@@ -57,6 +63,22 @@ async function ensureLoggedIn(
 ) {
   const context = page.context();
 
+  const toResponseLike = async (
+    executor: Promise<APIResponse>
+  ): Promise<ResponseLike> => {
+    const response = await executor;
+    return {
+      ok: () => response.ok(),
+      status: () => response.status(),
+      json: () => response.json(),
+      text: () => response.text(),
+      headers: () =>
+        response
+          .headersArray()
+          .map(({ name, value }) => ({ name, value })),
+    };
+  };
+
   /**
    * Registration already performs a credentials sign-in via the server
    * action. When the session cookie exists we can skip the manual login to
@@ -67,25 +89,137 @@ async function ensureLoggedIn(
     return;
   }
 
+  /**
+   * Attempt the credential callback directly before falling back to the
+   * browser-driven flow. When it succeeds the warm-up can skip rendering the
+   * `/login` form entirely, which keeps hermetic runs fast and sidesteps the
+   * flaky redirect we observed when the dev server was still compiling.
+   */
+  const programmaticLoginSucceeded = await loginWithCredentialsCallback({
+    baseURL,
+    email: creds.email,
+    password: creds.password,
+    request: {
+      get: (url, options) =>
+        toResponseLike(context.request.get(url, options)),
+      post: (url, options) =>
+        toResponseLike(context.request.post(url, options)),
+    },
+    readCookies: () => context.cookies(),
+    hasSessionCookie: hasAuthSessionCookie,
+    logger: (message, contextDetails) => {
+      console.warn(message, contextDetails);
+    },
+    applyCookies: async (cookies) => {
+      /**
+       * Replay the cookies emitted by the credential callback into the
+       * Playwright browser context. Doing so mirrors the network stack that the
+       * user-facing login flow would exercise and keeps the warm-up compatible
+       * with strict HttpOnly/SameSite policies enforced by NextAuth.
+       */
+      await context.addCookies(
+        cookies.map((cookie) => ({
+          name: cookie.name,
+          value: cookie.value,
+          url: cookie.url,
+          path: cookie.path,
+          expires: cookie.expires,
+          httpOnly: cookie.httpOnly,
+          secure: cookie.secure,
+          sameSite: cookie.sameSite,
+        }))
+      );
+    },
+  });
+
+  if (programmaticLoginSucceeded) {
+    return;
+  }
+
   await page.goto(`${baseURL}/login`);
+
+  await expect(page.getByPlaceholder("user@acme.com")).toBeVisible({
+    /**
+     * Verifying the form fields helps us fail fast when the login route
+     * regresses (for example, due to a renamed label) instead of timing out
+     * later while typing into a missing locator.
+     */
+    timeout: 15_000,
+  });
+  await expect(page.getByLabel("Password")).toBeVisible({ timeout: 15_000 });
 
   if (page.url().endsWith("/login")) {
     await page.getByPlaceholder("user@acme.com").fill(creds.email);
     await page.getByLabel("Password").fill(creds.password);
 
     const signInButton = page.getByRole("button", { name: "Sign in" });
+    await expect(signInButton).toBeVisible({ timeout: 15_000 });
 
-    await Promise.all([
-      page.waitForURL(
+    const waitForRedirect = page
+      .waitForURL(
         (url) => !url.pathname.endsWith("/login"),
-        { timeout: 15_000, waitUntil: "commit" }
-      ),
-      signInButton.click(),
-    ]);
+        { timeout: 30_000, waitUntil: "commit" }
+      )
+      .catch((error) => {
+        /**
+         * Cold starts can still leave the browser on `/login` while Turbopack
+         * compiles the post-auth redirect. Mirror the register flow by logging
+         * (instead of failing) so the subsequent session check can confirm the
+         * credentials worked before we proceed to `/chat`.
+         */
+        console.warn("Playwright login redirect timed out", { cause: error });
+        return null;
+      });
+
+    await Promise.all([waitForRedirect, signInButton.click()]);
 
     await expect
       .poll(async () => hasExistingSession(context), { timeout: 15_000 })
       .toBeTruthy();
+  }
+}
+
+async function ensureChatSurface(page: Page, baseURL: string) {
+  await page.goto(`${baseURL}/chat`, { waitUntil: "domcontentloaded" });
+
+  const currentUrl = new URL(page.url());
+  if (currentUrl.pathname.startsWith("/login")) {
+    throw new Error(
+      "Playwright auth setup navigated to /login after provisioning credentials. " +
+        "Double-check the registration/login selectors and ensure session cookies are persisted."
+    );
+  }
+
+  await expect(page.getByTestId("multimodal-input")).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(page.getByTestId("send-button")).toBeVisible({ timeout: 15_000 });
+}
+
+async function ensureAutomationAccount(
+  baseURL: string,
+  credentials: { email: string; password: string }
+) {
+  const registrationUrl = new URL("/api/tests/auth/register", baseURL);
+
+  try {
+    const response = await fetch(registrationUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(credentials),
+    });
+
+    if (!response.ok) {
+      const preview = await response.text().catch(() => "");
+      throw new Error(
+        `Failed to provision Playwright credentials (${response.status}): ${preview.slice(0, 200)}`
+      );
+    }
+  } catch (error) {
+    throw new Error(
+      "Unable to ensure the Playwright automation account exists before logging in",
+      error instanceof Error ? { cause: error } : undefined
+    );
   }
 }
 
@@ -143,7 +277,11 @@ async function reuseStoredSession(browser: Browser, baseURL: string) {
 setup("authenticate", async ({ browser }) => {
   const baseURL = getBaseURL();
 
-  await waitForServerReady(baseURL);
+  await withStepTiming({
+    label: "wait for server readiness probe",
+    thresholdMs: 15_000,
+    task: () => waitForServerReady(baseURL),
+  });
 
   /**
    * Warm the most common routes before Playwright begins interacting with the
@@ -152,52 +290,71 @@ setup("authenticate", async ({ browser }) => {
    * warm-up keeps the development server responsive for the upcoming auth and
    * chat flows.
    */
-  await warmupNextRoutes(baseURL);
+  await withStepTiming({
+    label: "warm Next.js routes",
+    thresholdMs: 90_000,
+    task: () =>
+      warmupNextRoutes(baseURL, {
+        /**
+         * Warm the chat dashboard and auth forms. Skipping the marketing homepage
+         * keeps cold starts under the 240s Playwright budget now that logins
+         * redirect straight to `/chat`.
+         */
+        routes: [
+          "/login",
+          "/chat",
+          "/api/history?limit=1",
+          "/api/tests/auth/register",
+        ],
+      }),
+  });
 
-  if (await reuseStoredSession(browser, baseURL)) {
+  const reusedSession = await withStepTiming({
+    label: "reuse stored Playwright session",
+    thresholdMs: 5_000,
+    task: () => reuseStoredSession(browser, baseURL),
+  });
+
+  if (reusedSession) {
     return;
   }
 
   const credentials = loadCredentials();
+  await withStepTiming({
+    label: "ensure automation account exists",
+    thresholdMs: 10_000,
+    task: () => ensureAutomationAccount(baseURL, credentials),
+  });
+
   const context = await browser.newContext();
   const page = await context.newPage();
 
   try {
-    await page.goto(`${baseURL}/register`);
-    await page.getByPlaceholder("user@acme.com").fill(credentials.email);
-    await page.getByLabel("Password").fill(credentials.password);
-    const signUpButton = page.getByRole("button", { name: "Sign Up" });
-    await signUpButton.click();
+    await withStepTiming({
+      label: "authenticate through login form",
+      thresholdMs: 60_000,
+      task: () => ensureLoggedIn(page, baseURL, credentials),
+    });
 
-    const toast = page.getByTestId("toast");
-    await expect(toast).toContainText("Account");
+    await withStepTiming({
+      label: "load chat surface",
+      thresholdMs: 30_000,
+      task: () => ensureChatSurface(page, baseURL),
+    });
 
-    const toastMessage = (await toast.textContent()) ?? "";
+    await withStepTiming({
+      label: "persist Playwright storage state",
+      thresholdMs: 5_000,
+      task: async () => {
+        fs.mkdirSync(AUTH_DIR, { recursive: true });
+        await context.storageState({ path: STATE_PATH });
+        await persistSessionCookies(context);
+      },
+    });
 
-    if (toastMessage.includes("Account created successfully!")) {
-      try {
-        await page.waitForURL(
-          (url) => url.pathname === "/" || url.pathname.startsWith("/chat"),
-          { timeout: 15_000, waitUntil: "commit" }
-        );
-      } catch (error) {
-        /**
-         * During cold starts the Turbopack dev server can take longer than 15s
-         * to stream the post-registration redirect. Rather than failing the
-         * setup we log and continue, letting `ensureLoggedIn` validate the
-         * credentials session explicitly.
-         */
-        console.warn("Playwright login warmup timed out waiting for redirect", {
-          cause: error,
-        });
-      }
-    }
-
-    await ensureLoggedIn(page, baseURL, credentials);
-
-    fs.mkdirSync(AUTH_DIR, { recursive: true });
-    await context.storageState({ path: STATE_PATH });
-    await persistSessionCookies(context);
+    // Double-check that the storage snapshot landed on disk so subsequent
+    // workers can reuse the authenticated session without re-registering.
+    expect(fs.existsSync(STATE_PATH)).toBe(true);
   } finally {
     await context.close();
   }

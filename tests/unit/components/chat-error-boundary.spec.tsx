@@ -23,6 +23,14 @@ describe("ChatErrorBoundary", () => {
       screen.getByRole("heading", { name: /une erreur est survenue/i })
     ).toBeInTheDocument();
 
+    const supportLink = screen.getByRole("link", { name: /contacter le support/i });
+    expect(supportLink).toHaveAttribute("href", "mailto:support@onchartv.dev");
+
+    expect(
+      screen.getByText(/détails techniques \(environnement développeur\)/i)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/boom/)).toBeInTheDocument();
+
     const retryButton = screen.getByRole("button", { name: /réessayer/i });
     const user = userEvent.setup();
     await user.click(retryButton);

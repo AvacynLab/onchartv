@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/sidebar";
 import { LoaderIcon } from "./icons";
 import { toast } from "./toast";
+import { shouldDisableRemoteAvatars } from "./utils/automation";
 
 export function SidebarUserNav({ user }: { user: User }) {
   const router = useRouter();
@@ -30,9 +31,14 @@ export function SidebarUserNav({ user }: { user: User }) {
   const isGuest = sessionUserType === "guest";
   const displayEmail = isGuest ? "Guest" : user?.email ?? data?.user?.email ?? "User";
   const avatarIdentifier = user.email ?? data?.user?.email ?? "guest";
-  // The Playwright environment lacks outbound network access, so we swap the
-  // remote avatar for a bundled SVG placeholder to avoid `ENETUNREACH` errors.
-  const disableRemoteAvatars = process.env.NEXT_PUBLIC_PLAYWRIGHT === "true";
+  /**
+   * The Playwright environment lacks outbound network access, so we swap the
+   * remote avatar for a bundled SVG placeholder to avoid `ENETUNREACH` errors.
+   * Falling back when the browser advertises the WebDriver flag keeps local
+   * automation runs hermetic even if the public environment variable is
+   * missing.
+   */
+  const disableRemoteAvatars = shouldDisableRemoteAvatars();
   const avatarSrc = disableRemoteAvatars
     ? "/playwright/avatar-placeholder.svg"
     : `https://avatar.vercel.sh/${avatarIdentifier}`;

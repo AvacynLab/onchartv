@@ -2,6 +2,10 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import process from "node:process";
 
+import {
+  resolveNextDevCommand,
+  type NextDevCommand,
+} from "./next-dev-command";
 import { prepareDevServerLogFile } from "./dev-server-logs";
 
 /**
@@ -21,7 +25,13 @@ async function main() {
 
   console.log(`Writing Next.js dev server output to ${logPath}`);
 
-  const child = spawn("pnpm", ["dev"], {
+  const nextDevCommand: NextDevCommand = resolveNextDevCommand(process.env);
+
+  console.log(
+    `Launching Next.js via "${nextDevCommand.command} ${nextDevCommand.args.join(" ")}". ${nextDevCommand.rationale}`
+  );
+
+  const child = spawn(nextDevCommand.command, nextDevCommand.args, {
     env: process.env,
     stdio: ["inherit", "pipe", "pipe"],
   });

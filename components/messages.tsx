@@ -50,8 +50,14 @@ function PureMessages({
     status,
   });
 
-  const safeMessages = Array.isArray(messages) ? messages : [];
-  const safeVotes = Array.isArray(votes) ? votes : [];
+  /**
+   * Normalise the inputs so downstream rendering logic can operate on plain
+   * arrays. The hooks feed `null`/`undefined` until the first payload arrives
+   * which is why we coerce with the nullish coalescing operator instead of
+   * assuming array semantics.
+   */
+  const safeMessages = Array.isArray(messages) ? messages : messages ?? [];
+  const safeVotes = Array.isArray(votes) ? votes : votes ?? [];
 
   /**
    * Track the previous message count and the viewport stickiness so we can
@@ -122,6 +128,25 @@ function PureMessages({
               (vote) => vote.messageId === message.id
             );
 
+            /**
+             * Guard the artefact list because assistant responses sometimes
+             * return `null` or omit the property entirely. We cast through
+             * `unknown` to inspect the optional field without fighting the
+             * stricter `ChatMessage` typing exported by the AI SDK, then copy
+             * the value into the array shape expected by the preview renderer
+             * so downstream consumers stay immutable.
+             */
+            const rawArtifacts = (
+              message as unknown as { artifacts?: unknown }
+            ).artifacts;
+            const safeArtifacts = Array.isArray(rawArtifacts)
+              ? rawArtifacts
+              : rawArtifacts ?? [];
+            const normalisedMessage = {
+              ...message,
+              artifacts: safeArtifacts,
+            } as ChatMessage;
+
             return (
               <PreviewMessage
                 chatId={chatId}
@@ -130,7 +155,7 @@ function PureMessages({
                 }
                 isReadonly={isReadonly}
                 key={message.id}
-                message={message}
+                message={normalisedMessage}
                 regenerate={regenerate}
                 requiresScrollPadding={
                   hasSentMessage && index === safeMessages.length - 1

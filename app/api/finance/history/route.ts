@@ -2,10 +2,10 @@ import { z } from "zod";
 
 import {
   applyHistoryLimit,
+  assertFinanceFeatureEnabled,
   assertSupportedSymbol,
   logRouteLatency,
   now,
-  parseIsoToEpochSeconds,
   resolveClientKey,
   resolveRange,
 } from "@/lib/finance/api-utils";
@@ -17,16 +17,119 @@ import { enforceRateLimit } from "@/lib/ratelimit";
 
 const MAX_CANDLES = 5_000;
 const SUPPORTED_TIMEFRAMES = ["1D"] as const;
+const DEFAULT_TIMEFRAME = SUPPORTED_TIMEFRAMES[0];
 
-/** Schema guarding the query string of the history endpoint. */
+type SupportedTimeframe = (typeof SUPPORTED_TIMEFRAMES)[number];
+
+/**
+ * Builds a Zod schema that converts optional ISO/epoch payloads into epoch
+ * seconds while surfacing consistent error messages for malformed inputs.
+ */
+const optionalEpochSchema = (field: string) =>
+  z
+    .string()
+    .optional()
+    .transform((value, ctx) => {
+      if (value === undefined) {
+        return undefined;
+      }
+
+      const trimmed = value.trim();
+
+      if (trimmed.length === 0) {
+        return undefined;
+      }
+
+      const numeric = Number(trimmed);
+
+      if (!Number.isNaN(numeric)) {
+        return Math.floor(numeric);
+      }
+
+      const parsed = Date.parse(trimmed);
+
+      if (Number.isNaN(parsed)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Field '${field}' must be a valid ISO date or epoch seconds.`,
+        });
+        return z.NEVER;
+      }
+
+      return Math.floor(parsed / 1000);
+    });
+
+/** Schema guarding and normalising the query string of the history endpoint. */
 const querySchema = z.object({
   symbol: z
     .string({ required_error: "symbol is required" })
-    .min(1, "symbol must not be empty"),
-  timeframe: z.string().optional(),
-  from: z.string().optional(),
-  to: z.string().optional(),
-  limit: z.string().optional(),
+    .transform((value) => value.trim())
+    .refine((value) => value.length > 0, "symbol must not be empty"),
+  timeframe: z
+    .string()
+    .optional()
+    .transform((value, ctx) => {
+      const normalised = (value ?? DEFAULT_TIMEFRAME).trim().toUpperCase();
+
+      if (
+        !SUPPORTED_TIMEFRAMES.includes(
+          normalised as SupportedTimeframe
+        )
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Unsupported timeframe '${value ?? ""}'. Only 1D candles are available in the offline catalogue.`,
+        });
+        return z.NEVER;
+      }
+
+      return normalised as SupportedTimeframe;
+    })
+    .default(DEFAULT_TIMEFRAME),
+  from: optionalEpochSchema("from"),
+  to: optionalEpochSchema("to"),
+  limit: z
+    .string()
+    .optional()
+    .transform((value, ctx) => {
+      if (value === undefined) {
+        return undefined;
+      }
+
+      const trimmed = value.trim();
+
+      if (trimmed.length === 0) {
+        return undefined;
+      }
+
+      if (!/^\d+$/.test(trimmed)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Parameter 'limit' must be a positive integer when provided.",
+        });
+        return z.NEVER;
+      }
+
+      const parsed = Number.parseInt(trimmed, 10);
+
+      if (parsed <= 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Parameter 'limit' must be a positive integer when provided.",
+        });
+        return z.NEVER;
+      }
+
+      if (parsed > MAX_CANDLES) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Requested limit ${parsed} exceeds the maximum of ${MAX_CANDLES} candles.`,
+        });
+        return z.NEVER;
+      }
+
+      return parsed;
+    }),
 });
 
 /**
@@ -44,6 +147,7 @@ export async function GET(request: Request): Promise<Response> {
   let toEpoch: number | undefined;
 
   try {
+    assertFinanceFeatureEnabled();
     const rateLimit = enforceRateLimit({
       key: `finance:history:${clientKey}`,
       limit: 60,
@@ -60,53 +164,13 @@ export async function GET(request: Request): Promise<Response> {
 
     const metadata = assertSupportedSymbol(parsed.data.symbol);
     symbol = metadata.symbol;
-    timeframe = (parsed.data.timeframe ?? "1D").trim().toUpperCase();
-
-    if (!SUPPORTED_TIMEFRAMES.includes(timeframe as (typeof SUPPORTED_TIMEFRAMES)[number])) {
-      throw new ChatSDKError(
-        "bad_request:api",
-        `Unsupported timeframe '${parsed.data.timeframe ?? ""}'. Only 1D candles are available in the offline catalogue.`
-      );
-    }
+    timeframe = parsed.data.timeframe;
+    fromEpoch = parsed.data.from;
+    toEpoch = parsed.data.to;
+    limit = parsed.data.limit;
 
     const series = FINANCE_SERIES[metadata.symbol];
-    fromEpoch = parsed.data.from
-      ? parseIsoToEpochSeconds(parsed.data.from, "from")
-      : undefined;
-    toEpoch = parsed.data.to
-      ? parseIsoToEpochSeconds(parsed.data.to, "to")
-      : undefined;
-
     const range = resolveRange(series, fromEpoch, toEpoch);
-
-    /**
-     * Guard against `Number.parseInt` accepting mixed inputs like "5 candles" by
-     * explicitly requiring a digit-only payload before parsing. This keeps the
-     * API feedback deterministic for both the UI and the offline tests.
-     */
-    const rawLimit = parsed.data.limit?.trim();
-    if (rawLimit && !/^\d+$/.test(rawLimit)) {
-      throw new ChatSDKError(
-        "bad_request:api",
-        "Parameter 'limit' must be a positive integer when provided."
-      );
-    }
-
-    limit = rawLimit ? Number.parseInt(rawLimit, 10) : undefined;
-
-    if (limit !== undefined && (Number.isNaN(limit) || limit <= 0)) {
-      throw new ChatSDKError(
-        "bad_request:api",
-        "Parameter 'limit' must be a positive integer when provided."
-      );
-    }
-
-    if (limit !== undefined && limit > MAX_CANDLES) {
-      throw new ChatSDKError(
-        "bad_request:api",
-        `Requested limit ${limit} exceeds the maximum of ${MAX_CANDLES} candles.`
-      );
-    }
 
     /**
      * Clamp the effective limit so large date ranges never exceed the

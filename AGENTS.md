@@ -1,318 +1,328 @@
----------- 
-Voici ta **liste d’actions exhaustive** (à toi, l’agent) fondée sur **la version actuelle du code**, **les traces Playwright** et **la boilerplate**. L’objectif est de **rendre verts tous les tests e2e**, d’**éliminer l’exception client** qui déclenche l’overlay Next.js, et d’**aligner l’auth/UX** avec le comportement attendu par les suites de tests (boilerplate vs repo).
+Remet à zero le fichier AGENTS.md et importe la liste des taches fournit ci dessous ainsi que les informations (au mot près) dans le fichier. Une fois effectué, commence l'implementation, et prend ton temps. 
+
+----------
+Voici ta **feuille de route détaillée**, agent. Elle s’appuie sur la **version actuelle du code** (archive auditée), la **boilerplate fournie**, et les **traces Playwright**. Elle vise à : (1) éliminer l’exception client qui déclenche l’overlay Next, (2) aligner le **flux d’auth** (guest vs regular) avec les tests, (3) fiabiliser les **E2E** (mocks, horloge, rate-limit), (4) durcir l’API/UI finance et les tests, (5) verrouiller le build/CI.
 
 ---
 
-## BRIEF — Objectifs & correctifs attendus
+## BRIEF — objectifs et correctifs attendus (lis avant d’agir)
 
-**Objectifs**
+* Tu **supprimes toute exception client** sur la page de chat et les artefacts finance (le fameux overlay “Application error: a client-side exception…” ne doit plus apparaître).
+* Tu **choisis et appliques** un flux d’auth **unique** (Option A: guest comme la boilerplate, ou Option B: régulier only comme ton repo) — et tu **alignes** les tests et les routes en conséquence.
+* Tu rends les **E2E déterministes, offline, stables** : interception de toutes les routes `/api/finance/*`, **horloge gelée**, **bypass rate-limit** sous `PLAYWRIGHT=true`, sélecteurs robustes.
+* Tu uniformises les **erreurs API** (code HTTP + `{ error: { code, message } }`) et les **validations** (Zod) sur toutes les routes finance.
+* Tu ajoutes un **error boundary** dédié au segment `(chat)` pour casser l’overlay Next et fournir un fallback contrôlé.
+* Tu verrouilles la **chaîne de build** (migrations idempotentes, `engines.node`, variables CI, artefacts de tests).
 
-* Tu stabilises le **rendu client** dans le chat et les artefacts finance pour **supprimer l’overlay Next** (“Application error: a client-side exception…”).
-* Tu **alignes le flux d’authentification** (guest vs regular) entre code et tests : **choisir** un mode et **rendre les tests cohérents**.
-* Tu garantis des tests **offline**, **déterministes**, **non-flaky** : mocks réseau, horloge gelée, rate-limit bypass en e2e.
-* Tu ajoutes une **protection UX** : error boundary au segment `(chat)` pour éviter que la page entière tombe à la moindre erreur.
+**Règles tests & build à respecter :**
 
-**Correctifs majeurs (synthèse)**
-
-1. **Exception client** au rendu du chat/artefacts → durcir null-checks + cycle de vie du chart + safe data mapping + error boundary `(chat)`.
-2. **Auth divergente** vs boilerplate → **Option A** (restaurer guest comme la boilerplate) **ou** **Option B** (conserver regular et adapter tests/setup & routes).
-3. **E2E** → garantir l’état d’auth connu, les mocks `/api/finance/*`, et un **bypass rate-limit** en e2e.
-4. **Docs & disclaimers** → clarifier l’absence de conseil financier.
-
-**Règles tests & build (à respecter)**
-
-* **Node ≥ 20**, `pnpm` stable, `PLAYWRIGHT=true` en CI e2e, `FEATURE_FINANCE=true` pour activer le scope finance.
+* Node **≥ 20.10**, `pnpm` cohérent (`packageManager` renseigné).
+* CI: `FEATURE_FINANCE=true`, `PLAYWRIGHT=true`, migrations `db:migrate` + `db:seed` **avant** `build`, puis unitaires, puis e2e.
 * **Aucun appel réseau externe** en tests (tout mocké).
-* **Horloge gelée** en e2e finance pour assurer des assertions datées stables.
-* **Migrations & seed** avant build/tests; migrations **idempotentes**.
-* **Rate-limit** **bypass** en e2e pour éviter les 429.
-* **CI** : dev server Playwright prêt, healthchecks stables, coverage rapporté.
+* E2E finance : **horloge gelée**, données **mock** stables, pas de flaky.
+* **Rate-limit bypass** actif en e2e uniquement.
+* **Migrations idempotentes**; seeds cohérents avec les mocks.
 
 ---
 
-## TO-DO LIST À COCHER — fichier par fichier (avec sous-étapes)
+## LISTE DE TÂCHES À COCHER — fichier par fichier, avec sous-étapes
 
-### 1) Supprimer l’exception client (overlay Next) sur le chat/finance
+### 1) Éliminer l’exception client (overlay Next) et sécuriser le rendu
 
-* [x] **Créer un error boundary pour le segment chat**
+[x] `app/(chat)/error.tsx` — **Ajouter un error boundary** pour le segment chat
 
-  * [x] **`app/(chat)/error.tsx`**
+* [x] Rendre un fallback propre (titre, message, bouton “Réessayer”, lien support si besoin).
+* [x] Logguer l’error (`console.error`) et exposer une trace minimale côté dev.
+* [x] **Test unitaire** : monter un enfant qui `throw` → vérifier la présence du fallback et l’absence d’overlay Next.
 
-    * [x] Afficher un fallback lisible (titre, message générique, bouton *“Réessayer”*).
-    * [x] Logguer `error` (console + `reportError` si présent).
-    * [x] **Tests** : ajouter un test unitaire qui monte le boundary avec un enfant qui jette une erreur et vérifie le fallback.
+[x] `components/finance/finance-chart-artifact.tsx` — **Verrouiller cycle de vie & interactions**
 
-* [x] **Rendre le composant Chart robuste au cycle de vie**
+* [x] Créer l’instance `createChart` **une seule fois** (guard via `useRef`, vérifier `containerRef.current` non nul).
+* [x] Nettoyer en `useEffect` cleanup : **unsubscribe** `subscribeClick` / `subscribeCrosshairMove`, **removeSeries**, **chart.remove()**.
+* [x] **Null-checks** systématiques sur les données OHLCV et overlays (ne jamais accéder à un champ d’une bougie si la série est vide).
+* [x] Si `ohlcv.length === 0` → afficher un **empty state** et **ne pas** initialiser les séries.
+* [x] **Ne pas accéder** à des refs de série si l’artefact est démonté (guard via `mountedRef`).
+* [x] **Tests unitaires** :
 
-  * [x] **`components/finance/finance-chart-artifact.tsx`**
+  * [x] Rendu avec série vide → pas d’exception, empty state visible.
+  * [x] Simuler clic/hover (mocker l’API du chart) → pas d’exception, callback appelé.
+  * [x] Montage/démontage successifs → pas de double init ni fuite d’écouteurs.
 
-    * [x] Encadrer la création du chart : **ne créer qu’une fois** quand le conteneur est présent et visible.
+[x] `components/messages.tsx` — **Rendu défensif**
 
-      * [x] `useRef` pour stocker l’instance.
-      * [x] Ignorer les re-montages inutiles (guard si déjà créé).
-    * [x] **Null-checks** forts sur les données OHLCV et overlays avant tout accès (tooltip/détails).
-    * [x] Unregister proprement les subscriptions `subscribeClick` / `subscribeCrosshairMove` au `useEffect` cleanup.
-    * [x] Protéger contre les séries vides : si `ohlcv.length === 0`, afficher un *empty state* et **ne pas** initialiser les séries.
-    * [x] **Tests unitaires** :
+* [x] Utiliser `(messages ?? [])` et `(artifacts ?? [])`.
+* [x] Fallback lisible pour artefacts inconnus/malformés (pas de `throw`).
+* [x] **Tests unitaires** : messages vides, artefacts malformés → rendu sans crash.
 
-      * [x] snapshot rendu vide (pas d’ohlcv).
-      * [x] simulation clic/hover avec data minimale (mock chart) → **aucune exception**.
-      * [x] montage/démontage consécutifs → pas de double initialisation.
+[x] `components/chat.tsx` — **Sécuriser zones fragiles** (lignes repérées dans les traces)
 
-* [x] **Messages & Chat : durcir le rendu défensif**
+* [x] Guards sur stores/contexts pendant le streaming (pas d’accès avant init).
+* [x] Aucune hypothèse de présence du DOM avant `useEffect`.
+* [x] **Tests unitaires** : montage minimal + envoi d’un message → aucun crash, rendu stable.
 
-  * [x] **`components/messages.tsx`**
+[x] `components/ArtifactRenderer.tsx` — **Fallback inconnu**
 
-    * [x] Toujours gérer `messages` potentiellement `undefined`/vide (`(messages ?? []).map(...)`).
-    * [x] Pour chaque message, vérifier `artifacts` avant de les rendre.
-    * [x] Sur artefact inconnu/malfomé → fallback visuel (et **pas** de `throw`).
-    * [x] **Tests** : unitaires sur rendu avec messages vides/malfomés.
-  * [x] **`components/chat.tsx`**
-
-    * [x] Vérifier les zones susceptibles de throw (lignes ~210 dans traces) :
-
-      * [x] Guards autour des accès context/state, surtout pendant streaming.
-      * [x] Pas d’accès direct à des refs non montées.
-    * [x] **Tests** : montez `Chat` avec store minimal/mock; envoyez un message → pas d’exception.
+* [x] Cas `default` pour type artefact inconnu : message + log (sans `throw`).
+* [x] **Test snapshot** d’un artefact inconnu.
 
 ---
 
-### 2) Aligner le flux d’auth (boilerplate vs repo) — **choisir A ou B**
+### 2) Aligner l’auth avec les tests — **choisir et appliquer une seule option**
 
-> Tu dois **choisir une option** et l’appliquer **partout** (code + tests). Mélanger A et B casse les suites.
+**Option A – Restaurer le flux guest (boilerplate)** *(Non retenue : le flux régulier (Option B) reste la référence. Ne pas cocher sans demande explicite.)*
 
-#### Option A — **Revenir au flux invité** (conforme boilerplate)
+> _Note_ : les cases ci-dessous sont conservées pour mémoire et devront rester décochées tant que l’option B demeure active.
 
-> **Non retenu.** Nous avons confirmé l’option B (utilisateur "regular" uniquement) comme flux de référence. Les items ci-dessous
-> restent documentés pour mémoire mais ne sont **pas** à mettre en œuvre tant que l’option B est active.
+[ ] `app/(chat)/page.tsx` *(N/A — Option B active)*
 
-* ~~`app/(chat)/page.tsx` : rediriger les sessions absentes vers `/api/auth/guest`~~
-* ~~`app/(chat)/api/chat/route.ts` : autoriser les invités ou contour PLAYWRIGHT~~
-* ~~`app/(auth)/api/auth/guest/route.ts` : rendre `redirectUrl` optionnel~~
-* ~~`tests/setup/auth.setup.ts` : basculer la préparation Playwright sur le parcours invité~~
-* ~~E2E : aligner les assertions sur un compte invité~~
+* [ ] Si pas de session → `redirect("/api/auth/guest")` (supprimer redirection `/login`). *(N/A — Option B active)*
+  [ ] `app/(chat)/api/chat/route.ts` *(N/A — Option B active)*
+* [ ] Autoriser les *guests* (supprimer le check `session.user.type !== "regular"` ou le neutraliser quand `PLAYWRIGHT=true`). *(N/A — Option B active)*
+  [ ] `app/(auth)/api/auth/guest/route.ts` *(N/A — Option B active)*
+* [ ] Rendre `redirectUrl` **optionnel** (défaut vers `/chat` ou `/`). *(N/A — Option B active)*
+  [ ] `tests/setup/auth.setup.ts` *(N/A — Option B active)*
+* [ ] Ajuster pour utiliser le flux **guest** (ne pas forcer un register si inutile). *(N/A — Option B active)*
+* [ ] **E2E** : s’assurer que les tests naviguent directement au chat avec un état invité prêt. *(N/A — Option B active)*
 
-#### Option B — **Conserver le flux “regular only”** (repo actuel)
+**Option B – Conserver “regular only” (repo actuel)**
+[x] `app/(chat)/page.tsx`
 
-* [x] **`app/(chat)/page.tsx`**
+* [x] Conserver redirection `/login` pour non-regular.
+  [x] `app/(chat)/api/chat/route.ts`
+* [x] Conserver `if (session.user.type !== "regular")` mais **retourner** un JSON d’erreur formaté (403) sans `throw`.
+  [x] `tests/setup/auth.setup.ts`
+* [x] Vérifier que la **création d’un utilisateur** (register) fonctionne et que l’**auth state** est sauvé (storage state) avant les suites.
+* [x] Adapter les suites E2E héritées de la boilerplate qui présumaient l’invité (remplacer parcours par regular).
+  [x] `app/(auth)/api/auth/guest/route.ts`
+* [x] Si encore utilisé par un test, exiger `redirectUrl` et l’indiquer dans les utilitaires de test.
 
-  * [x] Garder la redirection vers `/login` pour les non-regular.
-* [x] **`app/(chat)/api/chat/route.ts`**
-
-  * [x] Conserver la vérification `user.type === "regular"`.
-* [x] **`tests/setup/auth.setup.ts`**
-
-  * [x] **Garantir** qu’en setup e2e on **enregistre** un user **regular** et on stocke l’auth state (c’est déjà le cas dans ton repo, revalider les sélecteurs de formulaire / URLs).
-  * [x] Vérifier que **toutes** les suites e2e qui naviguent vers `/chat` sont précédées de ce login (via storage state Playwright).
-* [x] **Routes “guest” héritées des tests boilerplate**
-
-  * [x] Localiser les tests qui invoquent `/api/auth/guest` et les **mettre à jour** pour **regular** ou ajouter `redirectUrl` obligatoire.
-
-> **Recommandation** : Option **B** (regular only) est plus sûre pour le produit; l’**alignement des tests** est un effort ponctuel mais durable.
+> **Important** : choisis **A** ou **B** et harmonise tout (pages, route chat, setup e2e). Mélanger les deux casse les E2E.
 
 ---
 
-### 3) Playwright — fiabiliser l’environnement de test
+### 3) Rate-limit et environnement e2e
 
-* [x] **Rate-limit bypass** en e2e
+[x] `lib/ratelimit.ts` — **Bypass e2e**
 
-  * [x] **`lib/ratelimit.ts`**
+* [x] Si `process.env.PLAYWRIGHT === 'true'` → neutraliser ou assouplir le quota (ex. x100) pour éviter les 429.
+* [x] **Tests unit** : vérifier que hors e2e le rate-limit reste actif.
 
-    * [x] Si `process.env.PLAYWRIGHT === 'true'` → **désactiver** le throttling ou le multiplier par 100.
-    * [x] **Tests** (routes unit) : s’assurer que le rate-limit reste actif hors e2e.
+[x] `playwright.config.ts` — **Stabilité**
 
-* [x] **Mocks réseau** (déjà présents mais durcir)
-
-  * [x] **`tests/e2e/finance.spec.ts`**
-
-    * [x] Confirmer l’interception de **toutes** les routes `/api/finance/*` avec fixtures stables (mêmes champs/type que l’UI consomme).
-    * [x] **Geler l’horloge** (déjà présent) et éviter tout `Date.now()` non mocké côté composant (si nécessaire passer par un util injecté).
-  * [x] **`tests/pages/chat.ts`**
-
-    * [x] S’assurer que les actions (send/edit/vote/upload) n’attendent **aucune** ressource externe.
-
-* [x] **Stabiliser les sélecteurs**
-
-  * [x] Vérifier/ajouter `data-testid` pour les éléments visés en e2e :
-
-    * [x] `finance-chart-artifact`, `finance-chart-details`, toggles SMA/EMA, boutons de re-test backtest.
-    * [x] Si un overlay/skeleton passe par là, attendre un **état stable** (par ex. `await expect(locator).toBeVisible()` après disparition d’un spinner).
-  * [x] **`components/finance/*`**
-
-    * [x] Vérifier présence des `data-testid` déjà utilisés par `tests/e2e/finance.spec.ts` (ils existent → réutiliser tel quel).
-  * [x] **`tests/e2e/accessibility.spec.ts`**
-
-    * [x] Adapter le test pour **ignorer** les overlays de debug s’ils s’affichent encore (mais normalement l’error boundary évite l’overlay Next).
-
-* [x] **Dev server & overlay**
-
-  * [x] Dans `playwright.config.ts`, conserver le dev server; l’overlay Next ne **doit plus apparaître** une fois l’exception corrigée.
-  * [x] **Ne pas masquer** l’overlay; le corriger à la source.
+* [x] Conserver le dev server, mais ajouter un **health check** (ex. GET `/api/health` ou `/` avec 200) avant d’exécuter les specs.
+* [x] S’assurer que `process.env.PLAYWRIGHT` est injecté (config CI).
 
 ---
 
-### 4) API Finance & artefacts — finitions de robustesse
+### 4) API finance — validations, limites, erreurs
 
-* [x] **Erreurs unifiées**
+[x] `app/api/finance/history/route.ts`
 
-* [x] **`app/api/finance/*/route.ts`**
+* [x] **Limiter** `limit` (ex. max 5000 bougies).
+* [x] Normaliser `from`/`to` (fuseaux, ordre, bornes).
+* [x] Refuser `timeframe` non supportés (enum stricte).
+* [x] Format d’erreur uniformisé `{ error: { code, message } }` + status (400/422).
+* [x] **Tests unit** (`tests/unit/routes/finance.history.spec.ts`) : cas invalides + cas limites (0 donnée, très court).
 
-    * [x] Toujours retourner `{ error: { code, message } }` + HTTP code cohérent.
-    * [x] Ajouter tests de routes pour codes d’erreur (invalid input, out-of-range).
-* [x] **Limites & validations**
+[x] `app/api/finance/backtest/route.ts`
 
-* [x] `history/route.ts` : cap `limit` (ex. 5k), normaliser `from/to` (fuseau), refuser `timeframe` non supporté.
-  * [x] **Tests unit** : inputs invalides → 400 avec message lisible.
-* [x] **Artefacts cohérents**
+* [x] Vérifier schéma Zod (instrument, timeframe, période) et borne des paramètres stratégie.
+* [x] Limiter la durée max/backfills.
+* [x] **Tests unit** (`tests/unit/routes/finance.backtest.spec.ts`) : invalides (param manquant, période inversée), validés (retour métriques attendues), erreurs formatées.
 
-  * [x] **`components/ArtifactRenderer.tsx`**
+[x] `app/api/finance/fundamentals/route.ts`, `news/route.ts`, `quote/route.ts`, `screen/route.ts`
 
-    * [x] Fallback si `payload.type` inconnu (message + log, pas d’exception).
-  * [x] **`components/finance/backtest-report-artifact.tsx`**
+* [x] Zod strict (symbol, pagination).
+* [x] **Erreurs** uniformes.
+* [x] **Tests unit** par route (invalides + cas happy path avec mocks).
 
-    * [x] A11y tableau trades (pagination, `aria-*`).
-    * [x] Si `metrics` manquants → placeholder visible (pas de throw).
+[x] `lib/finance/data-adapter.ts`
 
----
-
-### 5) Backtest & indicateurs — cas limites
-
-* [x] **`lib/finance/backtest/engine.ts`**
-
-  * [x] Gérer **zéro trade** proprement (`winRate=0`, `profitFactor=0`, `maxDrawdown` calculé sur `equityCurve` plat).
-  * [x] Paramétrer **fees** et **slippage** (déjà là) mais tester explicitement : fees élevés, slippage > 0.
-* [x] **`lib/finance/indicators.ts`**
-
-  * [x] **RSI/EMA** : bornes strictes, séries constantes, séries courtes (< window).
-* [x] **`lib/finance/patterns.ts`**
-
-  * [x] Non-détection sur bruit aléatoire; détection stable sur fixtures connues (hammer/engulfing).
-* [x] **Tests unit** correspondants (complément à ceux déjà présents).
+* [x] Garantir la **forme** des données (float, timestamps num) et une **conversion centralisée**.
+* [x] **Tests unit** : coercions (string→number), valeurs manquantes.
 
 ---
 
-### 6) Auth — cohérence bout-en-bout selon l’option choisie
+### 5) UI finance — interactions & a11y
 
-* [ ] **Option A (guest)**
+[x] `components/finance/finance-chart-artifact.tsx`
 
-  * [ ] **`app/(auth)/api/auth/guest/route.ts`** : rendre `redirectUrl` optionnel; défaut `/chat`.
-  * [ ] **`tests/setup/auth.setup.ts`** : ajuster pour **ne pas** surcharger en *register* si guest suffit.
-* [x] **Option B (regular)**
+* [x] Confirmer la présence des `data-testid` déjà utilisés par les E2E :
 
-  * [x] **`tests/setup/auth.setup.ts`** : valider que le **formulaire register/login** correspond aux sélecteurs; attendre la redirection effective vers `/chat`.
-  * [x] **Routes** : toute route e2e qui suppose guest doit être modifiée pour session regular.
-  * [x] **`app/(chat)/api/chat/route.ts`** : renvoyer **403** formaté et gérer côté UI (toast “session requise”), **sans throw**.
+  * [x] `data-testid="finance-chart-artifact"`
+  * [x] `data-testid="finance-chart-details"`
+* [x] Ajouter `aria-live="polite"` ou un équivalent pour les tooltips/détails si pertinent.
+* [x] **Tests unitaires** : vérifier que les toggles SMA/EMA modifient bien l’état des séries (mock chart).
 
----
+[x] `components/finance/backtest-report-artifact.tsx`
 
-### 7) Documentation & disclaimers
+* [x] Table: **a11y** (roles, headers, pagination), unités explicites.
+* [x] Bouton “Re-tester” → **form** avec validation (params stratégie, période).
+* [x] **Tests unitaires** : soumissions valides/invalides; rendu des métriques (CAGR, maxDrawdown, winRate, Sharpe, profitFactor, totalReturn).
 
-* [x] **`README.md`**
+[x] `components/finance/fundamentals-card.tsx`, `components/finance/news-list.tsx`
 
-  * [x] Ajouter **disclaimer** : “Ce projet n’est **pas** un conseil financier”.
-  * [x] Documenter : mocks e2e, variables `.env`, usage `PLAYWRIGHT=true`, `FEATURE_FINANCE=true`.
-  * [x] Section **“Résolution des tests e2e”** : expliquer l’option auth retenue (A ou B) et comment les tests s’y appuient.
-* [x] **`docs/finance/api.md`**
-
-  * [x] Mettre à jour exemples d’artefacts (clés métriques **exactes** : `maxDrawdown`, pas `maxDD`).
-  * [x] Préciser limites/pagination et shape d’erreurs.
+* [x] Robuste à la donnée partielle (champs manquants).
+* [x] **Tests unit** : données min/vides → rendu lisible, aucun crash.
 
 ---
 
-### 8) CI — durcissements
+### 6) Moteur de backtest & indicateurs — cas limites
 
-* [x] **`.github/workflows/ci.yml`**
-  * [x] Exporter `PLAYWRIGHT: "true"`, `FEATURE_FINANCE: "true"`.
-  * [x] Ordre : `db:migrate` → `db:seed` → `build` → `test` (unit) → `e2e`.
-  * [x] Publier **coverage** vitest + rapport Playwright.
-  * [x] Timeout ample pour le dev server (démarrage Next + tests e2e).
-* [x] **`package.json`**
+[x] `lib/finance/backtest/engine.ts`
 
-  * [x] Ajouter `"engines": { "node": ">=20.10" }` pour verrouiller la version Node en CI.
+* [x] **Zéro trade** → `winRate=0`, `profitFactor=0`, `maxDrawdown` calculé sur courbe plate ; pas de division par 0.
+* [x] **Fees**/slippage : tester un cas fees très élevés, slippage > 0.
+* [x] **Tests unit** : séries trop courtes (MA slow > n bougies), période vide.
 
----
+[x] `lib/finance/indicators.ts`
 
-### 9) Nettoyage & garde-fous
+* [x] **EMA/RSI** : bornes, séries constantes, séries plus courtes que la fenêtre.
+* [x] **Tests unit** correspondants.
 
-* [x] **Logs** : s’assurer que les logs de routes/API n’exposent **aucun secret**.
-* [x] **Feature flags** : `FEATURE_FINANCE` effectivement testé dans les composants qui conditionnent l’affichage.
-* [x] **Types** : éviter `any` dans les payloads d’artefacts; conserver Zod pour I/O et inférer les types TS.
+[x] `lib/finance/patterns.ts`
 
----
-
-## Contrôles de validation (post-correctifs)
-
-* [ ] **Local** : lancer `pnpm dev`, naviguer `/chat`, envoyer “Montre BTCUSD 1D avec SMA(50/200)” → **aucun overlay**, chart interactif OK (clic/hover).
-* [x] **Unit** : `pnpm test` verts, coverage stable.
-* [ ] **E2E** :
-
-* [x] `tests/e2e/finance.spec.ts` → **vert** (4 scénarios).
-  * [x] `tests/e2e/accessibility.spec.ts` → **vert** (pas d’overlay).
-* [x] Traces Playwright : absence d’erreur “Application error: a client-side exception…”.
-* [ ] **CI** : pipeline complet vert sur la branche.
+* [x] Non-détection sur bruit aléatoire; détection stable sur fixtures connus.
+* [x] **Tests unit**.
 
 ---
 
-## Notes utiles tirées des traces
+### 7) E2E — finance + chat (stabilisation et complétion)
 
-* Erreurs **répétées** : `Application error: a client-side exception...` dans `error-context.md` pour des cas Finance et Chat → priorité à la **robustesse du rendu** (error boundary + null-checks + cycle de vie chart).
-* Échecs Chat multipliés (send/edit/vote/upload/suggestions…) probablement dus à l’**auth** (redirect `/login` ou 403 `forbidden:chat`) → **choisir A ou B** et **aligner** routes + tests.
-* Pas d’indice d’échec réseau externe en finance (les tests interceptent déjà) → l’overlay est bien **l’origine** des échecs finance.
-* Le scénario principal du chat passe désormais avec le helper `waitForChatApiResponse` basé sur les événements `response`/`requestfailed`; il reste à exécuter la suite complète (votes, upload, stop) pour valider l’ensemble du fichier `chat.test.ts`.
+[x] `tests/e2e/finance.spec.ts`
+
+* [x] Intercepter **toutes** les routes `/api/finance/*` (history/quote/fundamentals/news/backtest/screen) avec fixtures **stables**.
+* [x] **Geler l’horloge** au démarrage (date fixe).
+* [x] Scénarios :
+
+  * [x] Chart BTCUSD 1D + SMA(50/200) → clic sur bougie → **détails visibles**.
+  * [x] Toggle overlay SMA/EMA → **assert** visible/masqué.
+  * [x] Backtest SMA 50/200 AAPL sur période → vérifier métriques et `equityCurve` + `trades`.
+  * [x] Fundamentals + 3 news NVDA → titres + dates visibles.
+  * [x] Préférences finance (désactiver auto-news) → comportement ajusté.
+
+[x] `tests/pages/chat.ts`
+
+* [x] Ajuster pour **naviguer** en respectant l’option d’auth choisie (A: guest, B: regular state).
+* [x] S’assurer que **tous les sélecteurs** existent (bouton envoyer, input, etc.).
+* [x] **Aucune dépendance externe** (upload, suggestions) sans mock clair.
+
+[x] `tests/setup/auth.setup.ts`
+
+* [x] Si Option B : valider les sélecteurs du formulaire *register/login* et la redirection finale vers `/chat`.
+* [x] Sauvegarder l’**auth state** et la réutiliser dans les suites.
 
 ---
 
-### Fin de transmission, agent.
+### 8) Documentation
 
-Tu as une carte précise, pièce par pièce. Commence par **l’error boundary** et les **null-checks chart/messages**, enchaîne avec **l’option d’auth** (A ou B), puis **stabilise les e2e** (bypass rate-limit + mocks + selectors). Quand tu auras terminé ces blocs, il ne restera que des finitions de confort.
+[x] `README.md`
+
+* [x] Ajouter le **disclaimer** (“Pas un conseil financier”).
+* [x] Documenter : `.env` requis, `FEATURE_FINANCE`, `PLAYWRIGHT`, mocks e2e, gel de l’horloge, choix d’auth (A ou B).
+* [x] Ajouter la section “**Résolution E2E**” : étapes fréquentes si un test échoue (vérifier overlay, auth state, mocks).
+
+[x] `docs/finance/api.md`
+
+* [x] Exemples à jour avec **clés métriques exactes** (`maxDrawdown`, pas `maxDD`).
+* [x] Spécifier limites/pagination, erreurs `{ error: { code, message } }`.
+
+---
+
+### 9) CI / Build
+
+[x] `.github/workflows/ci.yml`
+
+* [x] Exporter `FEATURE_FINANCE: "true"`, `PLAYWRIGHT: "true"`.
+* [x] Ordre : `db:migrate` → `db:seed` → `build` → `test` (unit) → `e2e`.
+* [x] Ajouter **health check** du dev server avant e2e.
+* [x] Publier **coverage** vitest + rapport Playwright (upload artefacts).
+
+[x] `package.json`
+
+* [x] Renseigner `"engines": { "node": ">=20.10" }`.
+* [x] Vérifier `packageManager` (ex. `pnpm@X.Y.Z`).
+
+---
+
+### 10) Base de données & seeds
+
+[x] `lib/db/schema.ts`
+
+* [x] Index : `BacktestRun(assetId, timeframe, periodStart)`, unique `(symbol, exchange)` dans `Asset`.
+* [x] FK + `onDelete` cohérentes (`Strategy` → `StrategyVersion` → `BacktestRun`).
+
+[x] `lib/db/migrations/*.sql`
+
+* [x] **Idempotence** : plusieurs exécutions ne doivent pas échouer.
+* [x] Cohérence avec le schéma actuel.
+
+[x] `lib/db/seed.ts`
+
+* [x] Jeux de données (`AAPL`, `NVDA`, `BTCUSD`, `EURUSD`…) alignés sur les **mocks** e2e.
+
+---
+
+### 11) Divers qualité
+
+[x] Types & Zod
+
+* [x] Remonter les types via `z.infer` là où possible, éviter les `any`.
+* [x] Types d’artefacts stricts (discriminant `type`).
+
+[x] Logs
+
+* [x] Pas de secrets dans les logs; niveaux pertinents (info/warn/error).
+* [x] Logs API sans PII.
+
+[x] Feature flag
+
+* [x] `FEATURE_FINANCE` réellement respecté pour l’affichage des modules finance.
+
+---
+
+## Contrôles à faire avant de pousser
+
+[ ] Local : lancer `pnpm dev`, aller sur `/chat`, envoyer “Montre BTCUSD 1D avec SMA(50/200)” → aucun overlay, chart interactif OK.
+[x] `pnpm test` → unitaires **verts**.
+[ ] `pnpm e2e` → finance & accessibilité **verts** ; traces sans “Application error: a client-side exception…”. *(Tentative locale 2025-10-07 : dépendances Playwright installées, mais échec persistant — `AggregateError ENETUNREACH` lors des appels `/api/chat` hermétiques, à investiguer. Nouvelle exécution après durcissement de `HERMETIC_CHAT_PROVIDER` toujours en échec (11 tests) : `/chat` ne se charge pas avant le timeout 240 s, consulter `tests/.logs/next-dev.log` pour le bootstrap Turbopack >200 s. Vérification 2025-10-07 (post correctif `next dev`) : le serveur webpack démarre bien; exécution interrompue manuellement avant la navigation pour éviter un run complet tant que l'instabilité réseau n'est pas corrigée. Tentatives 2025-10-07 post-correctif `/api/tests/auth/register` : warmup réussi mais la phase `ensureLoggedIn` échoue encore (timeout 30 s sur la redirection `/login`→`/chat`).)*
+[ ] CI sur branche → pipeline **vert** bout-à-bout.
+
+---
+
+### Rappel intention produit
+
+Le but n’est pas d’“éteindre les tests” mais d’**élever la résilience** : error boundary côté `(chat)`, rendu défensif, auth claire et documentée, API cohérente, tests stables. Une fois ces briques en place, les évolutions (ajout de nouveaux artefacts finance, nouvelles stratégies de backtest) se branchent sans re-casser l’ensemble.
 
 ---
 
 ## Historique des actions
 
-- **2025-10-02** — Création de l’error boundary du segment `(chat)`, renforcement du composant `finance-chart-artifact` (guards, empty state, nettoyages, tests) et durcissement de `components/messages` avec fallback et suite de tests dédiée.
-- **2025-10-03** — Durcissement de `components/chat.tsx` (guards streaming, normalisation des messages, sécurisation history) avec import React et nettoyage montage, ajout des tests unitaires `chat.spec.tsx` et compatibilité `chat-composer-context` pour le rendu de test.
-- **2025-10-04** — Alignement sur l’option d’auth "regular only" (redirections middleware/share, setup Playwright ajusté, tests e2e share revus) et ajout du bypass rate-limit conditionnel à PLAYWRIGHT avec sa batterie de tests unitaires.
-- **2025-10-05** — Durcissement du composant `finance/backtest-report-artifact` (fallback metrics, pagination aria-live/controls, gardes runtime) et extension de la suite de tests `backtest-report-artifact.spec.tsx` pour couvrir les cas dégénérés.
-- **2025-10-06** — Factorisation du contrôle d’accès chat via `lib/chat/authorization`, alignement des réponses 401/403 dans `app/(chat)/api/chat/route.ts`, ajout des tests unitaires associés, mise à jour du README (section e2e regular) et rafraîchissement complet de `docs/finance/api.md` pour refléter les payloads actuels.
-- **2025-10-07** — Validation stricte des paramètres `limit` sur `finance/history` et `finance/news`, enrichissement des tests de routes (bornes, formats invalides, ordres de dates) et durcissement de la suite backtest pour couvrir timeframes et fenêtres incorrectes.
-- **2025-10-08** — Normalisation des métriques du moteur de backtest pour les scénarios sans trade, clamp RSI pour éviter les dépassements, couverture unitaire dédiée (moteur, indicateurs, patterns) garantissant slippage/commissions et détection stable des chandeliers.
-- **2025-10-09** — Stabilisation des e2e finance (journalisation des interceptions, vérification des fixtures via fetch en contexte navigateur), ajout des `data-testid` manquants (overlays, retest) et suppression de l’attente réseau dans les helpers Playwright.
-- **2025-10-10** — Ajout d’un module `feature-flags` partagé, bridage des composants UI (suggested actions, renderer, settings, page) quand `FEATURE_FINANCE` est désactivé, exposition du flag côté client et couverture unitaire associée.
-- **2025-10-11** — Uniformisation des réponses d’erreur finance, renforcement des tests de routes (news, screen, backtest, préférences) et ajout de suites dédiées pour fundamentals/quote afin de valider le format `{ error: { code, message } }`.
-- **2025-10-12** — Synchronisation des flags finance côté CI/Playwright, réordonnancement des artefacts de couverture après l’e2e et extension du timeout du dev server pour absorber les builds froids.
-- **2025-10-13** — Typage strict des artefacts et métadonnées (remplacement des `any`, wrappers SWR sûrs), stabilisation de `DocumentPreview` avec mocks ciblés et ajout d’une suite dédiée garantissant les scénarios de rendu simulés.
-- **2025-10-14** — Ajout d’un module de logging structuré avec masquage des secrets, migration des routes finance/chat et scripts DB vers ce helper, et couverture unitaire dédiée pour documenter la redaction.
-- **2025-10-15** — Assouplissement du warmup Playwright pour tolérer les redirections lentes après inscription et correction du logging `chatId` dans `api/chat` pour éviter les exceptions en e2e (les suites e2e complètes restent à stabiliser).
-- **2025-10-16** — Corrigé la régression `assertRegularChatUser` manquante dans `api/chat`, ajouté une suite unitaire `chat.delete.spec.ts` (mocks hermétiques + vérif des réponses 200/403) et relancé `pnpm test` (vert).
-- **2025-10-17** — Durci le helper Playwright `isGenerationComplete` (détection des toasts d’erreur et délai de 60s) afin de fiabiliser les parcours finance/chaîne et relancé `pnpm test` (vert).
-- **2025-10-18** — Ajout d’une attente explicite sur les réponses `/api/chat` côté helper Playwright afin de surface les statuts HTTP avant le streaming, mise à jour des actions qui émettent un message (input libre, suggestions, édition) et relance de `pnpm test` (vert).
-- **2025-10-19** — Étendu le helper Playwright pour reconnaître les variantes `/api/chat` avec query/stream, ajouté la suite unitaire `tests/unit/pages/chat-page.spec.ts` pour documenter le comportement (succès et erreurs) et relancé `pnpm test`.
-- **2025-10-20** — Harmonisé la détection Playwright de `shouldFetchTokenlensCatalog` via `isPlaywrightLikeEnvironment`, ajouté la suite unitaire `tests/unit/lib/tokenlens.spec.ts` et archivé l’option invité (Option A) comme non retenue.
-- **2025-10-21** — Ajouté `resolveRequestGeolocation` pour éviter les accès réseau du chat en environnement Playwright, remplacé l’appel direct à `geolocation` dans l’API et couvert le helper via `tests/unit/lib/geolocation.spec.ts`.
-- **2025-10-22** — Propagé `NEXT_PUBLIC_PLAYWRIGHT` au serveur Playwright pour aligner le bundle client sur le mode hermétique et ajouté un test TokenLens couvrant ce flag.
-- **2025-10-23** — Résolu l’erreur « @tanstack/react-query introuvable » en ajoutant le package à `transpilePackages`, réinstallé les dépendances Playwright/Chromium et relancé les tests e2e ciblés (toujours instables, investigations en cours).
-- **2025-10-24** — Préparé la capture d’instantanés assistant côté helper Playwright (`tests/pages/chat.ts`) pour les envois, suggestions et éditions, ajouté la couverture associée (`tests/unit/pages/chat-page.spec.ts`) et relancé `pnpm test` (vert). Le run ciblé `chat.test.ts` reste bloqué sur `expect.poll` malgré les nouveaux gardes (`fetch failed ENETUNREACH`).
-- **2025-10-25** — Externalisé `streamChatResponse` dans `lib/ai/stream-chat-response`, corrigé l’exécuteur `createUIMessageStream` pour rester `async`, hermétisé la suite `chat.post.fallback.spec.ts` avec des mocks légers et relancé `pnpm test` (vert).
-- **2025-10-26** — Enveloppé les interactions clavier du test `finance-chart-artifact` dans `React.act` pour supprimer les avertissements persistants, documenté la raison directement dans le test et relancé `pnpm test` (vert).
-- **2025-10-27** — Refactorisé `tests/pages/chat.ts` pour attendre les événements réseau plutôt que la fermeture du flux SSE, mis à jour `tests/unit/pages/chat-page.spec.ts` en conséquence, relancé `pnpm test` (vert) et confirmé que `chat.test.ts:12` passe désormais sans timeout.
-- **2025-10-28** — Ajusté la navigation `ChatPage.createNewChat` pour n'attendre que `domcontentloaded` (évite les blocages du dev server Turbopack) et ajouté le test unitaire documentant ce comportement, `pnpm test` vert.
-- **2025-10-29** — Renforcé `waitForChatApiResponse` pour réutiliser le snapshot assistant pendant le fallback UI, ajouté une attente explicite sur les changements DOM (stop button, artefacts, spinners) et couvert ces scénarios via `tests/unit/pages/chat-page.spec.ts`. `pnpm test` documente les nouvelles protections.
-- **2025-10-30** — Complété le flux hermétique en ajoutant un fallback structuré dans `getResponseChunksByPrompt` (évite les timeouts lorsque le prompt est inconnu) et créé la suite `tests/unit/prompts/utils.spec.ts`. `pnpm test` + `pnpm exec playwright test tests/e2e/chat.test.ts:12` verts.
-- **2025-10-31** — Allongé le délai de visibilité du bouton d'arrêt dans `MultimodalInput` (750 ms) pour fiabiliser les interactions e2e "stop" et ajouté la couverture unitaire `multimodal-input.spec.tsx` basée sur des timers factices.
-- **2025-11-01** — Sérialisé la suite Playwright `chat.test.ts`, renforcé `ChatPage.isVoteComplete`/`waitForVoteRequest` (grâce au suivi `pendingVoteRequest` et au fallback toast optionnel) avec une nouvelle batterie de tests unitaires, et confirmé que `pnpm exec playwright test tests/e2e/chat.test.ts --project=e2e --retries=0 --reporter=list` passe avec 14 scénarios actifs (2 restants marqués skipped).
-- **2025-11-02** — Synchronisé le mock de préférences finance avec l’API réelle pour refléter les bascules Playwright côté serveur, attendu la réactivation via l’UI pour garder les timestamps déterministes, et confirmé que `pnpm exec playwright test tests/e2e/finance.spec.ts --project=e2e --retries=0 --reporter=list` et `pnpm test` sont verts.
-- **2025-11-03** — Amplifié la série synthétique AAPL pour générer plusieurs pages de trades, ajouté un test de route garantissant un journal paginé et confirmé que `tests/e2e/accessibility.spec.ts` passe avec le bouton « Suivant » focusable.
-- **2025-11-04** — Ajout d’un garde Playwright global (`expectNoApplicationErrorOverlay`) pour détecter les overlays Next côté client et mise à jour de la checklist e2e correspondante.
-- **2025-11-05** — Enrichi `expectNoApplicationErrorOverlay` avec une capture d’écran automatique et ajouté la suite unitaire `tests/unit/helpers/expect-no-overlay.spec.ts` pour documenter le comportement en cas d’échec.
-- **2025-11-06** — Renforcé le warmup Next.js (`tests/utils/server-warmup.ts`) avec un aperçu tronqué des réponses 500, des journaux de retry contextualisés et la nouvelle suite `tests/unit/utils/server-warmup.spec.ts`.
-- **2025-11-07** — Durci `components/messages` (auto-scroll conditionnel, bouton ancré avec `data-testid`) avec une suite de tests élargie, réactivé les scénarios Playwright d’auto-scroll/scroll button dans `tests/e2e/chat.test.ts`, et noté que le scénario "Edit user message" échoue encore sur le fallback streaming.
-- **2025-11-08** — Rendu le fallback de streaming côté Playwright tolérant à l’absence de bouton « Stop » (édition inline) en ajustant `waitForUiStreamingFallback` et en mettant à jour la suite `chat-page.spec.ts`; `pnpm test` repasse vert.
-- **2025-11-09** — Aligné le provider AI sur la Gateway Vercel (activation via `AI_GATEWAY_API_KEY`/`AI_GATEWAY_URL`), enrichi `providers.spec.ts` pour valider ce chemin et propagé les secrets Gateway au serveur Playwright, avec documentation mise à jour dans le README.
-- **2025-11-10** — Rebasculé sur l’utilisation directe d’OpenAI (suppression des dépendances Gateway côté provider/tests/UI/Playwright, mise à jour du README et du log d’erreurs) et relancé `pnpm test` (vert).
-- **2025-11-11** — Ajout des variables `OPENAI_BASE_URL`/`OPENAI_ORGANIZATION`/`OPENAI_PROJECT` au provider pour refléter la personnalisation de l’AI SDK, couverture unitaire validant la transmission des options et mise à jour du README.
-- **2025-11-12** — Transmis explicitement les secrets OpenAI au serveur Next lancé par Playwright via un helper dédié `collectOpenAIEnvVars`, ajouté la batterie de tests `openai-env.spec.ts` et documenté le comportement dans `playwright.config.ts`.
-- **2025-11-13** — Corrigé la sérialisation des indices de géolocalisation (cast explicite en chaînes pour `RequestHints`) et harmonisé la gestion des métadonnées artefacts (`artifact-actions`/`artifact`) afin de supprimer les casts `unknown` résiduels côté actions. `pnpm test` & `pnpm build` verts (build conserve les avertissements Edge `bcrypt-ts`).
-- **2025-11-14** — Résolu la série d'échecs `pnpm build` (types `RequestHints`, `streamChatResponse`, logger, helpers Playwright), aligné les gardes TypeScript (`use-artifact`, `lib/logging`, `tests/pages/chat.ts`) et confirmé que `CI=1 pnpm build` puis `pnpm test` passent après les ajustements (les avertissements Edge `bcrypt-ts` demeurent informatifs).
-- **2025-11-15** — Réactivé l’ajout de pièces jointes sous Playwright en basculant automatiquement sur le modèle conversationnel, assuré la redirection post-login même sans rafraîchir la session et renvoyé `not_found:stream` lorsque Redis est absent pour que les tests routes détectent correctement l’erreur.
-- **2025-11-16** — Remplacé `not_found:stream` par un flux de secours SSE lorsqu’aucun backend Redis n’est disponible (`buildFallbackStreamResponse` exporté), mis à jour le test de reprise `/api/chat` pour valider l’événement `data-appendMessage`, ajouté la suite unitaire `tests/unit/routes/chat.stream.spec.ts` et relancé `pnpm test` (vert). Les suites Playwright ciblées restent bloquées faute de navigateurs installés (`pnpm exec playwright install` requis).
+- **2025-10-07** — Durcissement des artefacts `FundamentalsCard` et `NewsList` : normalisation des champs partiels, fallback symboles/URLs, nouveaux tests Vitest ciblant les scénarios vides et partiellement renseignés.
+- **2025-10-07** — Alignement du flux "regular only" : validation sans exceptions dans `api/chat`, tests d’API couvrant les cas 401/403, commentaire de redirection `/chat` et vérification de la persistance Playwright.
+- **2025-10-07** — Sécurisation du parcours E2E régulier : `ChatPage` force la navigation vers `/chat` avec garde `/login`, validations des sélecteurs critiques et renforcement du setup Playwright (vérification des formulaires login/register et du rendu chat).
+- **2025-10-07** — Industrialisation de la CI : lancement manuel du dev server Next.js dans le workflow avec sondes de santé dédiées, désactivation du `webServer` Playwright, arrêt propre + archivage des logs, et enrichissement de la doc API finance (pagination/erreurs) en cohérence avec les fixtures e2e.
+- **2025-10-07** — Extension de la suite `finance.engine.spec.ts` pour couvrir dataset vide, fenêtres MA surdimensionnées et frais/slippage extrêmes, puis validation des métriques finies et mise à jour de la checklist "Moteur de backtest".
+- **2025-10-07** — Durcissement de la chaîne de données finance : renommage de l'index `BacktestRun` dans le schéma, garde `IF NOT EXISTS` sur toutes les migrations SQL, vérification automatisée de l'idempotence et confirmation que le seed catalogue reste aligné avec les fixtures (`AAPL`, `NVDA`, `BTCUSD`, `EURUSD`).
+- **2025-10-07** — Activation stricte du flag finance côté API : ajout d’un garde `assertFinanceFeatureEnabled`, couverture Vitest pour chaque route (`history`, `backtest`, `fundamentals`, `news`, `quote`, `screen`, `preferences`) et confirmation que la désactivation renvoie une erreur JSON `forbidden:api` homogène.
+
+- **2025-10-07** — Renormalisation de l'environnement local (`pnpm install`) pour restaurer le binaire Vitest, exécution complète de `pnpm test` (327 tests verts, couverture générée) et mise à jour de la checklist de contrôle.
+- **2025-10-07** — Renforcement de `/api/finance/history` : schéma Zod complet (symbol/timeframe/from/to/limit), normalisation des bornes, rejets descriptifs et nouveaux tests Vitest couvrant les scénarios invalides (symbol vide, date malformée, timeframe minuscule) et la normalisation du timeframe.
+- **2025-10-07** — Mise à niveau du composant `backtest-report-artifact` : unités explicites, garde de timeframe, headers de tableau accessibles et suite Vitest couvrant les re-tests valides/invalides + rendu des métriques.
+- **2025-10-07** — Consolidation des schémas finance : artefacts validés via Zod/`z.infer`, convertisseur `convertToUIMessages` durci avec logs contrôlés, et journalisation API anonymisée (tests Vitest dédiés).
+- **2025-10-07** — Renforcement des détecteurs de patterns : ajout d’un commentaire de regroupement dans `mergeLevel`, nouvelles suites Vitest couvrant les supports/résistances et la tolérance de fusion.
+- **2025-10-07** — Dynamisation de la détection `isTestEnvironment`: recalibrage de `lib/constants.ts`, refactor du magasin en mémoire (`lib/db/queries.ts`), harmonisation des routes/auth upload pour appeler le helper runtime et ajout d’une suite Vitest (`tests/unit/db/queries-runtime.spec.ts`) garantissant le basculement Playwright après import.
+- **2025-10-07** — Ajout des endpoints `/api/health` et `/ping` (readiness Playwright), suites Vitest associées, exécution `pnpm dlx vitest ...health.spec.ts ...ping.spec.ts`, puis tentative `pnpm e2e` échouée faute de librairies système Playwright malgré l’installation de Chromium.
+- **2025-10-07** — Installation des dépendances système/browser Playwright, reconfiguration du warmup pour inclure `/chat`, ajout d’un vrai `app/(chat)/chat/page.tsx` (avec re-export `/chat`), augmentation de la tolérance `ensureLoggedIn`, exécution `pnpm test` (329 verts, couverture enregistrée) et tentative `pnpm e2e` désormais bloquée par `AggregateError ENETUNREACH` côté `/api/chat` hermétique.
+- **2025-10-07** — Tolérance améliorée face aux échecs réseaux hermétiques : `ChatPage.waitForChatApiResponse` journalise désormais les erreurs `ENETUNREACH`/`ERR_NETWORK_*`, déclenche un repli côté UI plutôt qu’un échec immédiat, et une nouvelle suite Vitest (`chat-page.spec.ts`) couvre le parcours offline.
+- **2025-10-07** — Détection renforcée des erreurs réseaux agrégées : `isHermeticNetworkError` inspecte désormais les codes `ENET*` (y compris les `AggregateError` imbriqués), `streamChatResponse` retombe correctement sur le provider hermétique et la suite `chat.post.fallback.spec.ts` couvre les cas agrégés ; relance Playwright ciblée stoppée pour durée excessive (à reprendre pour valider la suite complète).
+- **2025-10-07** — Extension de `isHermeticNetworkError` pour capturer aussi `ECONN*`, `EAI_*` et erreurs DNS/sockets, enrichissement de `chat.post.fallback.spec.ts` avec de nouveaux cas (ECONNREFUSED, errno EAI_AGAIN), exécution `pnpm exec vitest run tests/unit/routes/chat.post.fallback.spec.ts --reporter=basic` (vert) ; tentative `pnpm exec playwright test tests/e2e/finance.spec.ts --project=e2e --reporter=line` interrompue faute de navigateurs Playwright installés (voir message "Executable doesn't exist").
+- **2025-10-07** — Ajout du respect explicite de `HERMETIC_CHAT_PROVIDER` dans `lib/ai/providers`, instrumentation du flux hermétique (`logError` dédié) et création de la suite `providers.hermetic.spec.ts` (`pnpm exec vitest run tests/unit/lib/providers.hermetic.spec.ts`). Tentative `pnpm exec playwright test tests/routes/chat.test.ts --project=routes --reporter=line` avortée : timeout 240 s sur `ChatPage.createNewChat` pendant le bootstrap Turbopack (`/chat` ne répond pas avant compilation >200 s).
+- **2025-10-07** — Forcé l’utilisation du contexte de flux en mémoire lorsque `isTestEnvironment()` est actif afin de court-circuiter Redis en Playwright/Vitest (`app/(chat)/api/chat/route.ts`) et ajouté la suite `tests/unit/routes/chat.post.hermetic.spec.ts` pour garantir que `/api/chat` délivre bien les artefacts finance en mode hermétique. Tentative `pnpm test` échouée dans ce conteneur (binaire `vitest` absent), exécution de repli via `pnpm dlx vitest@2.1.4 run tests/unit/routes/chat.post.hermetic.spec.ts --reporter=basic` OK.
+- **2025-10-07** — Ajout d’un sélecteur de commande Next.js hermétique : `resolveNextDevCommand` fait basculer Playwright sur `next dev --no-turbo` pour éviter les timeouts Turbopack, `run-next-dev.ts` journalise le choix et la nouvelle suite `tests/unit/utils/next-dev-command.spec.ts` couvre tous les drapeaux (`pnpm dlx vitest@2.1.4 run tests/unit/utils/next-dev-command.spec.ts --reporter=basic`).
+- **2025-10-07** — Correction du sélecteur Next.js hermétique : remplacement de `--no-turbo` (flag invalide) par `pnpm exec next dev` côté Playwright, mise à jour de la suite `next-dev-command.spec.ts`, exécution `pnpm dlx vitest@2.1.4 run tests/unit/utils/next-dev-command.spec.ts --reporter=basic` et vérification manuelle du lancement Webpack via `pnpm exec playwright test ... --project=e2e` interrompue avant navigation.
+- **2025-10-07** — Instrumentation de l’étape Playwright « authenticate » avec `withStepTiming`, ajout de `tests/utils/timing.ts`, couverture Vitest (`tests/unit/utils/timing.spec.ts`) et exécution `pnpm dlx vitest@2.1.4 run tests/unit/utils/timing.spec.ts tests/unit/auth/actions.spec.ts --reporter=basic`.
+- **2025-10-07** — Publication d’un handler GET pour `/api/tests/auth/register` afin de débloquer le warmup Playwright, ajout de tests Vitest couvrant le readiness JSON et les garde-fous hors automation, réinstallation des navigateurs Playwright (`pnpm exec playwright install --with-deps chromium`) puis relance `pnpm e2e` : warmup désormais vert mais la connexion régulière échoue encore (timeout `ensureLoggedIn` après la soumission du formulaire).
+- **2025-10-07** — Auth Playwright : ajout d’un login programmatique via `/api/auth/callback/credentials`, extraction d’un utilitaire réutilisable (`tests/utils/programmatic-login.ts`), couverture Vitest dédiée et intégration dans `tests/setup/auth.setup.ts` avant le fallback UI (nouvelle tentative `pnpm dlx vitest ...programmatic-login.spec.ts tests/unit/pages/chat-page.spec.ts` verte).
+- **2025-10-07** — Renforcement du login programmatique : parsing des `set-cookie`, réinjection via `context.addCookies`, nouvelles assertions Vitest (`programmatic-login.spec.ts`) et mise à jour de la checklist pour clarifier que l’option guest reste hors scope tant que le flux régulier est actif.
+- **2025-10-07** — Stabilisation du callback credentials : ajout du drapeau `redirect="false"`, acceptation des statuts 3xx lorsqu’un cookie est émis, tests Vitest supplémentaires (`programmatic-login.spec.ts`) et exécution `pnpm dlx vitest@2.1.4 run tests/unit/utils/programmatic-login.spec.ts --reporter=basic`.

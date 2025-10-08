@@ -1,8 +1,10 @@
 import "server-only";
 
+import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
 
 import { ChatSDKError } from "@/lib/errors";
+import { isFinanceFeatureEnabled } from "@/lib/feature-flags";
 import { findAssetMetadata, type FinanceAssetMetadata } from "./catalog";
 
 /**
@@ -21,6 +23,21 @@ export function assertSupportedSymbol(value: string): FinanceAssetMetadata {
   }
 
   return metadata;
+}
+
+/**
+ * Ensures the server-side finance feature flag is active before executing an
+ * API handler. Returning early keeps routes hermetic when the flag is disabled
+ * (e.g. in staging environments) and surfaces a consistent JSON error payload
+ * to the caller.
+ */
+export function assertFinanceFeatureEnabled(): void {
+  if (!isFinanceFeatureEnabled()) {
+    throw new ChatSDKError(
+      "forbidden:api",
+      "Finance endpoints are disabled. Enable FEATURE_FINANCE to continue."
+    );
+  }
 }
 
 /**
@@ -88,7 +105,12 @@ export function logRouteLatency(
   extra: Record<string, unknown> = {}
 ): void {
   const duration = performance.now() - startedAt;
-  console.info(`[api:${route}] completed in ${duration.toFixed(1)}ms`, extra);
+  const sanitized = sanitizeRouteExtra(extra);
+
+  console.info(
+    `[api:${route}] completed in ${duration.toFixed(1)}ms`,
+    sanitized
+  );
 }
 
 /**
@@ -137,4 +159,50 @@ export function applyHistoryLimit<T>(
   }
 
   return [...series.slice(-limit)];
+}
+
+/** Patterns identifying fields that may contain personally identifiable data. */
+const SENSITIVE_ROUTE_FIELD_PATTERNS = [/client/i, /user/i, /ip/i];
+
+/**
+ * Redacts sensitive metadata before emitting structured route logs. Non-sensitive
+ * keys are forwarded unchanged so diagnostics remain actionable without leaking
+ * IPs or user identifiers.
+ */
+function sanitizeRouteExtra(
+  extra: Record<string, unknown>
+): Record<string, unknown> {
+  const sanitized: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(extra)) {
+    if (SENSITIVE_ROUTE_FIELD_PATTERNS.some((pattern) => pattern.test(key))) {
+      sanitized[key] = anonymiseValue(value);
+      continue;
+    }
+
+    sanitized[key] = value;
+  }
+
+  return sanitized;
+}
+
+/**
+ * Produces a deterministic fingerprint for potentially sensitive values. The
+ * original value never leaves the process; the truncated hash is sufficient for
+ * correlating requests across logs while preserving privacy.
+ */
+function anonymiseValue(value: unknown): string {
+  if (typeof value === "string" && value.length > 0) {
+    const digest = createHash("sha256").update(value).digest("hex");
+    return `[fingerprint:${digest.slice(0, 12)}]`;
+  }
+
+  if (typeof value === "number" || typeof value === "bigint") {
+    const digest = createHash("sha256")
+      .update(String(value))
+      .digest("hex");
+    return `[fingerprint:${digest.slice(0, 12)}]`;
+  }
+
+  return "[redacted]";
 }

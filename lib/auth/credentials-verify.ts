@@ -64,7 +64,7 @@ export async function resolveCredentialsUser(
   const users = await getUser(email);
 
   if (users.length === 0) {
-    if (isTestEnvironment) {
+    if (isTestEnvironment()) {
       try {
         await createUser(email, password);
         const [createdUser] = await getUser(email);
@@ -79,7 +79,7 @@ export async function resolveCredentialsUser(
          * mitigation below keeps the observable characteristics identical to a
          * regular lookup miss.
          */
-        if (!isTestEnvironment) {
+        if (!isTestEnvironment()) {
           throw error;
         }
       }
@@ -143,7 +143,7 @@ export async function resolveCredentialsUser(
         return refreshedUser;
       }
     } catch (error) {
-      if (!isTestEnvironment) {
+      if (!isTestEnvironment()) {
         throw error;
       }
     }
@@ -151,7 +151,7 @@ export async function resolveCredentialsUser(
     return plaintextMatches() ? user ?? null : null;
   };
 
-  const allowPlaintextFallback = () => isTestEnvironment && plaintextMatches();
+  const allowPlaintextFallback = () => isTestEnvironment() && plaintextMatches();
 
   if (!user?.password) {
     const refreshedUser = await attemptRefreshWithPlaintext();

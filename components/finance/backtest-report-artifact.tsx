@@ -44,6 +44,10 @@ type MetricConfig = {
   readonly label: string;
   readonly formatter: (value: number) => string;
   readonly tooltip?: string;
+  /** Short textual hint indicating the unit displayed to users. */
+  readonly unitLabel: string;
+  /** Screen-reader friendly description of the unit. */
+  readonly srUnitLabel: string;
 };
 
 const METRICS: readonly MetricConfig[] = [
@@ -52,38 +56,55 @@ const METRICS: readonly MetricConfig[] = [
     label: "Performance totale",
     formatter: formatPercent,
     tooltip: "Performance cumulée entre le point d'entrée et de sortie.",
+    unitLabel: "%",
+    srUnitLabel: "Pourcentage de performance totale",
   },
   {
     id: "cagr",
     label: "CAGR",
     formatter: formatPercent,
     tooltip: "Taux de croissance annualisé composé.",
+    unitLabel: "%",
+    srUnitLabel: "Taux de croissance annualisé en pourcentage",
   },
   {
     id: "maxDrawdown",
     label: "Max Drawdown",
     formatter: formatPercent,
     tooltip: "Perte maximale observée entre un pic et le creux suivant.",
+    unitLabel: "%",
+    srUnitLabel: "Tirage maximal en pourcentage",
   },
   {
     id: "winRate",
     label: "Taux de réussite",
     formatter: formatPercent,
     tooltip: "Part des trades gagnants vs total des positions fermées.",
+    unitLabel: "%",
+    srUnitLabel: "Taux de réussite en pourcentage",
   },
   {
     id: "sharpe",
     label: "Sharpe",
     formatter: formatRatio,
     tooltip: "Ratio de Sharpe (rendement excédentaire / volatilité).",
+    unitLabel: "ratio",
+    srUnitLabel: "Ratio de Sharpe",
   },
   {
     id: "profitFactor",
     label: "Profit factor",
     formatter: formatRatio,
     tooltip: "Rapport gains/pertes brutes – >1 indique un edge positif.",
+    unitLabel: "ratio",
+    srUnitLabel: "Profit factor (ratio)",
   },
 ];
+
+/** Timeframes proposés pour le formulaire de re-test. */
+const TIMEFRAME_OPTIONS = ["1D", "4H", "1H", "30m", "15m"] as const;
+
+type TimeframeOption = (typeof TIMEFRAME_OPTIONS)[number];
 
 export interface BacktestReportArtifactProps {
   readonly artifact: FinanceBacktestArtifact;
@@ -115,7 +136,7 @@ const computeEquityPolyline = (artifact: FinanceBacktestArtifact) => {
  */
 type RetestFormValues = {
   symbol: string;
-  timeframe: string;
+  timeframe: TimeframeOption;
   from: string;
   to: string;
   fastPeriod: string;
@@ -131,12 +152,21 @@ export function BacktestReportArtifact({
   artifact,
   onRetest,
 }: BacktestReportArtifactProps) {
+  /**
+   * Garantit que le formulaire conserve une valeur de timeframe supportée même
+   * lorsque l'artefact source provient d'une simulation personnalisée.
+   */
+  const normaliseTimeframe = (value: string): TimeframeOption =>
+    TIMEFRAME_OPTIONS.includes(value as TimeframeOption)
+      ? (value as TimeframeOption)
+      : TIMEFRAME_OPTIONS[0];
+
   const [pageIndex, setPageIndex] = useState(0);
   const [isRetestOpen, setIsRetestOpen] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [formValues, setFormValues] = useState<RetestFormValues>(() => ({
     symbol: artifact.symbol,
-    timeframe: artifact.timeframe,
+    timeframe: normaliseTimeframe(artifact.timeframe),
     from: artifact.period.from,
     to: artifact.period.to,
     fastPeriod: artifact.strategy.type === "sma-crossover"
@@ -155,7 +185,7 @@ export function BacktestReportArtifact({
   useEffect(() => {
     setFormValues({
       symbol: artifact.symbol,
-      timeframe: artifact.timeframe,
+      timeframe: normaliseTimeframe(artifact.timeframe),
       from: artifact.period.from,
       to: artifact.period.to,
       fastPeriod: artifact.strategy.type === "sma-crossover"
@@ -350,17 +380,11 @@ export function BacktestReportArtifact({
                   const nextValue = event.currentTarget.value;
                   setFormValues((current) => ({
                     ...current,
-                    timeframe: nextValue,
+                    timeframe: normaliseTimeframe(nextValue),
                   }));
                 }}
               >
-                {[
-                  "1D",
-                  "4H",
-                  "1H",
-                  "30m",
-                  "15m",
-                ].map((timeframe) => (
+                {TIMEFRAME_OPTIONS.map((timeframe) => (
                   <option key={timeframe} value={timeframe}>
                     {timeframe}
                   </option>
@@ -471,17 +495,27 @@ export function BacktestReportArtifact({
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="flex items-center gap-2 text-sm font-medium">
                   <BarChart3 className="size-4 text-muted-foreground" />
-                  {metric.label}
+                  <span className="flex items-center gap-1">
+                    {metric.label}
+                    <span
+                      aria-hidden="true"
+                      className="text-muted-foreground text-xs"
+                    >
+                      ({metric.unitLabel})
+                    </span>
+                    <span className="sr-only">{metric.srUnitLabel}</span>
+                  </span>
                 </CardTitle>
-              {metric.tooltip ? (
-                <Badge
-                  title={metric.tooltip}
-                  variant="outline"
-                >
-                  ?
-                </Badge>
-              ) : null}
-            </CardHeader>
+                {metric.tooltip ? (
+                  <Badge
+                    aria-label={metric.tooltip}
+                    title={metric.tooltip}
+                    variant="outline"
+                  >
+                    ?
+                  </Badge>
+                ) : null}
+              </CardHeader>
               <CardContent>
                 <p
                   className="text-2xl font-semibold"
@@ -559,12 +593,24 @@ export function BacktestReportArtifact({
             </caption>
             <thead>
               <tr className="text-muted-foreground text-xs uppercase">
-                <th className="px-3 py-2">Entrée</th>
-                <th className="px-3 py-2">Sortie</th>
-                <th className="px-3 py-2">Prix entrée</th>
-                <th className="px-3 py-2">Prix sortie</th>
-                <th className="px-3 py-2">Quantité</th>
-                <th className="px-3 py-2">PnL net</th>
+                <th className="px-3 py-2" scope="col">
+                  Entrée
+                </th>
+                <th className="px-3 py-2" scope="col">
+                  Sortie
+                </th>
+                <th className="px-3 py-2" scope="col">
+                  Prix entrée
+                </th>
+                <th className="px-3 py-2" scope="col">
+                  Prix sortie
+                </th>
+                <th className="px-3 py-2" scope="col">
+                  Quantité
+                </th>
+                <th className="px-3 py-2" scope="col">
+                  PnL net
+                </th>
               </tr>
             </thead>
             <tbody>

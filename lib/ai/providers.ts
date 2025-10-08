@@ -47,7 +47,13 @@ const isPlaywrightEnvironment = isPlaywrightLikeEnvironment(env);
 const isMockTestingEnvironment = Boolean(
   Reflect.get(env, "PLAYWRIGHT_TEST_BASE_URL") ??
     Reflect.get(env, "PLAYWRIGHT") ??
-    Reflect.get(env, "CI_PLAYWRIGHT")
+    Reflect.get(env, "CI_PLAYWRIGHT") ??
+    /**
+     * The explicit hermetic flag is injected by Playwright's config so the chat
+     * route can short-circuit to offline mocks even when other detection hooks
+     * fail (e.g. manual Next.js runs where only the new flag is set).
+     */
+    (Reflect.get(env, "HERMETIC_CHAT_PROVIDER") ?? "")
 );
 type MockLanguageModelModule = {
   readonly chatModel: LanguageModelV2;
@@ -74,7 +80,13 @@ function createProviderFromModels(models: MockLanguageModelModule) {
 function createMockProvider() {
 
   const shouldPreferTestingFixtures =
-    isMockTestingEnvironment || isPlaywrightEnvironment;
+    isMockTestingEnvironment ||
+    isPlaywrightEnvironment ||
+    /**
+     * When the dedicated hermetic toggle is set we always opt into the
+     * Playwright fixtures so the inline provider mirrors the real test setup.
+     */
+    env.HERMETIC_CHAT_PROVIDER === "true";
 
   if (isNextBuild || isClient) {
     return createProviderFromModels(
@@ -725,7 +737,12 @@ const shouldUseMocks =
   isClient ||
   isMockTestingEnvironment ||
   isPlaywrightEnvironment ||
-  isNextBuild;
+  isNextBuild ||
+  /**
+   * Honour the explicit hermetic toggle even when none of the legacy Playwright
+   * flags are present (e.g. when a developer only exports the new flag).
+   */
+  env.HERMETIC_CHAT_PROVIDER === "true";
 
 let createOpenAI: CreateOpenAI | null = null;
 

@@ -42,7 +42,14 @@ export const login = async (
     const signInResponse = await signIn("credentials", {
       email: validatedData.email,
       password: validatedData.password,
-      callbackUrl: "/",
+      /**
+       * Redirect newly authenticated users straight to the chat workspace so
+       * Playwright and other automated flows avoid compiling the marketing
+       * landing page during their warm-up. The home route pulls a large module
+       * graph which previously caused 180s+ cold starts and exhausted the
+       * 240s Playwright setup budget.
+       */
+      callbackUrl: "/chat",
       redirect: false,
     });
 
@@ -62,7 +69,7 @@ export const login = async (
 
     return {
       status: "success",
-      redirectTo: redirectTo ?? "/",
+      redirectTo: redirectTo ?? "/chat",
     };
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -108,7 +115,13 @@ export const register = async (
     const signInResponse = await signIn("credentials", {
       email: validatedData.email,
       password: validatedData.password,
-      callbackUrl: "/",
+      /**
+       * Align the registration flow with the login action by dropping users on
+       * the chat dashboard immediately after the credential hand-off. This
+       * keeps the post-register redirect fast during hermetic runs where the
+       * marketing homepage would otherwise compile synchronously.
+       */
+      callbackUrl: "/chat",
       redirect: false,
     });
 
@@ -128,7 +141,7 @@ export const register = async (
 
     return {
       status: "success",
-      redirectTo: redirectTo ?? "/",
+      redirectTo: redirectTo ?? "/chat",
     };
   } catch (error) {
     if (error instanceof z.ZodError) {

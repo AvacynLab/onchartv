@@ -22,6 +22,36 @@ function isAutomationRequest() {
   );
 }
 
+function createForbiddenResponse() {
+  return NextResponse.json(
+    {
+      error: {
+        code: "forbidden",
+        message: "Test registrations are only available during Playwright runs.",
+      },
+    },
+    { status: 403 }
+  );
+}
+
+/**
+ * Surface a lightweight readiness response so the Playwright warm-up step can
+ * probe the registration endpoint without triggering a 405. Returning a 200
+ * status here keeps the warm-up logs clean while still documenting that only
+ * POST requests will mutate state during automation runs.
+ */
+export async function GET() {
+  if (!isAutomationRequest()) {
+    return createForbiddenResponse();
+  }
+
+  return NextResponse.json({
+    status: "ready",
+    allowedMethods: ["POST"],
+    message: "Use POST to provision test accounts during Playwright runs.",
+  });
+}
+
 /**
  * Provision or reuse a test account for the Playwright suites. The handler is
  * disabled outside the hermetic automation environment to avoid exposing a
@@ -29,15 +59,7 @@ function isAutomationRequest() {
  */
 export async function POST(request: Request) {
   if (!isAutomationRequest()) {
-    return NextResponse.json(
-      {
-        error: {
-          code: "forbidden",
-          message: "Test registrations are only available during Playwright runs.",
-        },
-      },
-      { status: 403 }
-    );
+    return createForbiddenResponse();
   }
 
   let parsed:

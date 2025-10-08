@@ -206,4 +206,37 @@ describe("/api/finance/backtest", () => {
     expect(error.error.code).toBe("bad_request:api");
     expect(error.error.cause).toMatch(/earlier than 'to'/);
   });
+
+  it("rejects periods that exceed the maximum supported duration", async () => {
+    const { POST } = await import("@/app/api/finance/backtest/route");
+    const response = await POST(
+      buildRequest({
+        period: {
+          from: "2000-01-01T00:00:00Z",
+          to: "2024-01-01T00:00:00Z",
+        },
+      })
+    );
+
+    expect(response.status).toBe(400);
+    const error = await response.json();
+    expect(error.error.code).toBe("bad_request:api");
+    expect(error.error.cause).toMatch(/maximum supported duration/i);
+  });
+
+  it("forbids access when the finance feature flag is disabled", async () => {
+    vi.stubEnv("FEATURE_FINANCE", "false");
+
+    try {
+      const { POST } = await import("@/app/api/finance/backtest/route");
+      const response = await POST(buildRequest({}));
+
+      expect(response.status).toBe(403);
+      const error = await response.json();
+      expect(error.error.code).toBe("forbidden:api");
+      expect(error.error.cause).toMatch(/Finance endpoints are disabled/i);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });
