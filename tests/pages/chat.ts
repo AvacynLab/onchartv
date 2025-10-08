@@ -32,10 +32,25 @@ const CHAT_STREAM_PATH_REGEX = /^\/api\/chat\/[\w-]+\/stream$/;
  * file compliant with `noImplicitThis` during the Next.js type-checking phase.
  */
 type AssistantSnapshot = {
+  /**
+   * Assistant timeline metrics captured prior to dispatching the next
+   * generation. The polling helpers diff these fields to spot freshly streamed
+   * content without relying on brittle animation timings.
+   */
   count: number;
   latestMessageId: string | null;
   latestMessageText: string;
   latestArtifactCount: number;
+  /**
+   * User timeline snapshot grabbed at the same time as the assistant fields.
+   * Suggested action journeys immediately append a new user bubble before the
+   * streaming placeholders render. Tracking that delta lets the Playwright
+   * helpers recognise the in-flight state even when the assistant skeleton
+   * takes a moment to appear.
+   */
+  userCount: number;
+  latestUserMessageId: string | null;
+  latestUserMessageText: string;
 };
 
 export class ChatPage {
@@ -668,7 +683,27 @@ export class ChatPage {
     NonNullable<typeof this.pendingAssistantSnapshot>
   > {
     const assistantMessages = this.page.getByTestId("message-assistant");
-    const count = await assistantMessages.count();
+    const userMessages = this.page.getByTestId("message-user");
+
+    const [count, userCount] = await Promise.all([
+      assistantMessages.count(),
+      userMessages.count().catch(() => 0),
+    ]);
+
+    const [latestUserMessageId, latestUserMessageText] = userCount > 0
+      ? await Promise.all([
+          userMessages
+            .nth(userCount - 1)
+            .getAttribute("data-message-id")
+            .catch(() => null),
+          userMessages
+            .nth(userCount - 1)
+            .getByTestId("message-content")
+            .innerText()
+            .then((value) => value.trim())
+            .catch(() => ""),
+        ])
+      : [null, ""];
 
     if (count === 0) {
       return {
@@ -676,6 +711,9 @@ export class ChatPage {
         latestArtifactCount: 0,
         latestMessageId: null,
         latestMessageText: "",
+        userCount,
+        latestUserMessageId,
+        latestUserMessageText,
       };
     }
 
@@ -698,6 +736,9 @@ export class ChatPage {
       latestArtifactCount,
       latestMessageId,
       latestMessageText,
+      userCount,
+      latestUserMessageId,
+      latestUserMessageText,
     };
   }
 
@@ -755,7 +796,13 @@ export class ChatPage {
      * stop button appears.
      */
     const networkTimeoutMarker = Symbol("chat-network-timeout");
-    const networkTimeoutMs = 5_000;
+    /**
+     * Finance prompts can take a few extra seconds to warm the hermetic data
+     * adapters, especially when the Next.js dev server is still compiling.
+     * Relax the network timeout so we give the transport a fair chance to
+     * respond before falling back to DOM heuristics.
+     */
+    const networkTimeoutMs = 20_000;
     const uiFallbackTimeoutMs = 45_000;
 
     try {
@@ -959,19 +1006,29 @@ export class ChatPage {
           .catch(() => "");
 
         const suffix = description.length > 0 ? `: ${description}` : "";
-        throw new Error(`Chat UI reported an error toast${suffix}`);
-      });
-    const toastPromise = rawToastPromise.catch((error) => {
-      throw error;
-    });
+        return {
+          kind: "toast" as const,
+          error: new Error(`Chat UI reported an error toast${suffix}`),
+        };
+      })
+      .catch((error) => ({ kind: "toast-error" as const, error }));
+    const toastPromise = rawToastPromise.then((result) => result);
 
     const streamingPromise = this.pollForStreamingChange({
       baseline,
       timeoutMs,
-    });
+    }).then((didStream) => ({ kind: "stream" as const, didStream }));
 
     try {
-      await Promise.race([toastPromise, streamingPromise]);
+      const outcome = await Promise.race([toastPromise, streamingPromise]);
+
+      if (outcome.kind === "toast" || outcome.kind === "toast-error") {
+        throw outcome.error;
+      }
+
+      if (!outcome.didStream) {
+        throw new Error("Timed out waiting for chat UI to start streaming");
+      }
     } catch (error) {
       if (isTimeoutLikeError(error)) {
         throw new Error("Timed out waiting for chat UI to start streaming");
@@ -979,7 +1036,6 @@ export class ChatPage {
       throw error;
     } finally {
       rawToastPromise.catch(() => {});
-      streamingPromise.catch(() => {});
     }
   }
 
@@ -990,7 +1046,6 @@ export class ChatPage {
     chatModel: ChatModel;
     timeoutMs: number;
   }): Promise<Locator> {
-    const deadline = Date.now() + timeoutMs;
     const testIdLocator = this.page.getByTestId(
       `model-selector-item-${chatModel.id}`
     );
@@ -1000,6 +1055,7 @@ export class ChatPage {
     const menuItemLocator = this.page
       .getByRole("menuitem", { name: chatModel.name })
       .first();
+    const deadline = Date.now() + timeoutMs;
 
     while (Date.now() < deadline) {
       if ((await testIdLocator.count().catch(() => 0)) > 0) {
@@ -1028,21 +1084,35 @@ export class ChatPage {
   }: {
     baseline: AssistantSnapshot;
     timeoutMs: number;
-  }): Promise<void> {
-    const deadline = Date.now() + timeoutMs;
+  }): Promise<boolean> {
     const assistantLocator = this.page.getByTestId("message-assistant");
     const spinnerLocator = this.page.getByTestId("message-assistant-loading");
     const stopButtonLocator = this.stopButton;
+    const userLocator = this.page.getByTestId("message-user");
+    const sendButtonLocator = this.sendButton;
+    const pollIntervalMs = 200;
+    const maxIterations = Math.ceil(timeoutMs / pollIntervalMs);
 
-    while (Date.now() < deadline) {
-      const [assistantCount, spinnerCount, stopButtonCount] = await Promise.all([
+    for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+      const [
+        assistantCount,
+        spinnerCount,
+        stopButtonCount,
+        userCount,
+        sendButtonDisabled,
+      ] = await Promise.all([
         assistantLocator.count().catch(() => 0),
         spinnerLocator.count().catch(() => 0),
         stopButtonLocator.count().catch(() => 0),
+        userLocator.count().catch(() => 0),
+        sendButtonLocator
+          .first()
+          .isDisabled()
+          .catch(() => false),
       ]);
 
       if (spinnerCount > 0) {
-        return;
+        return true;
       }
 
       if (stopButtonCount > 0) {
@@ -1060,12 +1130,52 @@ export class ChatPage {
           .catch(() => false);
 
         if (stopButtonVisible) {
-          return;
+          return true;
+        }
+      }
+
+      if (userCount > baseline.userCount) {
+        /**
+         * Suggested actions append the user bubble immediately before the
+         * assistant skeleton or stop control render. Treat the increased user
+         * count as proof that the request is underway so we do not burn through
+         * the fallback timeout waiting for the spinner to appear.
+         */
+        return true;
+      }
+
+      if (sendButtonDisabled) {
+        /**
+         * The composer disables the primary action while a submission is in
+         * flight. Some transports (notably hermetic finance prompts) keep the
+         * stop control hidden until the first chunk arrives, so fall back to
+         * the disabled state as soon as it flips.
+         */
+        return true;
+      }
+
+      if (userCount > 0) {
+        const latestUser = userLocator.nth(userCount - 1);
+        const [latestUserId, latestUserText] = await Promise.all([
+          latestUser.getAttribute("data-message-id").catch(() => null),
+          latestUser
+            .getByTestId("message-content")
+            .innerText()
+            .then((value) => value.trim())
+            .catch(() => ""),
+        ]);
+
+        if (latestUserId && latestUserId !== baseline.latestUserMessageId) {
+          return true;
+        }
+
+        if (latestUserText && latestUserText !== baseline.latestUserMessageText) {
+          return true;
         }
       }
 
       if (assistantCount > baseline.count) {
-        return;
+        return true;
       }
 
       if (assistantCount > 0) {
@@ -1084,22 +1194,22 @@ export class ChatPage {
         ]);
 
         if (latestId && latestId !== baseline.latestMessageId) {
-          return;
+          return true;
         }
 
         if (latestText && latestText !== baseline.latestMessageText) {
-          return;
+          return true;
         }
 
         if (latestArtifactCount > baseline.latestArtifactCount) {
-          return;
+          return true;
         }
       }
 
-      await this.page.waitForTimeout(200);
+      await this.page.waitForTimeout(pollIntervalMs);
     }
 
-    throw new Error("Timed out waiting for chat UI to start streaming");
+    return false;
   }
 
   private async waitForVoteRequest(direction: "up" | "down"): Promise<void> {

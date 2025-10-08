@@ -52,6 +52,15 @@ export default function Page() {
           console.error("Failed to refresh session before redirecting", error);
         }
 
+        /**
+         * Give the toast portal a short (~200ms) rendering window before the
+         * navigation replaces the auth shell. Without this micro-delay
+         * Playwright can miss the success notification entirely, causing the
+         * e2e assertion to exhaust its timeout even though the registration
+         * succeeded.
+         */
+        await new Promise((resolve) => setTimeout(resolve, 200));
+
         router.replace(destination);
       })();
     }
