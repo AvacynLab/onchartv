@@ -29,6 +29,12 @@ const coverageDirectory = resolve(projectRoot, "coverage");
 const isContinuousIntegration = process.env.CI === "true" ||
   process.env.GITHUB_ACTIONS === "true";
 const isCoverageRun = process.env.VITEST_COVERAGE === "true";
+/**
+ * The coverage shards produce a consolidated JUnit report for CI. When the
+ * React component suites execute without coverage we disable the reporter to
+ * avoid overwriting the earlier artifact with the reduced subset of tests.
+ */
+const shouldEmitJUnit = process.env.VITEST_JUNIT !== "false";
 const maxWorkerThreads = isContinuousIntegration || isCoverageRun
   ? 1
   : Math.max(1, Math.min(availableParallelism(), 2));
@@ -54,6 +60,30 @@ const threadPoolOptions = {
   },
 } as const;
 
+const forkPoolOptions = {
+  forks: {
+    /**
+     * Force coverage runs onto a single forked process at a time. Vitest's
+     * default of spawning one child per CPU still leads to overlapping
+     * coverage-instrumented processes which collectively exceed the expanded
+     * 12 GB heap limit on CI. Serialising fork execution keeps memory usage
+     * bounded without sacrificing hermetic isolation between tests.
+     */
+    maxForks: 1,
+    minForks: 1,
+    /**
+     * Disable worker reuse so each test file runs in a fresh child process.
+     * The Vitest runner otherwise retains coverage-instrumented modules in a
+     * long-lived worker, and the cumulative heap growth still crashes the
+     * suite even with a 16 GB limit. Forking per file gives the OS a chance to
+     * reclaim memory before the next test executes.
+     */
+    reuseWorkers: false,
+  },
+} as const;
+
+const poolOptions = poolStrategy === "threads" ? threadPoolOptions : forkPoolOptions;
+
 export default defineConfig({
   resolve: {
     alias: {
@@ -73,18 +103,43 @@ export default defineConfig({
       provider: "v8",
       reportsDirectory: coverageDirectory,
       reporter: ["text", "lcov"],
+      /**
+       * Only instrument the server-side code that our Vitest suite exercises.
+       * Constraining coverage to API route handlers and the shared libraries
+       * they depend on avoids touching the massive Next.js client surface while
+       * still giving CI meaningful insights into back-end regressions.
+       */
+      include: [
+        "lib/**/*.ts",
+        "lib/**/*.mts",
+        "lib/**/*.cts",
+        "app/**/api/**/*.ts",
+        "app/**/api/**/*.mts",
+        "app/**/api/**/*.cts",
+      ],
+      exclude: [
+        "public/**",
+        "scripts/**",
+        "tests/**",
+      ],
+      /**
+       * Preserve coverage artifacts between sharded runs so the sequential
+       * invocations in `scripts/run-vitest.mjs` can merge their results into a
+       * single report.
+       */
+      cleanOnRerun: false,
     },
     pool: poolStrategy,
-    ...(poolStrategy === "threads"
-      ? { poolOptions: threadPoolOptions }
-      : {}),
+    poolOptions,
     /**
      * Emit human-readable output alongside a deterministic JUnit report so the
      * CI workflow can publish coverage and test telemetry without reruns.
      */
-    reporters: [
-      "default",
-      ["junit", { outputFile: resolve(coverageDirectory, "junit.xml") }],
-    ],
+    reporters: shouldEmitJUnit
+      ? [
+        "default",
+        ["junit", { outputFile: resolve(coverageDirectory, "junit.xml") }],
+      ]
+      : ["default"],
   },
 });
