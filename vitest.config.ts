@@ -1,3 +1,4 @@
+import { availableParallelism } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -15,6 +16,15 @@ const projectRoot = fileURLToPath(new URL(".", import.meta.url));
  * and test regressions without rerunning the suite locally.
  */
 const coverageDirectory = resolve(projectRoot, "coverage");
+
+/**
+ * Vitest spawns a worker per logical CPU by default. The full suite plus
+ * coverage instrumentation can exceed the default Node.js heap limit on the
+ * GitHub-hosted runners, so we clamp the worker pool to a conservative
+ * maximum. The lower bound keeps reproducibility for single-core environments
+ * while still allowing limited parallelism locally.
+ */
+const maxWorkerThreads = Math.max(1, Math.min(availableParallelism(), 4));
 
 export default defineConfig({
   resolve: {
@@ -35,6 +45,16 @@ export default defineConfig({
       provider: "v8",
       reportsDirectory: coverageDirectory,
       reporter: ["text", "lcov"],
+    },
+    poolOptions: {
+      threads: {
+        /**
+         * Limit concurrency to avoid exhausting the heap on CI while still
+         * benefiting from multiple workers when resources allow.
+         */
+        maxThreads: maxWorkerThreads,
+        minThreads: 1,
+      },
     },
     /**
      * Emit human-readable output alongside a deterministic JUnit report so the
