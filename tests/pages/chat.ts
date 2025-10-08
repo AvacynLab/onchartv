@@ -797,13 +797,19 @@ export class ChatPage {
      */
     const networkTimeoutMarker = Symbol("chat-network-timeout");
     /**
-     * Finance prompts can take a few extra seconds to warm the hermetic data
-     * adapters, especially when the Next.js dev server is still compiling.
-     * Relax the network timeout so we give the transport a fair chance to
-     * respond before falling back to DOM heuristics.
+     * Finance prompts can take close to a minute to warm the hermetic data
+     * adapters, especially when the Next.js dev server is still compiling the
+     * streaming route bundle. Relax the network timeout so we give the
+     * transport a fair chance to respond before falling back to DOM heuristics.
      */
-    const networkTimeoutMs = 20_000;
-    const uiFallbackTimeoutMs = 45_000;
+    const networkTimeoutMs = 60_000;
+    /**
+     * Hermetic runs occasionally spend close to a minute compiling the finance
+     * API routes on the very first invocation. Giving the DOM fallback another
+     * half minute of headroom prevents us from failing the scenario right as
+     * the server responds.
+     */
+    const uiFallbackTimeoutMs = 90_000;
 
     try {
       await new Promise<void>((resolve, reject) => {

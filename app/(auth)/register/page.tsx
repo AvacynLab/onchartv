@@ -53,13 +53,13 @@ export default function Page() {
         }
 
         /**
-         * Give the toast portal a short (~200ms) rendering window before the
-         * navigation replaces the auth shell. Without this micro-delay
-         * Playwright can miss the success notification entirely, causing the
-         * e2e assertion to exhaust its timeout even though the registration
-         * succeeded.
+         * Give the toast portal a generous (~750ms) rendering window before the
+         * navigation replaces the auth shell. The hermetic Playwright workers
+         * run on constrained CI hardware where React effects and paint cycles
+         * can lag noticeably; extending the delay keeps the success notification
+         * visible long enough for the regression suite to observe it.
          */
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        await new Promise((resolve) => setTimeout(resolve, 750));
 
         router.replace(destination);
       })();

@@ -298,7 +298,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
       );
       expect(toastWaitFor).toHaveBeenCalledWith({
         state: "visible",
-        timeout: 45_000,
+        timeout: 90_000,
       });
       expect(pollSpy).toHaveBeenCalledWith({
         baseline: {
@@ -310,7 +310,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
           latestUserMessageId: null,
           latestUserMessageText: "",
         },
-        timeoutMs: 45_000,
+        timeoutMs: 90_000,
       });
     } finally {
       rejectToast?.(new Error("toast cleanup"));
@@ -395,12 +395,12 @@ describe("ChatPage.waitForChatApiResponse", () => {
 
       const waitPromise = (chatPage as any).waitForChatApiResponse();
 
-      await vi.advanceTimersByTimeAsync(20_000);
+      await vi.advanceTimersByTimeAsync(60_000);
 
       await expect(waitPromise).resolves.toBeUndefined();
       expect(toastWaitFor).toHaveBeenCalledWith({
         state: "visible",
-        timeout: 45_000,
+        timeout: 90_000,
       });
       expect(spinnerCount).toHaveBeenCalled();
       expect(assistantCount).toHaveBeenCalled();
@@ -511,7 +511,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
 
       const waitPromise = (chatPage as any).waitForUiStreamingFallback(
         baselineSnapshot,
-        45_000
+        90_000
       );
       const outcomePromise = waitPromise.then<
         { status: "resolved" } | { status: "rejected"; error: unknown }
@@ -520,7 +520,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
         (error) => ({ status: "rejected", error })
       );
 
-      await vi.advanceTimersByTimeAsync(45_000);
+      await vi.advanceTimersByTimeAsync(90_000);
 
       const outcome = await outcomePromise;
       expect(outcome.status).toBe("rejected");
@@ -530,7 +530,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
       );
       expect(toastWaitFor).toHaveBeenCalledWith({
         state: "visible",
-        timeout: 45_000,
+        timeout: 90_000,
       });
       expect(assistantCount).toHaveBeenCalled();
       expect(latestAssistant.getAttribute).toHaveBeenCalled();
@@ -578,7 +578,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
         (error) => ({ status: "rejected", error })
       );
 
-      await vi.advanceTimersByTimeAsync(20_000);
+      await vi.advanceTimersByTimeAsync(60_000);
 
       const outcome = await outcomePromise;
       expect(outcome.status).toBe("rejected");
@@ -587,7 +587,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
         "Timed out waiting for chat UI to start streaming"
       );
 
-      expect(fallbackSpy).toHaveBeenCalledWith(baselineSnapshot, 45_000);
+      expect(fallbackSpy).toHaveBeenCalledWith(baselineSnapshot, 90_000);
     } finally {
       fallbackSpy?.mockRestore();
       vi.runOnlyPendingTimers();
