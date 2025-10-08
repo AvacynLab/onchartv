@@ -180,12 +180,20 @@ export async function signInPlaywrightUser({
   );
 }
 
+/**
+ * Bootstrap a fully authenticated Playwright context backed by a deterministic
+ * test user. Optional chat model preferences can be provided so specialised
+ * suites (for example reasoning journeys) can preload their desired provider
+ * without relying on brittle UI interactions during setup.
+ */
 export async function createAuthenticatedContext({
   browser,
   name,
+  preferredChatModelId,
 }: {
   browser: Browser;
   name: string;
+  preferredChatModelId?: string;
 }): Promise<UserContext> {
   const directory = path.join(__dirname, "../playwright/.sessions");
 
@@ -278,23 +286,27 @@ export async function createAuthenticatedContext({
    * what the server action would emit and keeps the preferred model stable
    * across warm and cold starts alike.
    */
-  const reasoningModel = chatModels.find(
-    (model) => model.id === "chat-model-reasoning"
-  );
+  const preferredModel = preferredChatModelId
+    ? chatModels.find((model) => model.id === preferredChatModelId)
+    : null;
 
-  if (!reasoningModel) {
-    throw new Error("Unable to locate the reasoning chat model metadata");
+  if (preferredChatModelId && !preferredModel) {
+    throw new Error(
+      `Unable to locate the preferred chat model: ${preferredChatModelId}`
+    );
   }
 
-  const cookieUrl = new URL(baseURL);
+  if (preferredModel) {
+    const cookieUrl = new URL(baseURL);
 
-  await context.addCookies([
-    {
-      name: "chat-model",
-      value: reasoningModel.id,
-      url: `${cookieUrl.origin}/`,
-    },
-  ]);
+    await context.addCookies([
+      {
+        name: "chat-model",
+        value: preferredModel.id,
+        url: `${cookieUrl.origin}/`,
+      },
+    ]);
+  }
 
   const page = await context.newPage();
   const chatPage = new ChatPage(page);
@@ -309,21 +321,23 @@ export async function createAuthenticatedContext({
    */
   await expect(composerInput).toBeVisible({ timeout: 60_000 });
 
-  const selectedModelName = await chatPage.getSelectedModel().then((value) =>
-    value.trim()
-  );
+  if (preferredModel) {
+    const selectedModelName = await chatPage
+      .getSelectedModel()
+      .then((value) => value.trim());
 
-  if (selectedModelName !== reasoningModel.name) {
-    /**
-     * Fallback to the interactive selector only when the cookie approach fails
-     * (for example when the component renames the label). This keeps the
-     * hermetic bootstrap resilient without masking legitimate regressions in
-     * the selector itself.
-     */
-    await chatPage.chooseModelFromSelector(reasoningModel.id);
-    await expect(chatPage.getSelectedModel()).resolves.toEqual(
-      reasoningModel.name
-    );
+    if (selectedModelName !== preferredModel.name) {
+      /**
+       * Fallback to the interactive selector only when the cookie approach
+       * fails (for example when the component renames the label). This keeps
+       * the hermetic bootstrap resilient without masking legitimate
+       * regressions in the selector itself.
+       */
+      await chatPage.chooseModelFromSelector(preferredModel.id);
+      await expect(chatPage.getSelectedModel()).resolves.toEqual(
+        preferredModel.name
+      );
+    }
   }
 
   await page.waitForTimeout(1000);
