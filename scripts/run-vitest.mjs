@@ -6,7 +6,7 @@
 import { spawnSync } from "node:child_process";
 
 /** Desired heap size (in megabytes) for coverage-heavy Vitest runs. */
-const DESIRED_HEAP_MB = 8192;
+const DESIRED_HEAP_MB = 12288;
 
 const env = { ...process.env };
 const existingNodeOptions = env.NODE_OPTIONS ?? "";
@@ -15,6 +15,15 @@ const heapFlag = `--max-old-space-size=${DESIRED_HEAP_MB}`;
 // Only append the heap flag when the caller has not already specified one.
 if (!existingNodeOptions.includes("--max-old-space-size")) {
   env.NODE_OPTIONS = `${existingNodeOptions} ${heapFlag}`.trim();
+}
+
+/**
+ * Flag coverage runs so the Vitest configuration can clamp the worker pool.
+ * This keeps GitHub-hosted runners on a single worker, reducing overall
+ * memory pressure now that coverage instrumentation is active by default.
+ */
+if (!env.VITEST_COVERAGE) {
+  env.VITEST_COVERAGE = "true";
 }
 
 /**
