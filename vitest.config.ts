@@ -21,10 +21,12 @@ const coverageDirectory = resolve(projectRoot, "coverage");
  * Vitest spawns a worker per logical CPU by default. The full suite plus
  * coverage instrumentation can exceed the default Node.js heap limit on the
  * GitHub-hosted runners, so we clamp the worker pool to a conservative
- * maximum. The lower bound keeps reproducibility for single-core environments
+ * maximum. We cap concurrency at two workers because coverage-enabled suites
+ * routinely spike past the default 4 GB heap limit when more threads run in
+ * parallel. The lower bound keeps reproducibility for single-core environments
  * while still allowing limited parallelism locally.
  */
-const maxWorkerThreads = Math.max(1, Math.min(availableParallelism(), 4));
+const maxWorkerThreads = Math.max(1, Math.min(availableParallelism(), 2));
 
 export default defineConfig({
   resolve: {
