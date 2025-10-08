@@ -33,6 +33,27 @@ const maxWorkerThreads = isContinuousIntegration || isCoverageRun
   ? 1
   : Math.max(1, Math.min(availableParallelism(), 2));
 
+/**
+ * Coverage runs retain instrumentation metadata for every executed module.
+ * Switching Vitest to the "forks" pool while coverage is enabled ensures each
+ * test file executes in its own short-lived child process so the OS can reclaim
+ * memory immediately after the file completes. This avoids the cumulative heap
+ * growth that previously exhausted a 12 GB limit on CI when we stayed on the
+ * default worker-thread pool.
+ */
+const poolStrategy = isCoverageRun ? "forks" : "threads";
+
+const threadPoolOptions = {
+  threads: {
+    /**
+     * Limit concurrency to avoid exhausting the heap on CI while still
+     * benefiting from multiple workers when resources allow.
+     */
+    maxThreads: maxWorkerThreads,
+    minThreads: 1,
+  },
+} as const;
+
 export default defineConfig({
   resolve: {
     alias: {
@@ -53,16 +74,10 @@ export default defineConfig({
       reportsDirectory: coverageDirectory,
       reporter: ["text", "lcov"],
     },
-    poolOptions: {
-      threads: {
-        /**
-         * Limit concurrency to avoid exhausting the heap on CI while still
-         * benefiting from multiple workers when resources allow.
-         */
-        maxThreads: maxWorkerThreads,
-        minThreads: 1,
-      },
-    },
+    pool: poolStrategy,
+    ...(poolStrategy === "threads"
+      ? { poolOptions: threadPoolOptions }
+      : {}),
     /**
      * Emit human-readable output alongside a deterministic JUnit report so the
      * CI workflow can publish coverage and test telemetry without reruns.
