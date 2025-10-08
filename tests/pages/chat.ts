@@ -1032,15 +1032,36 @@ export class ChatPage {
     const deadline = Date.now() + timeoutMs;
     const assistantLocator = this.page.getByTestId("message-assistant");
     const spinnerLocator = this.page.getByTestId("message-assistant-loading");
+    const stopButtonLocator = this.stopButton;
 
     while (Date.now() < deadline) {
-      const [assistantCount, spinnerCount] = await Promise.all([
+      const [assistantCount, spinnerCount, stopButtonCount] = await Promise.all([
         assistantLocator.count().catch(() => 0),
         spinnerLocator.count().catch(() => 0),
+        stopButtonLocator.count().catch(() => 0),
       ]);
 
       if (spinnerCount > 0) {
         return;
+      }
+
+      if (stopButtonCount > 0) {
+        /**
+         * The composer swaps the send button for a stop control the moment a
+         * streaming request starts. Some journeys (notably suggested actions)
+         * briefly render the stop button before the assistant bubble or
+         * loading skeleton appear which previously caused the polling loop to
+         * overrun its timeout. Treat the visible stop button as a streaming
+         * signal so we unblock as soon as the UI enters the in-flight state.
+         */
+        const stopButtonVisible = await stopButtonLocator
+          .first()
+          .isVisible()
+          .catch(() => false);
+
+        if (stopButtonVisible) {
+          return;
+        }
       }
 
       if (assistantCount > baseline.count) {
