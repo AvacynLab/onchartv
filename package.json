@@ -19,7 +19,7 @@
     "db:check": "drizzle-kit check",
     "db:up": "drizzle-kit up",
     "db:seed": "tsx lib/db/seed.ts",
-    "test": "pnpm exec vitest run --coverage",
+    "test": "node scripts/run-vitest.mjs",
     "test:ui": "pnpm exec vitest",
     "test:node": "node --import tsx --test tests/unit/*.test.ts",
     "e2e": "PLAYWRIGHT=true pnpm exec playwright test",
