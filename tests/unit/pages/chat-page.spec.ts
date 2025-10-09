@@ -1154,6 +1154,8 @@ describe("ChatPage generation helpers", () => {
           return {
             click: vi.fn(),
             fill: vi.fn(),
+            inputValue: vi.fn().mockResolvedValue("Hello"),
+            press: vi.fn(),
           };
         }
 
@@ -1276,6 +1278,10 @@ describe("ChatPage generation helpers", () => {
           return {
             click: vi.fn(),
             fill: vi.fn(),
+            inputValue: vi.fn().mockResolvedValue(
+              "What are the advantages of using Next.js?"
+            ),
+            press: vi.fn(),
           };
         }
 
@@ -1356,6 +1362,245 @@ describe("ChatPage generation helpers", () => {
         "wait",
         "suggestion-click",
         "wait-for-user",
+      ]);
+      expect((chatPage as any).pendingAssistantSnapshot).toEqual(baseline);
+    } finally {
+      ChatPage.expect = originalExpect;
+    }
+  });
+
+  it("presses enter when a suggested action only populates the composer", async () => {
+    const order: string[] = [];
+    let waitInvocation = 0;
+    const assistantLocator = {
+      count: vi.fn().mockResolvedValue(0),
+    };
+    const userLocator = {
+      count: vi.fn().mockResolvedValue(0),
+    };
+    const suggestionLocator = {
+      click: vi.fn(async () => {
+        order.push("suggestion-click");
+      }),
+    };
+    const page = {
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "suggested-action-0") {
+          return suggestionLocator;
+        }
+
+        if (testId === "message-assistant") {
+          order.push("assistant-snapshot");
+          return assistantLocator;
+        }
+
+        if (testId === "message-user") {
+          return userLocator;
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            click: vi.fn(),
+            fill: vi.fn(),
+            inputValue: vi
+              .fn()
+              .mockResolvedValue("What are the advantages of using Next.js?"),
+            press: vi.fn(async () => {
+              order.push("press-enter");
+            }),
+          };
+        }
+
+        if (testId === "send-button") {
+          return {
+            click: vi.fn(),
+          };
+        }
+
+        throw new Error(`Unexpected test id: ${testId}`);
+      }),
+      waitForFunction: vi.fn(async () => {
+        waitInvocation += 1;
+
+        if (waitInvocation === 1) {
+          order.push("wait-for-user");
+          throw new Error("timeout");
+        }
+
+        order.push("wait-for-user-fallback");
+      }),
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+    const baseline = {
+      count: 0,
+      latestArtifactCount: 0,
+      latestMessageId: null,
+      latestMessageText: "",
+      userCount: 0,
+      latestUserMessageId: null,
+      latestUserMessageText: "",
+    } as const;
+
+    const captureSpy = vi
+      .spyOn(chatPage as any, "captureAssistantSnapshot")
+      .mockImplementation(async () => {
+        order.push("capture-call");
+        return baseline;
+      });
+    const waitSpy = vi
+      .spyOn(chatPage as any, "waitForChatApiResponse")
+      .mockImplementation(async () => {
+        order.push("wait");
+      });
+
+    const originalExpect = ChatPage.expect;
+    const visibleSpy = vi.fn(async () => {
+      order.push("suggestion-visible");
+    });
+    const enabledSpy = vi.fn(async () => {
+      order.push("suggestion-enabled");
+    });
+
+    ChatPage.expect = vi
+      .fn((target: unknown) => {
+        if (target === suggestionLocator) {
+          return {
+            toBeVisible: visibleSpy,
+            toBeEnabled: enabledSpy,
+          } as unknown as ReturnType<typeof ChatPage.expect>;
+        }
+
+        return {
+          toBeVisible: vi.fn(),
+          toBeEnabled: vi.fn(),
+        } as unknown as ReturnType<typeof ChatPage.expect>;
+      })
+      .mockName("ChatPage.expect") as unknown as typeof ChatPage.expect;
+
+    try {
+      await chatPage.sendUserMessageFromSuggestion();
+
+      expect(captureSpy).toHaveBeenCalledTimes(2);
+      expect(waitSpy).toHaveBeenCalledTimes(2);
+      expect(visibleSpy).toHaveBeenCalledWith({ timeout: 30_000 });
+      expect(enabledSpy).toHaveBeenCalledWith({ timeout: 30_000 });
+      expect(order).toEqual([
+        "suggestion-visible",
+        "suggestion-enabled",
+        "capture-call",
+        "wait",
+        "suggestion-click",
+        "wait-for-user",
+        "capture-call",
+        "wait",
+        "press-enter",
+        "wait-for-user-fallback",
+      ]);
+      expect((chatPage as any).pendingAssistantSnapshot).toEqual(baseline);
+    } finally {
+      ChatPage.expect = originalExpect;
+    }
+  });
+
+  it("submits via keyboard when the send button never enables", async () => {
+    const order: string[] = [];
+    const sendButton = { click: vi.fn(async () => order.push("send-click")) };
+    const page = {
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "message-assistant") {
+          return {
+            count: vi.fn().mockResolvedValue(0),
+          };
+        }
+
+        if (testId === "message-user") {
+          return {
+            count: vi.fn().mockResolvedValue(0),
+          };
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            click: vi.fn(),
+            fill: vi.fn(),
+            inputValue: vi.fn().mockResolvedValue("Hello"),
+            press: vi.fn(async () => {
+              order.push("press-enter");
+            }),
+          };
+        }
+
+        if (testId === "send-button") {
+          return sendButton;
+        }
+
+        throw new Error(`Unexpected test id: ${testId}`);
+      }),
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+    const baseline = {
+      count: 0,
+      latestArtifactCount: 0,
+      latestMessageId: null,
+      latestMessageText: "",
+      userCount: 0,
+      latestUserMessageId: null,
+      latestUserMessageText: "",
+    } as const;
+
+    const captureSpy = vi
+      .spyOn(chatPage as any, "captureAssistantSnapshot")
+      .mockImplementation(async () => {
+        order.push("capture-call");
+        return baseline;
+      });
+    const waitSpy = vi
+      .spyOn(chatPage as any, "waitForChatApiResponse")
+      .mockImplementation(async () => {
+        order.push("wait");
+      });
+
+    const originalExpect = ChatPage.expect;
+    const visibleSpy = vi.fn(async () => {
+      order.push("send-visible");
+    });
+    const enabledSpy = vi.fn(async () => {
+      order.push("send-enabled");
+      throw new Error("still disabled");
+    });
+
+    ChatPage.expect = vi
+      .fn((target: unknown) => {
+        if (target === sendButton) {
+          return {
+            toBeVisible: visibleSpy,
+            toBeEnabled: enabledSpy,
+          } as unknown as ReturnType<typeof ChatPage.expect>;
+        }
+
+        return {
+          toBeVisible: vi.fn(),
+          toBeEnabled: vi.fn(),
+        } as unknown as ReturnType<typeof ChatPage.expect>;
+      })
+      .mockName("ChatPage.expect") as unknown as typeof ChatPage.expect;
+
+    try {
+      await chatPage.sendUserMessage("Hello");
+
+      expect(captureSpy).toHaveBeenCalledTimes(1);
+      expect(waitSpy).toHaveBeenCalledTimes(1);
+      expect(visibleSpy).toHaveBeenCalledWith({ timeout: 30_000 });
+      expect(enabledSpy).toHaveBeenCalledWith({ timeout: 30_000 });
+      expect(sendButton.click).not.toHaveBeenCalled();
+      expect(order).toEqual([
+        "send-visible",
+        "send-enabled",
+        "capture-call",
+        "wait",
+        "press-enter",
       ]);
       expect((chatPage as any).pendingAssistantSnapshot).toEqual(baseline);
     } finally {

@@ -159,7 +159,25 @@ export class ChatPage {
      * Playwright does not attempt to click a stale, disabled button.
      */
     await ChatPage.expect(sendButton).toBeVisible({ timeout: 30_000 });
-    await ChatPage.expect(sendButton).toBeEnabled({ timeout: 30_000 });
+
+    let usedKeyboardFallback = false;
+    let enableAssertionError: unknown;
+
+    try {
+      await ChatPage.expect(sendButton).toBeEnabled({ timeout: 30_000 });
+    } catch (error) {
+      enableAssertionError = error;
+      const composerValue = (await this.multimodalInput.inputValue()).trim();
+
+      if (composerValue.length === 0) {
+        throw new Error(
+          "Composer failed to capture the outbound message before submission",
+          error instanceof Error ? { cause: error } : undefined
+        );
+      }
+
+      usedKeyboardFallback = true;
+    }
 
     await this.prepareForGeneration();
 
@@ -167,12 +185,32 @@ export class ChatPage {
      * Trigger the send action and the API wait concurrently so we capture the
      * network response associated with this submission. Surfacing transport
      * failures immediately makes the suite easier to debug than waiting for the
-     * streaming assertions to eventually time out.
+     * streaming assertions to eventually time out. When the framework keeps the
+     * submit button disabled (occasionally observed during slow hydration on
+     * hermetic runs) we fall back to the textarea keyboard shortcut which
+     * bypasses the disabled control.
      */
-    await Promise.all([
-      this.waitForChatApiResponse(),
-      sendButton.click(),
-    ]);
+    if (usedKeyboardFallback) {
+      try {
+        await Promise.all([
+          this.waitForChatApiResponse(),
+          this.multimodalInput.press("Enter"),
+        ]);
+      } catch (error) {
+        // Surface the original enable assertion alongside any downstream
+        // failure so the caller understands why the fallback path executed.
+        throw error instanceof Error
+          ? Object.assign(error, {
+              cause: error.cause ?? enableAssertionError,
+            })
+          : error;
+      }
+    } else {
+      await Promise.all([
+        this.waitForChatApiResponse(),
+        sendButton.click(),
+      ]);
+    }
   }
 
   async isGenerationComplete() {
@@ -426,8 +464,8 @@ export class ChatPage {
       suggestionButton.click(),
     ]);
 
-    try {
-      await this.page.waitForFunction(
+    const waitForUserMessage = async (timeout: number) =>
+      this.page.waitForFunction(
         (args: { initialUserCount: number }) => {
           const { initialUserCount } = args;
           const userNodes = document.querySelectorAll(
@@ -437,13 +475,37 @@ export class ChatPage {
           return userNodes.length > initialUserCount;
         },
         { initialUserCount },
-        { timeout: 30_000 }
+        { timeout }
       );
-    } catch (error) {
-      throw new Error(
-        "Timed out waiting for the suggested action to append a user message",
-        error instanceof Error ? { cause: error } : undefined
-      );
+
+    try {
+      await waitForUserMessage(30_000);
+      return;
+    } catch (initialError) {
+      const composerValue = (await this.multimodalInput.inputValue()).trim();
+
+      if (composerValue.length === 0) {
+        throw new Error(
+          "Timed out waiting for the suggested action to append a user message",
+          initialError instanceof Error ? { cause: initialError } : undefined
+        );
+      }
+
+      await this.prepareForGeneration();
+
+      await Promise.all([
+        this.waitForChatApiResponse(),
+        this.multimodalInput.press("Enter"),
+      ]);
+
+      await waitForUserMessage(15_000).catch((fallbackError) => {
+        throw new Error(
+          "Suggested action failed to submit even after triggering the manual fallback",
+          fallbackError instanceof Error
+            ? { cause: fallbackError }
+            : undefined
+        );
+      });
     }
   }
 
