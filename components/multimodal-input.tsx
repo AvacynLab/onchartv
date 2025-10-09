@@ -203,93 +203,79 @@ function PureMultimodalInput({
 
   const shouldRenderStopButton = isStopButtonVisible;
 
-  /**
-   * Centralise the submission pipeline so regular sends and quick actions share
-   * the same validation, slash-command resolution and post-send cleanup. The
-   * helper returns a boolean so callers can short-circuit when validation fails
-   * (for example when uploads are still pending or the prompt is empty).
-   */
-  const dispatchPrompt = useCallback(
-    (rawPrompt: string) => {
-      const trimmedPrompt = rawPrompt.trim();
-      const hasText = trimmedPrompt.length > 0;
-      const hasAttachments = attachments.length > 0;
-
-      if (uploadQueue.length > 0) {
-        toast.error("Please wait for the files to finish uploading before sending!");
-        return false;
-      }
-
-      if (!hasText && !hasAttachments) {
-        toast.error("Please enter a message or attach a file before sending!");
-        return false;
-      }
-
-      window.history.replaceState({}, "", `/chat/${chatId}`);
-
-      const resolvedCommand = resolveSlashCommand(trimmedPrompt);
-      /**
-       * When the user relies on a finance-oriented slash command (for example
-       * `/chart BTCUSD 1D`), rewrite the outbound prompt so the assistant
-       * receives an explicit instruction to yield the relevant artefact. The
-       * helper keeps the feature testable in isolation and lets us expand the
-       * command surface without entangling the transport layer.
-       */
-      const finalText = resolvedCommand?.prompt ?? trimmedPrompt;
-
-      /**
-       * Normalise les pièces du message envoyées au SDK AI.
-       * L'alias repose sur `ChatMessage` pour suivre l'évolution du contrat
-       * entre notre composer et le transport sans dupliquer les unions de
-       * types (`text`, `file`, etc.). Une recompilation suffit donc à signaler
-       * tout nouveau type de pièce ajouté côté SDK.
-       */
-      const payloadParts: ChatMessage["parts"][number][] = attachments.map((attachment) => ({
-        type: "file",
-        url: attachment.url,
-        name: attachment.name,
-        mediaType: attachment.contentType,
-      }));
-
-      if (finalText.length > 0) {
-        payloadParts.push({
-          type: "text",
-          text: finalText,
-        });
-      }
-
-      sendMessage({
-        role: "user",
-        parts: payloadParts,
-      });
-
-      setAttachments([]);
-      setLocalStorageInput("");
-      resetHeight();
-      setInput("");
-
-      if (width && width > 768) {
-        textareaRef.current?.focus();
-      }
-
-      return true;
-    },
-    [
-      attachments,
-      chatId,
-      resetHeight,
-      sendMessage,
-      setAttachments,
-      setInput,
-      setLocalStorageInput,
-      uploadQueue.length,
-      width,
-    ]
-  );
-
   const submitForm = useCallback(() => {
-    dispatchPrompt(input);
-  }, [dispatchPrompt, input]);
+    const trimmedInput = input.trim();
+    const hasText = trimmedInput.length > 0;
+    const hasAttachments = attachments.length > 0;
+
+    if (uploadQueue.length > 0) {
+      toast.error("Please wait for the files to finish uploading before sending!");
+      return;
+    }
+
+    if (!hasText && !hasAttachments) {
+      toast.error("Please enter a message or attach a file before sending!");
+      return;
+    }
+
+    window.history.replaceState({}, "", `/chat/${chatId}`);
+
+    const resolvedCommand = resolveSlashCommand(trimmedInput);
+    /**
+     * When the user relies on a finance-oriented slash command (for example
+     * `/chart BTCUSD 1D`), rewrite the outbound prompt so the assistant
+     * receives an explicit instruction to yield the relevant artefact. The
+     * helper keeps the feature testable in isolation and lets us expand the
+     * command surface without entangling the transport layer.
+     */
+    const finalText = resolvedCommand?.prompt ?? trimmedInput;
+
+    /**
+     * Normalise les pièces du message envoyées au SDK AI.
+     * L'alias repose sur `ChatMessage` pour suivre l'évolution du contrat entre
+     * notre composer et le transport sans dupliquer les unions de types (`text`,
+     * `file`, etc.). Une recompilation suffit donc à signaler tout nouveau type
+     * de pièce ajouté côté SDK.
+     */
+    const payloadParts: ChatMessage["parts"][number][] = attachments.map((attachment) => ({
+      type: "file",
+      url: attachment.url,
+      name: attachment.name,
+      mediaType: attachment.contentType,
+    }));
+
+    if (finalText.length > 0) {
+      payloadParts.push({
+        type: "text",
+        text: finalText,
+      });
+    }
+
+    sendMessage({
+      role: "user",
+      parts: payloadParts,
+    });
+
+    setAttachments([]);
+    setLocalStorageInput("");
+    resetHeight();
+    setInput("");
+
+    if (width && width > 768) {
+      textareaRef.current?.focus();
+    }
+  }, [
+    attachments,
+    chatId,
+    input,
+    resetHeight,
+    sendMessage,
+    setAttachments,
+    setInput,
+    setLocalStorageInput,
+    uploadQueue.length,
+    width,
+  ]);
 
   const uploadFile = useCallback(async (file: File) => {
     const formData = new FormData();
@@ -365,10 +351,9 @@ function PureMultimodalInput({
         attachments.length === 0 &&
         uploadQueue.length === 0 && (
           <SuggestedActions
-            onSendSuggestion={(suggestion) => {
-              dispatchPrompt(suggestion);
-            }}
+            chatId={chatId}
             selectedVisibilityType={selectedVisibilityType}
+            sendMessage={sendMessage}
           />
         )}
 

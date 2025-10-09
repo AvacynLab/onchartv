@@ -1,17 +1,20 @@
 "use client";
 
+import type { UseChatHelpers } from "@ai-sdk/react";
 import { motion } from "framer-motion";
 import React, { memo } from "react";
 import { isFinanceFeatureEnabledClient } from "@/lib/feature-flags";
+import type { ChatMessage } from "@/lib/types";
 import { Suggestion } from "./elements/suggestion";
 import type { VisibilityType } from "./visibility-selector";
 
 type SuggestedActionsProps = {
-  onSendSuggestion: (suggestion: string) => void;
+  chatId: string;
+  sendMessage: UseChatHelpers<ChatMessage>["sendMessage"];
   selectedVisibilityType: VisibilityType;
 };
 
-function PureSuggestedActions({ onSendSuggestion }: SuggestedActionsProps) {
+function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
   /**
    * Keep the first suggestion anchored to the long-standing onboarding prompt so
    * the regression suite continues to assert the deterministic "With Next.js,
@@ -76,7 +79,14 @@ function PureSuggestedActions({ onSendSuggestion }: SuggestedActionsProps) {
               className="h-auto w-full whitespace-normal p-3 text-left"
               data-testid={suggestionTestId}
               onClick={(suggestion) => {
-                onSendSuggestion(suggestion);
+                window.history.replaceState({}, "", `/chat/${chatId}`);
+                const payloadParts: ChatMessage["parts"][number][] = [
+                  { type: "text", text: suggestion },
+                ];
+                sendMessage({
+                  role: "user",
+                  parts: payloadParts,
+                });
               }}
               suggestion={suggestedAction}
             >
@@ -92,6 +102,9 @@ function PureSuggestedActions({ onSendSuggestion }: SuggestedActionsProps) {
 export const SuggestedActions = memo(
   PureSuggestedActions,
   (prevProps, nextProps) => {
+    if (prevProps.chatId !== nextProps.chatId) {
+      return false;
+    }
     if (prevProps.selectedVisibilityType !== nextProps.selectedVisibilityType) {
       return false;
     }
