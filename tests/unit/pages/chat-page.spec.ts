@@ -783,15 +783,11 @@ describe("ChatPage generation helpers", () => {
       }),
     };
     const page = {
-      waitForFunction: vi.fn().mockImplementation(async () => {
-        order.push("composer-ready");
-      }),
       getByTestId: vi.fn((testId: string) => {
         if (testId === "multimodal-input") {
           return {
             click: vi.fn(async () => order.push("multimodal-click")),
             fill: vi.fn(async () => order.push("multimodal-fill")),
-            inputValue: vi.fn().mockResolvedValue("Hello"),
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
 
@@ -832,9 +828,7 @@ describe("ChatPage generation helpers", () => {
 
     expect(captureSpy).toHaveBeenCalledOnce();
     expect(waitSpy).toHaveBeenCalledOnce();
-    expect(order.indexOf("capture-call")).toBeLessThan(
-      order.indexOf("send-click")
-    );
+    expect(order.indexOf("capture-call")).toBeLessThan(order.indexOf("send-click"));
     expect((chatPage as any).pendingAssistantSnapshot).toEqual(baseline);
   });
 

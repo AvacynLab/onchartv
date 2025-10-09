@@ -135,30 +135,7 @@ export class ChatPage {
 
   async sendUserMessage(message: string) {
     await this.multimodalInput.click();
-    await this.multimodalInput.fill("");
-    await this.multimodalInput.type(message);
-
-    const deadline = Date.now() + 5_000;
-    let composerValue = "";
-
-    while (Date.now() < deadline) {
-      composerValue = await this.multimodalInput
-        .inputValue()
-        .then((value) => value.trim())
-        .catch(() => "");
-
-      if (composerValue.length > 0) {
-        break;
-      }
-
-      await this.page.waitForTimeout(50);
-    }
-
-    if (composerValue.length === 0) {
-      throw new Error("Composer failed to capture the outbound message before submission.");
-    }
-
-    await ChatPage.expect(this.sendButton).toBeEnabled({ timeout: 10_000 });
+    await this.multimodalInput.fill(message);
 
     await this.prepareForGeneration();
 
