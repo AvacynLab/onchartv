@@ -152,6 +152,15 @@ export class ChatPage {
     await this.multimodalInput.click();
     await this.multimodalInput.fill(message);
 
+    const sendButton = this.sendButton;
+    /**
+     * React controls the composer state asynchronously. Wait for the framework
+     * to enable the submit control before we trigger the network listeners so
+     * Playwright does not attempt to click a stale, disabled button.
+     */
+    await ChatPage.expect(sendButton).toBeVisible({ timeout: 30_000 });
+    await ChatPage.expect(sendButton).toBeEnabled({ timeout: 30_000 });
+
     await this.prepareForGeneration();
 
     /**
@@ -162,7 +171,7 @@ export class ChatPage {
      */
     await Promise.all([
       this.waitForChatApiResponse(),
-      this.sendButton.click(),
+      sendButton.click(),
     ]);
   }
 
@@ -402,12 +411,40 @@ export class ChatPage {
      * working even when the rendered label changes (for example due to
      * different font fallbacks in offline Playwright runs).
      */
+    const suggestionButton = this.page.getByTestId("suggested-action-0");
+
+    await ChatPage.expect(suggestionButton).toBeVisible({ timeout: 30_000 });
+    await ChatPage.expect(suggestionButton).toBeEnabled({ timeout: 30_000 });
+
+    const userMessages = this.page.getByTestId("message-user");
+    const initialUserCount = await userMessages.count().catch(() => 0);
+
     await this.prepareForGeneration();
 
     await Promise.all([
       this.waitForChatApiResponse(),
-      this.page.getByTestId("suggested-action-0").click(),
+      suggestionButton.click(),
     ]);
+
+    try {
+      await this.page.waitForFunction(
+        (args: { initialUserCount: number }) => {
+          const { initialUserCount } = args;
+          const userNodes = document.querySelectorAll(
+            '[data-testid="message-user"]'
+          );
+
+          return userNodes.length > initialUserCount;
+        },
+        { initialUserCount },
+        { timeout: 30_000 }
+      );
+    } catch (error) {
+      throw new Error(
+        "Timed out waiting for the suggested action to append a user message",
+        error instanceof Error ? { cause: error } : undefined
+      );
+    }
   }
 
   async isElementVisible(elementId: string) {

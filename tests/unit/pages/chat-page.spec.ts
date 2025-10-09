@@ -1143,7 +1143,7 @@ describe("ChatPage generation helpers", () => {
     const userLocator = {
       count: vi.fn().mockResolvedValue(0),
     };
-    const sendButtonLocator = {
+    const sendButton = {
       click: vi.fn(async () => {
         order.push("send-click");
       }),
@@ -1158,7 +1158,7 @@ describe("ChatPage generation helpers", () => {
         }
 
         if (testId === "send-button") {
-          return sendButtonLocator;
+          return sendButton;
         }
 
         if (testId === "message-assistant") {
@@ -1197,14 +1197,51 @@ describe("ChatPage generation helpers", () => {
         order.push("wait");
       });
 
-    await chatPage.sendUserMessage("Hello");
+    const originalExpect = ChatPage.expect;
+    const visibleSpy = vi.fn(async () => {
+      order.push("send-visible");
+    });
+    const enabledSpy = vi.fn(async () => {
+      order.push("send-enabled");
+    });
 
-    expect(captureSpy).toHaveBeenCalledOnce();
-    expect(waitSpy).toHaveBeenCalledOnce();
-    expect(order.indexOf("capture-call")).toBeLessThan(
-      order.indexOf("send-click")
-    );
-    expect((chatPage as any).pendingAssistantSnapshot).toEqual(baseline);
+    ChatPage.expect = vi
+      .fn((target: unknown) => {
+        if (target === sendButton) {
+          return {
+            toBeVisible: visibleSpy,
+            toBeEnabled: enabledSpy,
+          } as unknown as ReturnType<typeof ChatPage.expect>;
+        }
+
+        return {
+          toBeVisible: vi.fn(),
+          toBeEnabled: vi.fn(),
+        } as unknown as ReturnType<typeof ChatPage.expect>;
+      })
+      .mockName("ChatPage.expect") as unknown as typeof ChatPage.expect;
+
+    try {
+      await chatPage.sendUserMessage("Hello");
+
+      expect(captureSpy).toHaveBeenCalledOnce();
+      expect(waitSpy).toHaveBeenCalledOnce();
+      expect(visibleSpy).toHaveBeenCalledWith({ timeout: 30_000 });
+      expect(enabledSpy).toHaveBeenCalledWith({ timeout: 30_000 });
+      expect(order.indexOf("capture-call")).toBeGreaterThan(
+        order.indexOf("send-enabled")
+      );
+      expect(order).toEqual([
+        "send-visible",
+        "send-enabled",
+        "capture-call",
+        "wait",
+        "send-click",
+      ]);
+      expect((chatPage as any).pendingAssistantSnapshot).toEqual(baseline);
+    } finally {
+      ChatPage.expect = originalExpect;
+    }
   });
 
   it("records a snapshot before sending a suggestion message", async () => {
@@ -1250,6 +1287,9 @@ describe("ChatPage generation helpers", () => {
 
         throw new Error(`Unexpected test id: ${testId}`);
       }),
+      waitForFunction: vi.fn(async () => {
+        order.push("wait-for-user");
+      }),
     } satisfies Partial<Page>;
 
     const chatPage = new ChatPage(page as Page);
@@ -1275,14 +1315,52 @@ describe("ChatPage generation helpers", () => {
         order.push("wait");
       });
 
-    await chatPage.sendUserMessageFromSuggestion();
+    const originalExpect = ChatPage.expect;
+    const visibleSpy = vi.fn(async () => {
+      order.push("suggestion-visible");
+    });
+    const enabledSpy = vi.fn(async () => {
+      order.push("suggestion-enabled");
+    });
 
-    expect(captureSpy).toHaveBeenCalledOnce();
-    expect(waitSpy).toHaveBeenCalledOnce();
-    expect(order.indexOf("capture-call")).toBeLessThan(
-      order.indexOf("suggestion-click")
-    );
-    expect((chatPage as any).pendingAssistantSnapshot).toEqual(baseline);
+    ChatPage.expect = vi
+      .fn((target: unknown) => {
+        if (target === suggestionLocator) {
+          return {
+            toBeVisible: visibleSpy,
+            toBeEnabled: enabledSpy,
+          } as unknown as ReturnType<typeof ChatPage.expect>;
+        }
+
+        return {
+          toBeVisible: vi.fn(),
+          toBeEnabled: vi.fn(),
+        } as unknown as ReturnType<typeof ChatPage.expect>;
+      })
+      .mockName("ChatPage.expect") as unknown as typeof ChatPage.expect;
+
+    try {
+      await chatPage.sendUserMessageFromSuggestion();
+
+      expect(captureSpy).toHaveBeenCalledOnce();
+      expect(waitSpy).toHaveBeenCalledOnce();
+      expect(visibleSpy).toHaveBeenCalledWith({ timeout: 30_000 });
+      expect(enabledSpy).toHaveBeenCalledWith({ timeout: 30_000 });
+      expect(order.indexOf("capture-call")).toBeGreaterThan(
+        order.indexOf("suggestion-enabled")
+      );
+      expect(order).toEqual([
+        "suggestion-visible",
+        "suggestion-enabled",
+        "capture-call",
+        "wait",
+        "suggestion-click",
+        "wait-for-user",
+      ]);
+      expect((chatPage as any).pendingAssistantSnapshot).toEqual(baseline);
+    } finally {
+      ChatPage.expect = originalExpect;
+    }
   });
 
   it("records a snapshot before editing the latest user message", async () => {
