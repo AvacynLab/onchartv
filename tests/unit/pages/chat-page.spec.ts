@@ -1154,6 +1154,9 @@ describe("ChatPage generation helpers", () => {
           return {
             click: vi.fn(),
             fill: vi.fn(),
+            type: vi.fn(async () => {
+              order.push("type");
+            }),
             inputValue: vi.fn().mockResolvedValue("Hello"),
             press: vi.fn(),
           };
@@ -1174,6 +1177,10 @@ describe("ChatPage generation helpers", () => {
 
         throw new Error(`Unexpected test id: ${testId}`);
       }),
+      waitForFunction: vi.fn(async () => {
+        order.push("wait-for-composer");
+      }),
+      evaluate: vi.fn().mockResolvedValue(undefined),
     } satisfies Partial<Page>;
 
     const chatPage = new ChatPage(page as Page);
@@ -1234,6 +1241,8 @@ describe("ChatPage generation helpers", () => {
         order.indexOf("send-enabled")
       );
       expect(order).toEqual([
+        "type",
+        "wait-for-composer",
         "send-visible",
         "send-enabled",
         "capture-call",
@@ -1524,6 +1533,9 @@ describe("ChatPage generation helpers", () => {
           return {
             click: vi.fn(),
             fill: vi.fn(),
+            type: vi.fn(async () => {
+              order.push("type");
+            }),
             inputValue: vi.fn().mockResolvedValue("Hello"),
             press: vi.fn(async () => {
               order.push("press-enter");
@@ -1537,6 +1549,10 @@ describe("ChatPage generation helpers", () => {
 
         throw new Error(`Unexpected test id: ${testId}`);
       }),
+      waitForFunction: vi.fn(async () => {
+        order.push("wait-for-composer");
+      }),
+      evaluate: vi.fn().mockResolvedValue(undefined),
     } satisfies Partial<Page>;
 
     const chatPage = new ChatPage(page as Page);
@@ -1596,8 +1612,11 @@ describe("ChatPage generation helpers", () => {
       expect(enabledSpy).toHaveBeenCalledWith({ timeout: 30_000 });
       expect(sendButton.click).not.toHaveBeenCalled();
       expect(order).toEqual([
+        "type",
+        "wait-for-composer",
         "send-visible",
         "send-enabled",
+        "wait-for-composer",
         "capture-call",
         "wait",
         "press-enter",

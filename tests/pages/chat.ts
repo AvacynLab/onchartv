@@ -150,7 +150,15 @@ export class ChatPage {
 
   async sendUserMessage(message: string) {
     await this.multimodalInput.click();
-    await this.multimodalInput.fill(message);
+    await this.multimodalInput.fill("");
+    /**
+     * Typing character-by-character keeps the controlled textarea and the
+     * underlying React state in sync, even when hydration replaces the DOM
+     * node right after Playwright focuses it. The tiny delay avoids starving
+     * the browser event loop on slower CI runners.
+     */
+    await this.multimodalInput.type(message, { delay: 10 });
+    await this.syncComposerValue(message);
 
     const sendButton = this.sendButton;
     /**
@@ -167,6 +175,7 @@ export class ChatPage {
       await ChatPage.expect(sendButton).toBeEnabled({ timeout: 30_000 });
     } catch (error) {
       enableAssertionError = error;
+      await this.syncComposerValue(message).catch(() => undefined);
       const composerValue = (await this.multimodalInput.inputValue()).trim();
 
       if (composerValue.length === 0) {
@@ -485,10 +494,30 @@ export class ChatPage {
       const composerValue = (await this.multimodalInput.inputValue()).trim();
 
       if (composerValue.length === 0) {
-        throw new Error(
-          "Timed out waiting for the suggested action to append a user message",
-          initialError instanceof Error ? { cause: initialError } : undefined
-        );
+        const fallbackText = await suggestionButton
+          .innerText()
+          .then((value) => value.trim())
+          .catch(() => "");
+
+        if (fallbackText.length === 0) {
+          throw new Error(
+            "Timed out waiting for the suggested action to append a user message",
+            initialError instanceof Error ? { cause: initialError } : undefined
+          );
+        }
+
+        await this.sendUserMessage(fallbackText);
+
+        await waitForUserMessage(30_000).catch((fallbackError) => {
+          throw new Error(
+            "Suggested action failed to submit even after triggering the manual fallback",
+            fallbackError instanceof Error
+              ? { cause: fallbackError }
+              : undefined
+          );
+        });
+
+        return;
       }
 
       await this.prepareForGeneration();
@@ -776,6 +805,59 @@ export class ChatPage {
    */
   private async prepareForGeneration(): Promise<void> {
     this.pendingAssistantSnapshot = await this.captureAssistantSnapshot();
+  }
+
+  private async syncComposerValue(message: string): Promise<void> {
+    const trimmedMessage = message.trim();
+
+    if (trimmedMessage.length === 0) {
+      return;
+    }
+
+    const selector = '[data-testid="multimodal-input"]';
+    const waitForMatch = () =>
+      this.page.waitForFunction(
+        (args: { expected: string; selector: string }) => {
+          const textarea = document.querySelector<HTMLTextAreaElement>(
+            args.selector
+          );
+
+          return textarea?.value.trim() === args.expected;
+        },
+        { expected: trimmedMessage, selector },
+        { timeout: 2_000 }
+      );
+
+    try {
+      await waitForMatch();
+      return;
+    } catch {}
+
+    await this.page.evaluate(
+      (args: { selector: string; value: string }) => {
+        const textarea = document.querySelector<HTMLTextAreaElement>(
+          args.selector
+        );
+
+        if (!textarea) {
+          throw new Error(
+            `Unable to locate the chat composer using selector: ${args.selector}`
+          );
+        }
+
+        textarea.value = args.value;
+        textarea.dispatchEvent(new Event("input", { bubbles: true }));
+        textarea.dispatchEvent(new Event("change", { bubbles: true }));
+      },
+      { selector, value: message }
+    );
+
+    await waitForMatch().catch((finalError) => {
+      throw new Error(
+        "Composer failed to synchronise with the requested text after applying the fallback",
+        finalError instanceof Error ? { cause: finalError } : undefined
+      );
+    });
   }
 
   private async captureAssistantSnapshot(): Promise<
