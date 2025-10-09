@@ -135,46 +135,30 @@ export class ChatPage {
 
   async sendUserMessage(message: string) {
     await this.multimodalInput.click();
-    await this.multimodalInput.fill(message);
+    await this.multimodalInput.fill("");
+    await this.multimodalInput.type(message);
 
-    try {
-      await this.page.waitForFunction(
-        () => {
-          const composer = document.querySelector<HTMLTextAreaElement>(
-            '[data-testid="multimodal-input"]'
-          );
-          const sendButton = document.querySelector<HTMLButtonElement>(
-            '[data-testid="send-button"]'
-          );
+    const deadline = Date.now() + 5_000;
+    let composerValue = "";
 
-          if (!composer || !sendButton) {
-            return false;
-          }
-
-          if (composer.value.trim().length === 0) {
-            return false;
-          }
-
-          return !sendButton.disabled;
-        },
-        undefined,
-        { timeout: 30_000 }
-      );
-    } catch (error) {
-      const composerValue = await this.multimodalInput
+    while (Date.now() < deadline) {
+      composerValue = await this.multimodalInput
         .inputValue()
+        .then((value) => value.trim())
         .catch(() => "");
-      const diagnostic =
-        composerValue.trim().length > 0
-          ? ` Composer retained value: "${composerValue}".`
-          : " Composer remained empty.";
 
-      throw new Error(
-        "Composer failed to capture the outbound message before submission." +
-          diagnostic,
-        error instanceof Error ? { cause: error } : undefined
-      );
+      if (composerValue.length > 0) {
+        break;
+      }
+
+      await this.page.waitForTimeout(50);
     }
+
+    if (composerValue.length === 0) {
+      throw new Error("Composer failed to capture the outbound message before submission.");
+    }
+
+    await ChatPage.expect(this.sendButton).toBeEnabled({ timeout: 10_000 });
 
     await this.prepareForGeneration();
 
