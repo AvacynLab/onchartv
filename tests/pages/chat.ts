@@ -134,8 +134,7 @@ export class ChatPage {
   }
 
   async sendUserMessage(message: string) {
-    await this.multimodalInput.click();
-    await this.multimodalInput.fill(message);
+    await this.waitForComposerReady(message);
 
     await this.prepareForGeneration();
 
@@ -688,6 +687,70 @@ export class ChatPage {
    */
   private async prepareForGeneration(): Promise<void> {
     this.pendingAssistantSnapshot = await this.captureAssistantSnapshot();
+  }
+
+  private async waitForComposerReady(
+    message: string,
+    options?: { timeout?: number; pollInterval?: number }
+  ): Promise<void> {
+    const timeout = options?.timeout ?? 30_000;
+    const pollInterval = options?.pollInterval ?? 100;
+    const deadline = Date.now() + timeout;
+
+    const composer = this.multimodalInput;
+    const sendButton = this.sendButton;
+    const stopButton = this.stopButton;
+
+    // Give the controlled textarea focus and seed the outbound prompt exactly
+    // as a user would: clear any residue and type the message character by
+    // character so React receives the full cascade of keyboard events.
+    await composer.click();
+    await composer.fill("");
+    await composer.type(message);
+
+    let lastComposerValue = "";
+    let lastSendEnabled = false;
+    let stopVisible = false;
+
+    while (Date.now() < deadline) {
+      [lastComposerValue, lastSendEnabled, stopVisible] = await Promise.all([
+        composer.inputValue().catch(() => ""),
+        sendButton.isEnabled().catch(() => false),
+        stopButton.isVisible().catch(() => false),
+      ]);
+
+      if (lastComposerValue === message && lastSendEnabled && !stopVisible) {
+        return;
+      }
+
+      // Hydration occasionally replaces the textarea node, wiping the value in
+      // the process. When that happens, re-seed the input so the composer state
+      // matches the outbound message and Playwright does not submit an empty
+      // payload.
+      if (lastComposerValue !== message) {
+        await composer.fill("");
+        await composer.type(message);
+      }
+
+      const remaining = Math.max(0, deadline - Date.now());
+      await this.page.waitForTimeout(Math.min(pollInterval, remaining));
+    }
+
+    const composerDiagnostic =
+      lastComposerValue.trim().length > 0
+        ? ` Composer retained value: "${lastComposerValue}".`
+        : " Composer remained empty.";
+    const sendDiagnostic = lastSendEnabled ? "" : " Send button stayed disabled.";
+    const stopDiagnostic = stopVisible
+      ? " Stop button remained visible, indicating an active stream."
+      : "";
+
+    throw new Error(
+      "Composer never became ready before submission." +
+        composerDiagnostic +
+        sendDiagnostic +
+        stopDiagnostic
+    );
   }
 
   private async captureAssistantSnapshot(): Promise<

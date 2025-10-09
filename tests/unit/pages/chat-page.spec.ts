@@ -784,13 +784,6 @@ describe("ChatPage generation helpers", () => {
     };
     const page = {
       getByTestId: vi.fn((testId: string) => {
-        if (testId === "multimodal-input") {
-          return {
-            click: vi.fn(async () => order.push("multimodal-click")),
-            fill: vi.fn(async () => order.push("multimodal-fill")),
-          } as unknown as ReturnType<Page["getByTestId"]>;
-        }
-
         if (testId === "send-button") {
           return sendButtonLocator;
         }
@@ -818,6 +811,11 @@ describe("ChatPage generation helpers", () => {
         order.push("capture-call");
         return baseline;
       });
+    const composerSpy = vi
+      .spyOn(chatPage as any, "waitForComposerReady")
+      .mockImplementation(async () => {
+        order.push("composer-ready");
+      });
     const waitSpy = vi
       .spyOn(chatPage as any, "waitForChatApiResponse")
       .mockImplementation(async () => {
@@ -827,6 +825,7 @@ describe("ChatPage generation helpers", () => {
     await chatPage.sendUserMessage("Hello");
 
     expect(captureSpy).toHaveBeenCalledOnce();
+    expect(composerSpy).toHaveBeenCalledWith("Hello");
     expect(waitSpy).toHaveBeenCalledOnce();
     expect(order.indexOf("capture-call")).toBeLessThan(order.indexOf("send-click"));
     expect((chatPage as any).pendingAssistantSnapshot).toEqual(baseline);
@@ -1032,6 +1031,75 @@ describe("ChatPage generation helpers", () => {
     });
     expect(messageEditorSendButton.waitFor).toHaveBeenNthCalledWith(2, {
       state: "detached",
+    });
+  });
+
+  describe("waitForComposerReady", () => {
+    it("retypes the message until the composer stabilises and the send button enables", async () => {
+      const order: string[] = [];
+      const fillMock = vi.fn(async (value: string) => order.push(`fill:${value}`));
+      const typeMock = vi.fn(async (value: string) => order.push(`type:${value}`));
+      const inputValueMock = vi
+        .fn()
+        .mockResolvedValueOnce("")
+        .mockResolvedValueOnce("Hello world")
+        .mockResolvedValue("Hello world");
+      const isEnabledMock = vi
+        .fn()
+        .mockResolvedValueOnce(false)
+        .mockResolvedValue(true);
+      const stopVisibleMock = vi.fn().mockResolvedValue(false);
+      const waitForTimeoutMock = vi.fn(async () => {
+        order.push("wait");
+      });
+
+      const page = {
+        getByTestId: vi.fn((testId: string) => {
+          if (testId === "multimodal-input") {
+            return {
+              click: vi.fn(async () => order.push("click")),
+              fill: fillMock,
+              type: typeMock,
+              inputValue: inputValueMock,
+            } as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
+          if (testId === "send-button") {
+            return {
+              isEnabled: isEnabledMock,
+            } as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
+          if (testId === "stop-button") {
+            return {
+              isVisible: stopVisibleMock,
+            } as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
+          throw new Error(`Unexpected test id: ${testId}`);
+        }),
+        waitForTimeout: waitForTimeoutMock,
+      } satisfies Partial<Page>;
+
+      const chatPage = new ChatPage(page as Page);
+
+      await (chatPage as any).waitForComposerReady("Hello world", {
+        timeout: 1_000,
+        pollInterval: 50,
+      });
+
+      expect(fillMock).toHaveBeenNthCalledWith(1, "");
+      expect(typeMock).toHaveBeenNthCalledWith(1, "Hello world");
+      expect(fillMock).toHaveBeenNthCalledWith(2, "");
+      expect(typeMock).toHaveBeenNthCalledWith(2, "Hello world");
+      expect(fillMock).toHaveBeenCalledTimes(2);
+      expect(typeMock).toHaveBeenCalledTimes(2);
+      expect(inputValueMock).toHaveBeenCalledTimes(3);
+      expect(isEnabledMock).toHaveBeenCalledTimes(2);
+      expect(waitForTimeoutMock).toHaveBeenCalledTimes(2);
+      expect(stopVisibleMock).toHaveBeenCalled();
+      expect(order[0]).toBe("click");
+      expect(order).toContain("wait");
     });
   });
 });
