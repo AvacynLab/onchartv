@@ -13,6 +13,12 @@ import type { Attachment, ChatMessage } from "@/lib/types";
  * typing into the composer first.
  */
 
+// Provide the legacy React global that some downstream utilities expect when
+// the JSX runtime emits `React.createElement` calls inside mocked components.
+(globalThis as unknown as { React: typeof React }).React = React;
+
+vi.mock("server-only", () => ({}));
+
 vi.mock("usehooks-ts", () => ({
   useWindowSize: () => ({ width: 1024, height: 768 }),
   useLocalStorage: <T,>(key: string, initialValue: T) => {
@@ -25,6 +31,27 @@ vi.mock("@/components/ui/select", () => ({
   SelectItem: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
+// Replace the Radix Select trigger with a plain button so the compact model
+// picker can render without creating the surrounding context provider.
+vi.mock("@radix-ui/react-select", () => ({
+  Trigger: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
+    <button type="button" {...props}>
+      {children}
+    </button>
+  ),
+}));
+
+// The composer imports server actions that rely on Next.js' `server-only`
+// marker. When Vitest evaluates the module tree during this unit test we stub
+// the full action module so the client component can render without throwing
+// the "This module cannot be imported from a Client Component" runtime guard.
+vi.mock("@/app/(chat)/actions", () => ({
+  saveChatModelAsCookie: vi.fn(),
+  generateTitleFromUserMessage: vi.fn(),
+  deleteTrailingMessages: vi.fn(),
+  updateChatVisibility: vi.fn(),
+}));
+
 vi.mock("@/components/elements/prompt-input", async () => {
   const actual = await vi.importActual<typeof import("@/components/elements/prompt-input")>(
     "@/components/elements/prompt-input"
@@ -35,9 +62,18 @@ vi.mock("@/components/elements/prompt-input", async () => {
     PromptInput: ({ children, onSubmit }: any) => (
       <form onSubmit={onSubmit}>{typeof children === "function" ? children({}) : children}</form>
     ),
-    PromptInputTextarea: (props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) => (
-      <textarea data-testid="multimodal-input" {...props} />
-    ),
+    PromptInputTextarea: ({
+      disableAutoResize: _disableAutoResize,
+      maxHeight: _maxHeight,
+      minHeight: _minHeight,
+      resizeOnNewLinesOnly: _resizeOnNewLinesOnly,
+      ...props
+    }: React.TextareaHTMLAttributes<HTMLTextAreaElement> & {
+      disableAutoResize?: boolean;
+      maxHeight?: number;
+      minHeight?: number;
+      resizeOnNewLinesOnly?: boolean;
+    }) => <textarea data-testid="multimodal-input" {...props} />,
     PromptInputSubmit: ({ children, ...props }: any) => (
       <button data-testid="send-button" {...props}>
         {children}
@@ -47,6 +83,9 @@ vi.mock("@/components/elements/prompt-input", async () => {
     PromptInputTools: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
     PromptInputModelSelect: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
     PromptInputModelSelectContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+    PromptInputModelSelectTrigger: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+    PromptInputModelSelectItem: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+    PromptInputModelSelectValue: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   };
 });
 
