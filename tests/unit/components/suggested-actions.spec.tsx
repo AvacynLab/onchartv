@@ -5,7 +5,7 @@ import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
 
 import { SuggestedActions } from "@/components/suggested-actions";
 
-const noop = () => Promise.resolve();
+const noop = () => {};
 
 describe("SuggestedActions", () => {
   beforeEach(() => {
@@ -19,9 +19,8 @@ describe("SuggestedActions", () => {
   it("renders finance shortcuts when the feature flag is enabled", () => {
     render(
       <SuggestedActions
-        chatId="chat-1"
+        onSelectSuggestion={noop}
         selectedVisibilityType="private"
-        sendMessage={noop}
       />
     );
 
@@ -38,9 +37,8 @@ describe("SuggestedActions", () => {
 
     render(
       <SuggestedActions
-        chatId="chat-1"
+        onSelectSuggestion={noop}
         selectedVisibilityType="private"
-        sendMessage={noop}
       />
     );
 

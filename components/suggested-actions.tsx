@@ -1,20 +1,19 @@
 "use client";
 
-import type { UseChatHelpers } from "@ai-sdk/react";
 import { motion } from "framer-motion";
 import React, { memo } from "react";
 import { isFinanceFeatureEnabledClient } from "@/lib/feature-flags";
-import type { ChatMessage } from "@/lib/types";
 import { Suggestion } from "./elements/suggestion";
 import type { VisibilityType } from "./visibility-selector";
 
 type SuggestedActionsProps = {
-  chatId: string;
-  sendMessage: UseChatHelpers<ChatMessage>["sendMessage"];
+  onSelectSuggestion: (text: string) => void;
   selectedVisibilityType: VisibilityType;
 };
 
-function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
+function PureSuggestedActions({
+  onSelectSuggestion,
+}: SuggestedActionsProps) {
   /**
    * Keep the first suggestion anchored to the long-standing onboarding prompt so
    * the regression suite continues to assert the deterministic "With Next.js,
@@ -79,14 +78,7 @@ function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
               className="h-auto w-full whitespace-normal p-3 text-left"
               data-testid={suggestionTestId}
               onClick={(suggestion) => {
-                window.history.replaceState({}, "", `/chat/${chatId}`);
-                const payloadParts: ChatMessage["parts"][number][] = [
-                  { type: "text", text: suggestion },
-                ];
-                sendMessage({
-                  role: "user",
-                  parts: payloadParts,
-                });
+                onSelectSuggestion(suggestion);
               }}
               suggestion={suggestedAction}
             >
@@ -102,10 +94,10 @@ function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
 export const SuggestedActions = memo(
   PureSuggestedActions,
   (prevProps, nextProps) => {
-    if (prevProps.chatId !== nextProps.chatId) {
+    if (prevProps.selectedVisibilityType !== nextProps.selectedVisibilityType) {
       return false;
     }
-    if (prevProps.selectedVisibilityType !== nextProps.selectedVisibilityType) {
+    if (prevProps.onSelectSuggestion !== nextProps.onSelectSuggestion) {
       return false;
     }
 
