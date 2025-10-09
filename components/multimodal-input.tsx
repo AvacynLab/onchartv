@@ -203,54 +203,86 @@ function PureMultimodalInput({
 
   const shouldRenderStopButton = isStopButtonVisible;
 
-  const submitForm = useCallback(() => {
-    window.history.replaceState({}, "", `/chat/${chatId}`);
+  /**
+   * Centralise the submission pipeline so regular sends and quick actions share
+   * the same validation, slash-command resolution and post-send cleanup. The
+   * helper returns a boolean so callers can short-circuit when validation fails
+   * (for example when uploads are still pending or the prompt is empty).
+   */
+  const dispatchPrompt = useCallback(
+    (rawPrompt: string) => {
+      const trimmedPrompt = rawPrompt.trim();
+      const hasText = trimmedPrompt.length > 0;
+      const hasAttachments = attachments.length > 0;
 
-    const resolvedCommand = resolveSlashCommand(input);
-    /**
-     * When the user relies on a finance-oriented slash command (for example
-     * `/chart BTCUSD 1D`), rewrite the outbound prompt so the assistant
-     * receives an explicit instruction to yield the relevant artefact. The
-     * helper keeps the feature testable in isolation and lets us expand the
-     * command surface without entangling the transport layer.
-     */
-    const finalText = resolvedCommand?.prompt ?? input;
+      if (uploadQueue.length > 0) {
+        toast.error("Please wait for the files to finish uploading before sending!");
+        return false;
+      }
 
-    sendMessage({
-      role: "user",
-      parts: [
-        ...attachments.map((attachment) => ({
-          type: "file" as const,
-          url: attachment.url,
-          name: attachment.name,
-          mediaType: attachment.contentType,
-        })),
-        {
-          type: "text",
+      if (!hasText && !hasAttachments) {
+        toast.error("Please enter a message or attach a file before sending!");
+        return false;
+      }
+
+      window.history.replaceState({}, "", `/chat/${chatId}`);
+
+      const resolvedCommand = resolveSlashCommand(trimmedPrompt);
+      /**
+       * When the user relies on a finance-oriented slash command (for example
+       * `/chart BTCUSD 1D`), rewrite the outbound prompt so the assistant
+       * receives an explicit instruction to yield the relevant artefact. The
+       * helper keeps the feature testable in isolation and lets us expand the
+       * command surface without entangling the transport layer.
+       */
+      const finalText = resolvedCommand?.prompt ?? trimmedPrompt;
+
+      const payloadParts = attachments.map((attachment) => ({
+        type: "file" as const,
+        url: attachment.url,
+        name: attachment.name,
+        mediaType: attachment.contentType,
+      }));
+
+      if (finalText.length > 0) {
+        payloadParts.push({
+          type: "text" as const,
           text: finalText,
-        },
-      ],
-    });
+        });
+      }
 
-    setAttachments([]);
-    setLocalStorageInput("");
-    resetHeight();
-    setInput("");
+      sendMessage({
+        role: "user",
+        parts: payloadParts,
+      });
 
-    if (width && width > 768) {
-      textareaRef.current?.focus();
-    }
-  }, [
-    input,
-    setInput,
-    attachments,
-    sendMessage,
-    setAttachments,
-    setLocalStorageInput,
-    width,
-    chatId,
-    resetHeight,
-  ]);
+      setAttachments([]);
+      setLocalStorageInput("");
+      resetHeight();
+      setInput("");
+
+      if (width && width > 768) {
+        textareaRef.current?.focus();
+      }
+
+      return true;
+    },
+    [
+      attachments,
+      chatId,
+      resetHeight,
+      sendMessage,
+      setAttachments,
+      setInput,
+      setLocalStorageInput,
+      uploadQueue.length,
+      width,
+    ]
+  );
+
+  const submitForm = useCallback(() => {
+    dispatchPrompt(input);
+  }, [dispatchPrompt, input]);
 
   const uploadFile = useCallback(async (file: File) => {
     const formData = new FormData();
@@ -316,15 +348,20 @@ function PureMultimodalInput({
     [setAttachments, uploadFile]
   );
 
+  const trimmedInput = input.trim();
+  const canSubmit = trimmedInput.length > 0 || attachments.length > 0;
+  const isUploadInProgress = uploadQueue.length > 0;
+
   return (
     <div className={cn("relative flex w-full flex-col gap-4", className)}>
       {messages.length === 0 &&
         attachments.length === 0 &&
         uploadQueue.length === 0 && (
           <SuggestedActions
-            chatId={chatId}
+            onSendSuggestion={(suggestion) => {
+              dispatchPrompt(suggestion);
+            }}
             selectedVisibilityType={selectedVisibilityType}
-            sendMessage={sendMessage}
           />
         )}
 
@@ -425,8 +462,9 @@ function PureMultimodalInput({
             <StopButton setMessages={setMessages} stop={stop} />
           ) : (
             <PromptInputSubmit
+              aria-disabled={!canSubmit || isUploadInProgress}
               className="size-8 rounded-full bg-primary text-primary-foreground transition-colors duration-200 hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground"
-              disabled={!input.trim() || uploadQueue.length > 0}
+              disabled={!canSubmit || isUploadInProgress}
               status={status}
             >
               <ArrowUpIcon size={14} />

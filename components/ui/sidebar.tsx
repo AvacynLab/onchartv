@@ -378,9 +378,19 @@ const SidebarFooter = React.forwardRef<
   HTMLDivElement,
   React.ComponentProps<"div">
 >(({ className, ...props }, ref) => {
+  /**
+   * Keep the authentication controls anchored within the viewport so the user
+   * avatar and logout button remain reachable even when the sidebar content
+   * grows taller than the screen.
+   */
   return (
     <div
-      className={cn("flex flex-col gap-2 p-2", className)}
+      className={cn(
+        "mt-auto flex flex-col gap-2 p-2",
+        "sticky bottom-0 bg-sidebar/95",
+        "backdrop-blur supports-[backdrop-filter]:bg-sidebar/80",
+        className
+      )}
       data-sidebar="footer"
       ref={ref}
       {...props}
