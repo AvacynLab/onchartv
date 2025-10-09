@@ -35,19 +35,6 @@ const createMockResponse = ({
 
 type MockResponse = ReturnType<typeof createMockResponse>;
 
-const createSendButtonLocator = (
-  implementation: () => boolean | Promise<boolean> = () => false
-) => {
-  const isDisabled = vi.fn().mockImplementation(() => {
-    const result = implementation();
-    return result instanceof Promise ? result : Promise.resolve(result);
-  });
-
-  return {
-    first: vi.fn().mockReturnValue({ isDisabled }),
-  } as unknown as ReturnType<Page["getByTestId"]>;
-};
-
 describe("ChatPage navigation", () => {
   it("navigates directly to /chat and waits for the chat controls", async () => {
     let currentUrl = "http://localhost:3000/chat";
@@ -110,10 +97,6 @@ describe("ChatPage.waitForChatApiResponse", () => {
         listeners[event]?.delete(handler);
       }),
       getByTestId: vi.fn((testId: string) => {
-        if (testId === "send-button") {
-          return createSendButtonLocator();
-        }
-
         throw new Error(`Unexpected test id access: ${testId}`);
       }),
       waitForFunction: vi.fn(),
@@ -136,7 +119,6 @@ describe("ChatPage.waitForChatApiResponse", () => {
 
   it("resolves once POST /api/chat responds, including query parameters", async () => {
     vi.useFakeTimers();
-    let fallbackSpy: ReturnType<typeof vi.spyOn> | null = null;
     try {
       const harness = createEventHarness();
       const chatPage = new ChatPage(harness.page);
@@ -235,17 +217,13 @@ describe("ChatPage.waitForChatApiResponse", () => {
   it("falls back to UI polling when the network error indicates an offline transport", async () => {
     vi.useFakeTimers();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    let resolveToast: (() => void) | null = null;
-    let rejectToast: ((reason?: unknown) => void) | null = null;
     try {
       const toastWaitFor = vi.fn().mockImplementation(
-        () =>
-          new Promise((resolve, reject) => {
-            resolveToast = resolve;
-            rejectToast = reject;
-          })
+        () => new Promise(() => {})
       );
       const toastInnerText = vi.fn().mockResolvedValue("");
+      const waitForFunction = vi.fn().mockResolvedValue(undefined);
+
       const harness = createEventHarness();
       (harness.page.getByTestId as ReturnType<typeof vi.fn>).mockImplementation(
         (testId: string) => {
@@ -254,10 +232,6 @@ describe("ChatPage.waitForChatApiResponse", () => {
               waitFor: toastWaitFor,
               innerText: toastInnerText,
             } as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
-          if (testId === "send-button") {
-            return createSendButtonLocator(() => false);
           }
 
           throw new Error(`Unexpected test id ${testId}`);
@@ -270,14 +244,12 @@ describe("ChatPage.waitForChatApiResponse", () => {
         latestArtifactCount: 0,
         latestMessageId: null,
         latestMessageText: "",
-        userCount: 0,
-        latestUserMessageId: null,
-        latestUserMessageText: "",
       };
 
-      const pollSpy = vi
-        .spyOn(chatPage as any, "pollForStreamingChange")
-        .mockResolvedValue(true);
+      (harness.page.waitForFunction as ReturnType<typeof vi.fn>).mockImplementation(
+        (...args: Parameters<Page["waitForFunction"]>) =>
+          waitForFunction(...args)
+      );
 
       const waitPromise = (chatPage as any).waitForChatApiResponse();
 
@@ -298,22 +270,19 @@ describe("ChatPage.waitForChatApiResponse", () => {
       );
       expect(toastWaitFor).toHaveBeenCalledWith({
         state: "visible",
-        timeout: 90_000,
+        timeout: 45_000,
       });
-      expect(pollSpy).toHaveBeenCalledWith({
-        baseline: {
-          count: 0,
-          latestArtifactCount: 0,
-          latestMessageId: null,
-          latestMessageText: "",
-          userCount: 0,
-          latestUserMessageId: null,
-          latestUserMessageText: "",
+      expect(waitForFunction).toHaveBeenCalledWith(
+        expect.any(Function),
+        {
+          baselineCount: 0,
+          baselineLatestId: null,
+          baselineLatestText: "",
+          baselineArtifactCount: 0,
         },
-        timeoutMs: 90_000,
-      });
+        { timeout: 45_000 }
+      );
     } finally {
-      rejectToast?.(new Error("toast cleanup"));
       warnSpy.mockRestore();
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
@@ -322,15 +291,9 @@ describe("ChatPage.waitForChatApiResponse", () => {
 
   it("falls back to UI guards when no network events fire", async () => {
     vi.useFakeTimers();
-    let resolveToast: (() => void) | null = null;
-    let rejectToast: ((reason?: unknown) => void) | null = null;
     try {
       const toastWaitFor = vi.fn().mockImplementation(
-        () =>
-          new Promise((resolve, reject) => {
-            resolveToast = resolve;
-            rejectToast = reject;
-          })
+        () => new Promise(() => {})
       );
       const toastInnerText = vi.fn().mockResolvedValue("");
       const assistantCount = vi.fn().mockResolvedValue(0);
@@ -356,26 +319,10 @@ describe("ChatPage.waitForChatApiResponse", () => {
             } as unknown as ReturnType<Page["getByTestId"]>;
           }
 
-          if (testId === "message-user") {
-            return {
-              count: vi.fn().mockResolvedValue(0),
-            } as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
           if (testId === "message-assistant-loading") {
             return {
               count: spinnerCount,
             } as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
-          if (testId === "stop-button") {
-            return {
-              count: vi.fn().mockResolvedValue(0),
-            } as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
-          if (testId === "send-button") {
-            return createSendButtonLocator(() => false);
           }
 
           throw new Error(`Unexpected test id ${testId}`);
@@ -388,46 +335,34 @@ describe("ChatPage.waitForChatApiResponse", () => {
         latestArtifactCount: 0,
         latestMessageId: null,
         latestMessageText: "",
-        userCount: 0,
-        latestUserMessageId: null,
-        latestUserMessageText: "",
       };
 
       const waitPromise = (chatPage as any).waitForChatApiResponse();
 
-      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(5_000);
 
       await expect(waitPromise).resolves.toBeUndefined();
       expect(toastWaitFor).toHaveBeenCalledWith({
         state: "visible",
-        timeout: 90_000,
+        timeout: 45_000,
       });
       expect(spinnerCount).toHaveBeenCalled();
       expect(assistantCount).toHaveBeenCalled();
       expect(
         (harness.page.getByTestId as ReturnType<typeof vi.fn>).mock.calls
           .flat()
-      ).toContain("stop-button");
+      ).not.toContain("stop-button");
     } finally {
-      resolveToast?.();
-      resolveToast = null;
-      rejectToast = null;
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
     }
   });
 
-  it("throws a descriptive timeout when the UI never indicates streaming", async () => {
+  it("throws a descriptive timeout error when the UI never indicates streaming", async () => {
     vi.useFakeTimers();
-    let resolveToast: (() => void) | null = null;
-    let rejectToast: ((reason?: unknown) => void) | null = null;
     try {
       const toastWaitFor = vi.fn().mockImplementation(
-        () =>
-          new Promise((resolve, reject) => {
-            resolveToast = resolve;
-            rejectToast = reject;
-          })
+        () => new Promise(() => {})
       );
       const toastInnerText = vi.fn().mockResolvedValue("");
 
@@ -460,326 +395,50 @@ describe("ChatPage.waitForChatApiResponse", () => {
             } as unknown as ReturnType<Page["getByTestId"]>;
           }
 
-          if (testId === "message-user") {
-            return {
-              count: vi.fn().mockResolvedValue(1),
-              nth: vi.fn().mockReturnValue({
-                getAttribute: vi.fn().mockResolvedValue("user-1"),
-                getByTestId: vi.fn().mockReturnValue({
-                  innerText: vi.fn().mockResolvedValue("Initial prompt"),
-                }),
-              }),
-            } as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
           if (testId === "message-assistant-loading") {
             return {
               count: spinnerCount,
             } as unknown as ReturnType<Page["getByTestId"]>;
           }
 
-          if (testId === "stop-button") {
-            return { count: vi.fn().mockResolvedValue(0) } as unknown as ReturnType<
-              Page["getByTestId"]
-            >;
-          }
-
-          if (testId === "send-button") {
-            return createSendButtonLocator(() => false);
-          }
-
           throw new Error(`Unexpected test id ${testId}`);
         }
       );
 
       const chatPage = new ChatPage(harness.page);
-      /**
-       * Simulate a suggestion trigger where the assistant bubble count stays
-       * flat but a brand-new user message appears before the streaming
-       * skeleton renders. The fallback should treat the user timeline delta as
-       * proof that the request is in flight.
-       */
       const baselineSnapshot = {
         count: 1,
         latestArtifactCount: 0,
         latestMessageId: "assistant-1",
         latestMessageText: "Thinking...",
-        userCount: 1,
-        latestUserMessageId: "user-1",
-        latestUserMessageText: "Initial prompt",
       } as const;
 
-      const waitPromise = (chatPage as any).waitForUiStreamingFallback(
-        baselineSnapshot,
-        90_000
-      );
-      const outcomePromise = waitPromise.then<
-        { status: "resolved" } | { status: "rejected"; error: unknown }
-      >(
-        () => ({ status: "resolved" }),
-        (error) => ({ status: "rejected", error })
-      );
+      let caughtError: unknown;
+      try {
+        const waitPromise = (chatPage as any).waitForUiStreamingFallback(
+          baselineSnapshot,
+          45_000
+        );
 
-      await vi.advanceTimersByTimeAsync(90_000);
+        await vi.advanceTimersByTimeAsync(45_000);
 
-      const outcome = await outcomePromise;
-      expect(outcome.status).toBe("rejected");
-      expect(outcome.error).toBeInstanceOf(Error);
-      expect((outcome.error as Error).message).toBe(
+        await waitPromise;
+      } catch (error) {
+        caughtError = error;
+      }
+
+      expect(caughtError).toBeInstanceOf(Error);
+      expect((caughtError as Error).message).toBe(
         "Timed out waiting for chat UI to start streaming"
       );
       expect(toastWaitFor).toHaveBeenCalledWith({
         state: "visible",
-        timeout: 90_000,
+        timeout: 45_000,
       });
       expect(assistantCount).toHaveBeenCalled();
       expect(latestAssistant.getAttribute).toHaveBeenCalled();
       expect(spinnerCount).toHaveBeenCalled();
     } finally {
-      resolveToast?.();
-      resolveToast = null;
-      rejectToast = null;
-      vi.runOnlyPendingTimers();
-      vi.useRealTimers();
-    }
-  });
-
-  it("surfaces a descriptive timeout when streaming never begins", async () => {
-    vi.useFakeTimers();
-    let fallbackSpy: ReturnType<typeof vi.spyOn> | null = null;
-    try {
-      const harness = createEventHarness();
-      const chatPage = new ChatPage(harness.page);
-
-      const baselineSnapshot = {
-        count: 1,
-        latestArtifactCount: 0,
-        latestMessageId: "assistant-1",
-        latestMessageText: "Thinking...",
-        userCount: 1,
-        latestUserMessageId: "user-1",
-        latestUserMessageText: "Initial prompt",
-      } as const;
-
-      (chatPage as any).pendingAssistantSnapshot = baselineSnapshot;
-
-      const fallbackError = new Error(
-        "Timed out waiting for chat UI to start streaming"
-      );
-      fallbackSpy = vi
-        .spyOn(chatPage as any, "waitForUiStreamingFallback")
-        .mockRejectedValue(fallbackError);
-
-      const waitPromise = (chatPage as any).waitForChatApiResponse();
-      const outcomePromise = waitPromise.then<
-        { status: "resolved" } | { status: "rejected"; error: unknown }
-      >(
-        () => ({ status: "resolved" }),
-        (error) => ({ status: "rejected", error })
-      );
-
-      await vi.advanceTimersByTimeAsync(60_000);
-
-      const outcome = await outcomePromise;
-      expect(outcome.status).toBe("rejected");
-      expect(outcome.error).toBeInstanceOf(Error);
-      expect((outcome.error as Error).message).toBe(
-        "Timed out waiting for chat UI to start streaming"
-      );
-
-      expect(fallbackSpy).toHaveBeenCalledWith(baselineSnapshot, 90_000);
-    } finally {
-      fallbackSpy?.mockRestore();
-      vi.runOnlyPendingTimers();
-      vi.useRealTimers();
-    }
-  });
-
-  it("detects streaming when a fresh user bubble appears", async () => {
-    vi.useFakeTimers();
-    let resolveToast: (() => void) | null = null;
-    let rejectToast: ((reason?: unknown) => void) | null = null;
-    try {
-      const toastWaitFor = vi.fn().mockImplementation(
-        () =>
-          new Promise((resolve, reject) => {
-            resolveToast = resolve;
-            rejectToast = reject;
-          })
-      );
-      const toastInnerText = vi.fn().mockResolvedValue("");
-      const assistantCount = vi.fn().mockResolvedValue(1);
-      const spinnerCount = vi.fn().mockResolvedValue(0);
-      const stopCount = vi.fn().mockResolvedValue(0);
-      const userCount = vi.fn().mockResolvedValue(2);
-      const latestUser = {
-        getAttribute: vi.fn().mockResolvedValue("user-2"),
-        getByTestId: vi.fn().mockImplementation((testId: string) => {
-          expect(testId).toBe("message-content");
-          return { innerText: vi.fn().mockResolvedValue("New prompt") };
-        }),
-      };
-
-      const harness = createEventHarness();
-      (harness.page.getByTestId as ReturnType<typeof vi.fn>).mockImplementation(
-        (testId: string) => {
-          if (testId === "toast") {
-            return {
-              waitFor: toastWaitFor,
-              innerText: toastInnerText,
-            } as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
-          if (testId === "message-assistant") {
-            return {
-              count: assistantCount,
-              nth: vi.fn().mockReturnValue({
-                getAttribute: vi.fn().mockResolvedValue("assistant-1"),
-                getByTestId: vi.fn().mockReturnValue({
-                  innerText: vi.fn().mockResolvedValue("Thinking..."),
-                }),
-                locator: vi.fn().mockReturnValue({
-                  count: vi.fn().mockResolvedValue(0),
-                }),
-              }),
-            } as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
-          if (testId === "message-user") {
-            return {
-              count: userCount,
-              nth: vi.fn().mockReturnValue(latestUser),
-            } as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
-          if (testId === "message-assistant-loading") {
-            return { count: spinnerCount } as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
-          if (testId === "stop-button") {
-            return { count: stopCount } as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
-          if (testId === "send-button") {
-            return createSendButtonLocator(() => false);
-          }
-
-          throw new Error(`Unexpected test id ${testId}`);
-        }
-      );
-
-      const chatPage = new ChatPage(harness.page);
-      const baselineSnapshot = {
-        count: 1,
-        latestArtifactCount: 0,
-        latestMessageId: "assistant-1",
-        latestMessageText: "Thinking...",
-        userCount: 1,
-        latestUserMessageId: "user-1",
-        latestUserMessageText: "Seed prompt",
-      } as const;
-
-      const waitPromise = (chatPage as any).waitForUiStreamingFallback(
-        baselineSnapshot,
-        5_000
-      );
-
-      await expect(waitPromise).resolves.toBeUndefined();
-      expect(userCount).toHaveBeenCalled();
-      expect(latestUser.getAttribute).not.toHaveBeenCalled();
-      expect(latestUser.getByTestId).not.toHaveBeenCalled();
-    } finally {
-      resolveToast?.();
-      resolveToast = null;
-      rejectToast = null;
-      vi.runOnlyPendingTimers();
-      vi.useRealTimers();
-    }
-  });
-
-  it("detects streaming when the composer disables the send button", async () => {
-    vi.useFakeTimers();
-    let resolveToast: (() => void) | null = null;
-    let rejectToast: ((reason?: unknown) => void) | null = null;
-    try {
-      const toastWaitFor = vi.fn().mockImplementation(
-        () =>
-          new Promise((resolve, reject) => {
-            resolveToast = resolve;
-            rejectToast = reject;
-          })
-      );
-      const toastInnerText = vi.fn().mockResolvedValue("");
-      const assistantCount = vi.fn().mockResolvedValue(0);
-      const spinnerCount = vi.fn().mockResolvedValue(0);
-      const stopCount = vi.fn().mockResolvedValue(0);
-      const userCount = vi.fn().mockResolvedValue(0);
-      const sendButtonStates = [true];
-
-      const harness = createEventHarness();
-      (harness.page.getByTestId as ReturnType<typeof vi.fn>).mockImplementation(
-        (testId: string) => {
-          if (testId === "toast") {
-            return {
-              waitFor: toastWaitFor,
-              innerText: toastInnerText,
-            } as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
-          if (testId === "message-assistant") {
-            return {
-              count: assistantCount,
-              nth: vi.fn(),
-            } as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
-          if (testId === "message-assistant-loading") {
-            return { count: spinnerCount } as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
-          if (testId === "stop-button") {
-            return { count: stopCount } as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
-          if (testId === "message-user") {
-            return { count: userCount } as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
-          if (testId === "send-button") {
-            return createSendButtonLocator(() => {
-              const next = sendButtonStates.shift();
-              return typeof next === "boolean" ? next : true;
-            });
-          }
-
-          throw new Error(`Unexpected test id ${testId}`);
-        }
-      );
-
-      const chatPage = new ChatPage(harness.page);
-      const baselineSnapshot = {
-        count: 0,
-        latestArtifactCount: 0,
-        latestMessageId: null,
-        latestMessageText: "",
-        userCount: 0,
-        latestUserMessageId: null,
-        latestUserMessageText: "",
-      } as const;
-
-      const waitPromise = (chatPage as any).waitForUiStreamingFallback(
-        baselineSnapshot,
-        5_000
-      );
-
-      await expect(waitPromise).resolves.toBeUndefined();
-      expect(assistantCount).toHaveBeenCalled();
-      expect(spinnerCount).toHaveBeenCalled();
-      expect(stopCount).toHaveBeenCalled();
-    } finally {
-      resolveToast?.();
-      resolveToast = null;
-      rejectToast = null;
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
     }
@@ -1037,20 +696,13 @@ describe("ChatPage generation helpers", () => {
     const assistantLocator = {
       count: vi.fn().mockResolvedValue(0),
     };
-    const userLocator = {
-      count: vi.fn().mockResolvedValue(0),
-    };
 
     const page = {
       getByTestId: vi
         .fn<Page["getByTestId"]>()
         .mockImplementation((testId: string) => {
-          if (testId === "message-assistant") {
-            return assistantLocator as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
-          expect(testId).toBe("message-user");
-          return userLocator as unknown as ReturnType<Page["getByTestId"]>;
+          expect(testId).toBe("message-assistant");
+          return assistantLocator as unknown as ReturnType<Page["getByTestId"]>;
         }),
     } satisfies Partial<Page>;
 
@@ -1063,12 +715,8 @@ describe("ChatPage generation helpers", () => {
       latestArtifactCount: 0,
       latestMessageId: null,
       latestMessageText: "",
-      userCount: 0,
-      latestUserMessageId: null,
-      latestUserMessageText: "",
     });
     expect(assistantLocator.count).toHaveBeenCalledOnce();
-    expect(userLocator.count).toHaveBeenCalledOnce();
   });
 
   it("captures the latest assistant message payload", async () => {
@@ -1101,20 +749,12 @@ describe("ChatPage generation helpers", () => {
       }),
     };
 
-    const userLocator = {
-      count: vi.fn().mockResolvedValue(0),
-    };
-
     const page = {
       getByTestId: vi
         .fn<Page["getByTestId"]>()
         .mockImplementation((testId: string) => {
-          if (testId === "message-assistant") {
-            return assistantLocator as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
-          expect(testId).toBe("message-user");
-          return userLocator as unknown as ReturnType<Page["getByTestId"]>;
+          expect(testId).toBe("message-assistant");
+          return assistantLocator as unknown as ReturnType<Page["getByTestId"]>;
         }),
     } satisfies Partial<Page>;
 
@@ -1127,9 +767,6 @@ describe("ChatPage generation helpers", () => {
       latestArtifactCount: 2,
       latestMessageId: 'assistant-1',
       latestMessageText: "Hello world",
-      userCount: 0,
-      latestUserMessageId: null,
-      latestUserMessageText: "",
     });
     expect(assistantLocator.count).toHaveBeenCalledOnce();
     expect(assistantLocator.nth).toHaveBeenCalledWith(2);
@@ -1140,10 +777,7 @@ describe("ChatPage generation helpers", () => {
     const assistantLocator = {
       count: vi.fn().mockResolvedValue(0),
     };
-    const userLocator = {
-      count: vi.fn().mockResolvedValue(0),
-    };
-    const sendButton = {
+    const sendButtonLocator = {
       click: vi.fn(async () => {
         order.push("send-click");
       }),
@@ -1154,16 +788,11 @@ describe("ChatPage generation helpers", () => {
           return {
             click: vi.fn(),
             fill: vi.fn(),
-            type: vi.fn(async () => {
-              order.push("type");
-            }),
-            inputValue: vi.fn().mockResolvedValue("Hello"),
-            press: vi.fn(),
           };
         }
 
         if (testId === "send-button") {
-          return sendButton;
+          return sendButtonLocator;
         }
 
         if (testId === "message-assistant") {
@@ -1171,16 +800,8 @@ describe("ChatPage generation helpers", () => {
           return assistantLocator;
         }
 
-        if (testId === "message-user") {
-          return userLocator;
-        }
-
         throw new Error(`Unexpected test id: ${testId}`);
       }),
-      waitForFunction: vi.fn(async () => {
-        order.push("wait-for-composer");
-      }),
-      evaluate: vi.fn().mockResolvedValue(undefined),
     } satisfies Partial<Page>;
 
     const chatPage = new ChatPage(page as Page);
@@ -1189,9 +810,6 @@ describe("ChatPage generation helpers", () => {
       latestArtifactCount: 0,
       latestMessageId: null,
       latestMessageText: "",
-      userCount: 0,
-      latestUserMessageId: null,
-      latestUserMessageText: "",
     } as const;
 
     const captureSpy = vi
@@ -1206,53 +824,14 @@ describe("ChatPage generation helpers", () => {
         order.push("wait");
       });
 
-    const originalExpect = ChatPage.expect;
-    const visibleSpy = vi.fn(async () => {
-      order.push("send-visible");
-    });
-    const enabledSpy = vi.fn(async () => {
-      order.push("send-enabled");
-    });
+    await chatPage.sendUserMessage("Hello");
 
-    ChatPage.expect = vi
-      .fn((target: unknown) => {
-        if (target === sendButton) {
-          return {
-            toBeVisible: visibleSpy,
-            toBeEnabled: enabledSpy,
-          } as unknown as ReturnType<typeof ChatPage.expect>;
-        }
-
-        return {
-          toBeVisible: vi.fn(),
-          toBeEnabled: vi.fn(),
-        } as unknown as ReturnType<typeof ChatPage.expect>;
-      })
-      .mockName("ChatPage.expect") as unknown as typeof ChatPage.expect;
-
-    try {
-      await chatPage.sendUserMessage("Hello");
-
-      expect(captureSpy).toHaveBeenCalledOnce();
-      expect(waitSpy).toHaveBeenCalledOnce();
-      expect(visibleSpy).toHaveBeenCalledWith({ timeout: 30_000 });
-      expect(enabledSpy).toHaveBeenCalledWith({ timeout: 30_000 });
-      expect(order.indexOf("capture-call")).toBeGreaterThan(
-        order.indexOf("send-enabled")
-      );
-      expect(order).toEqual([
-        "type",
-        "wait-for-composer",
-        "send-visible",
-        "send-enabled",
-        "capture-call",
-        "wait",
-        "send-click",
-      ]);
-      expect((chatPage as any).pendingAssistantSnapshot).toEqual(baseline);
-    } finally {
-      ChatPage.expect = originalExpect;
-    }
+    expect(captureSpy).toHaveBeenCalledOnce();
+    expect(waitSpy).toHaveBeenCalledOnce();
+    expect(order.indexOf("capture-call")).toBeLessThan(
+      order.indexOf("send-click")
+    );
+    expect((chatPage as any).pendingAssistantSnapshot).toEqual(baseline);
   });
 
   it("records a snapshot before sending a suggestion message", async () => {
@@ -1260,9 +839,6 @@ describe("ChatPage generation helpers", () => {
     const assistantLocator = {
       count: vi.fn().mockResolvedValue(0),
     };
-    const userLocator = {
-      count: vi.fn().mockResolvedValue(0),
-    };
     const suggestionLocator = {
       click: vi.fn(async () => {
         order.push("suggestion-click");
@@ -1279,18 +855,10 @@ describe("ChatPage generation helpers", () => {
           return assistantLocator;
         }
 
-        if (testId === "message-user") {
-          return userLocator;
-        }
-
         if (testId === "multimodal-input") {
           return {
             click: vi.fn(),
             fill: vi.fn(),
-            inputValue: vi.fn().mockResolvedValue(
-              "What are the advantages of using Next.js?"
-            ),
-            press: vi.fn(),
           };
         }
 
@@ -1302,9 +870,6 @@ describe("ChatPage generation helpers", () => {
 
         throw new Error(`Unexpected test id: ${testId}`);
       }),
-      waitForFunction: vi.fn(async () => {
-        order.push("wait-for-user");
-      }),
     } satisfies Partial<Page>;
 
     const chatPage = new ChatPage(page as Page);
@@ -1313,9 +878,6 @@ describe("ChatPage generation helpers", () => {
       latestArtifactCount: 0,
       latestMessageId: null,
       latestMessageText: "",
-      userCount: 0,
-      latestUserMessageId: null,
-      latestUserMessageText: "",
     } as const;
 
     const captureSpy = vi
@@ -1330,301 +892,14 @@ describe("ChatPage generation helpers", () => {
         order.push("wait");
       });
 
-    const originalExpect = ChatPage.expect;
-    const visibleSpy = vi.fn(async () => {
-      order.push("suggestion-visible");
-    });
-    const enabledSpy = vi.fn(async () => {
-      order.push("suggestion-enabled");
-    });
+    await chatPage.sendUserMessageFromSuggestion();
 
-    ChatPage.expect = vi
-      .fn((target: unknown) => {
-        if (target === suggestionLocator) {
-          return {
-            toBeVisible: visibleSpy,
-            toBeEnabled: enabledSpy,
-          } as unknown as ReturnType<typeof ChatPage.expect>;
-        }
-
-        return {
-          toBeVisible: vi.fn(),
-          toBeEnabled: vi.fn(),
-        } as unknown as ReturnType<typeof ChatPage.expect>;
-      })
-      .mockName("ChatPage.expect") as unknown as typeof ChatPage.expect;
-
-    try {
-      await chatPage.sendUserMessageFromSuggestion();
-
-      expect(captureSpy).toHaveBeenCalledOnce();
-      expect(waitSpy).toHaveBeenCalledOnce();
-      expect(visibleSpy).toHaveBeenCalledWith({ timeout: 30_000 });
-      expect(enabledSpy).toHaveBeenCalledWith({ timeout: 30_000 });
-      expect(order.indexOf("capture-call")).toBeGreaterThan(
-        order.indexOf("suggestion-enabled")
-      );
-      expect(order).toEqual([
-        "suggestion-visible",
-        "suggestion-enabled",
-        "capture-call",
-        "wait",
-        "suggestion-click",
-        "wait-for-user",
-      ]);
-      expect((chatPage as any).pendingAssistantSnapshot).toEqual(baseline);
-    } finally {
-      ChatPage.expect = originalExpect;
-    }
-  });
-
-  it("presses enter when a suggested action only populates the composer", async () => {
-    const order: string[] = [];
-    let waitInvocation = 0;
-    const assistantLocator = {
-      count: vi.fn().mockResolvedValue(0),
-    };
-    const userLocator = {
-      count: vi.fn().mockResolvedValue(0),
-    };
-    const suggestionLocator = {
-      click: vi.fn(async () => {
-        order.push("suggestion-click");
-      }),
-    };
-    const page = {
-      getByTestId: vi.fn((testId: string) => {
-        if (testId === "suggested-action-0") {
-          return suggestionLocator;
-        }
-
-        if (testId === "message-assistant") {
-          order.push("assistant-snapshot");
-          return assistantLocator;
-        }
-
-        if (testId === "message-user") {
-          return userLocator;
-        }
-
-        if (testId === "multimodal-input") {
-          return {
-            click: vi.fn(),
-            fill: vi.fn(),
-            inputValue: vi
-              .fn()
-              .mockResolvedValue("What are the advantages of using Next.js?"),
-            press: vi.fn(async () => {
-              order.push("press-enter");
-            }),
-          };
-        }
-
-        if (testId === "send-button") {
-          return {
-            click: vi.fn(),
-          };
-        }
-
-        throw new Error(`Unexpected test id: ${testId}`);
-      }),
-      waitForFunction: vi.fn(async () => {
-        waitInvocation += 1;
-
-        if (waitInvocation === 1) {
-          order.push("wait-for-user");
-          throw new Error("timeout");
-        }
-
-        order.push("wait-for-user-fallback");
-      }),
-    } satisfies Partial<Page>;
-
-    const chatPage = new ChatPage(page as Page);
-    const baseline = {
-      count: 0,
-      latestArtifactCount: 0,
-      latestMessageId: null,
-      latestMessageText: "",
-      userCount: 0,
-      latestUserMessageId: null,
-      latestUserMessageText: "",
-    } as const;
-
-    const captureSpy = vi
-      .spyOn(chatPage as any, "captureAssistantSnapshot")
-      .mockImplementation(async () => {
-        order.push("capture-call");
-        return baseline;
-      });
-    const waitSpy = vi
-      .spyOn(chatPage as any, "waitForChatApiResponse")
-      .mockImplementation(async () => {
-        order.push("wait");
-      });
-
-    const originalExpect = ChatPage.expect;
-    const visibleSpy = vi.fn(async () => {
-      order.push("suggestion-visible");
-    });
-    const enabledSpy = vi.fn(async () => {
-      order.push("suggestion-enabled");
-    });
-
-    ChatPage.expect = vi
-      .fn((target: unknown) => {
-        if (target === suggestionLocator) {
-          return {
-            toBeVisible: visibleSpy,
-            toBeEnabled: enabledSpy,
-          } as unknown as ReturnType<typeof ChatPage.expect>;
-        }
-
-        return {
-          toBeVisible: vi.fn(),
-          toBeEnabled: vi.fn(),
-        } as unknown as ReturnType<typeof ChatPage.expect>;
-      })
-      .mockName("ChatPage.expect") as unknown as typeof ChatPage.expect;
-
-    try {
-      await chatPage.sendUserMessageFromSuggestion();
-
-      expect(captureSpy).toHaveBeenCalledTimes(2);
-      expect(waitSpy).toHaveBeenCalledTimes(2);
-      expect(visibleSpy).toHaveBeenCalledWith({ timeout: 30_000 });
-      expect(enabledSpy).toHaveBeenCalledWith({ timeout: 30_000 });
-      expect(order).toEqual([
-        "suggestion-visible",
-        "suggestion-enabled",
-        "capture-call",
-        "wait",
-        "suggestion-click",
-        "wait-for-user",
-        "capture-call",
-        "wait",
-        "press-enter",
-        "wait-for-user-fallback",
-      ]);
-      expect((chatPage as any).pendingAssistantSnapshot).toEqual(baseline);
-    } finally {
-      ChatPage.expect = originalExpect;
-    }
-  });
-
-  it("submits via keyboard when the send button never enables", async () => {
-    const order: string[] = [];
-    const sendButton = { click: vi.fn(async () => order.push("send-click")) };
-    const page = {
-      getByTestId: vi.fn((testId: string) => {
-        if (testId === "message-assistant") {
-          return {
-            count: vi.fn().mockResolvedValue(0),
-          };
-        }
-
-        if (testId === "message-user") {
-          return {
-            count: vi.fn().mockResolvedValue(0),
-          };
-        }
-
-        if (testId === "multimodal-input") {
-          return {
-            click: vi.fn(),
-            fill: vi.fn(),
-            type: vi.fn(async () => {
-              order.push("type");
-            }),
-            inputValue: vi.fn().mockResolvedValue("Hello"),
-            press: vi.fn(async () => {
-              order.push("press-enter");
-            }),
-          };
-        }
-
-        if (testId === "send-button") {
-          return sendButton;
-        }
-
-        throw new Error(`Unexpected test id: ${testId}`);
-      }),
-      waitForFunction: vi.fn(async () => {
-        order.push("wait-for-composer");
-      }),
-      evaluate: vi.fn().mockResolvedValue(undefined),
-    } satisfies Partial<Page>;
-
-    const chatPage = new ChatPage(page as Page);
-    const baseline = {
-      count: 0,
-      latestArtifactCount: 0,
-      latestMessageId: null,
-      latestMessageText: "",
-      userCount: 0,
-      latestUserMessageId: null,
-      latestUserMessageText: "",
-    } as const;
-
-    const captureSpy = vi
-      .spyOn(chatPage as any, "captureAssistantSnapshot")
-      .mockImplementation(async () => {
-        order.push("capture-call");
-        return baseline;
-      });
-    const waitSpy = vi
-      .spyOn(chatPage as any, "waitForChatApiResponse")
-      .mockImplementation(async () => {
-        order.push("wait");
-      });
-
-    const originalExpect = ChatPage.expect;
-    const visibleSpy = vi.fn(async () => {
-      order.push("send-visible");
-    });
-    const enabledSpy = vi.fn(async () => {
-      order.push("send-enabled");
-      throw new Error("still disabled");
-    });
-
-    ChatPage.expect = vi
-      .fn((target: unknown) => {
-        if (target === sendButton) {
-          return {
-            toBeVisible: visibleSpy,
-            toBeEnabled: enabledSpy,
-          } as unknown as ReturnType<typeof ChatPage.expect>;
-        }
-
-        return {
-          toBeVisible: vi.fn(),
-          toBeEnabled: vi.fn(),
-        } as unknown as ReturnType<typeof ChatPage.expect>;
-      })
-      .mockName("ChatPage.expect") as unknown as typeof ChatPage.expect;
-
-    try {
-      await chatPage.sendUserMessage("Hello");
-
-      expect(captureSpy).toHaveBeenCalledTimes(1);
-      expect(waitSpy).toHaveBeenCalledTimes(1);
-      expect(visibleSpy).toHaveBeenCalledWith({ timeout: 30_000 });
-      expect(enabledSpy).toHaveBeenCalledWith({ timeout: 30_000 });
-      expect(sendButton.click).not.toHaveBeenCalled();
-      expect(order).toEqual([
-        "type",
-        "wait-for-composer",
-        "send-visible",
-        "send-enabled",
-        "wait-for-composer",
-        "capture-call",
-        "wait",
-        "press-enter",
-      ]);
-      expect((chatPage as any).pendingAssistantSnapshot).toEqual(baseline);
-    } finally {
-      ChatPage.expect = originalExpect;
-    }
+    expect(captureSpy).toHaveBeenCalledOnce();
+    expect(waitSpy).toHaveBeenCalledOnce();
+    expect(order.indexOf("capture-call")).toBeLessThan(
+      order.indexOf("suggestion-click")
+    );
+    expect((chatPage as any).pendingAssistantSnapshot).toEqual(baseline);
   });
 
   it("records a snapshot before editing the latest user message", async () => {

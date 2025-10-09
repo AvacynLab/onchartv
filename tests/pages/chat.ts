@@ -32,25 +32,10 @@ const CHAT_STREAM_PATH_REGEX = /^\/api\/chat\/[\w-]+\/stream$/;
  * file compliant with `noImplicitThis` during the Next.js type-checking phase.
  */
 type AssistantSnapshot = {
-  /**
-   * Assistant timeline metrics captured prior to dispatching the next
-   * generation. The polling helpers diff these fields to spot freshly streamed
-   * content without relying on brittle animation timings.
-   */
   count: number;
   latestMessageId: string | null;
   latestMessageText: string;
   latestArtifactCount: number;
-  /**
-   * User timeline snapshot grabbed at the same time as the assistant fields.
-   * Suggested action journeys immediately append a new user bubble before the
-   * streaming placeholders render. Tracking that delta lets the Playwright
-   * helpers recognise the in-flight state even when the assistant skeleton
-   * takes a moment to appear.
-   */
-  userCount: number;
-  latestUserMessageId: string | null;
-  latestUserMessageText: string;
 };
 
 export class ChatPage {
@@ -150,43 +135,7 @@ export class ChatPage {
 
   async sendUserMessage(message: string) {
     await this.multimodalInput.click();
-    await this.multimodalInput.fill("");
-    /**
-     * Typing character-by-character keeps the controlled textarea and the
-     * underlying React state in sync, even when hydration replaces the DOM
-     * node right after Playwright focuses it. The tiny delay avoids starving
-     * the browser event loop on slower CI runners.
-     */
-    await this.multimodalInput.type(message, { delay: 10 });
-    await this.syncComposerValue(message);
-
-    const sendButton = this.sendButton;
-    /**
-     * React controls the composer state asynchronously. Wait for the framework
-     * to enable the submit control before we trigger the network listeners so
-     * Playwright does not attempt to click a stale, disabled button.
-     */
-    await ChatPage.expect(sendButton).toBeVisible({ timeout: 30_000 });
-
-    let usedKeyboardFallback = false;
-    let enableAssertionError: unknown;
-
-    try {
-      await ChatPage.expect(sendButton).toBeEnabled({ timeout: 30_000 });
-    } catch (error) {
-      enableAssertionError = error;
-      await this.syncComposerValue(message).catch(() => undefined);
-      const composerValue = (await this.multimodalInput.inputValue()).trim();
-
-      if (composerValue.length === 0) {
-        throw new Error(
-          "Composer failed to capture the outbound message before submission",
-          error instanceof Error ? { cause: error } : undefined
-        );
-      }
-
-      usedKeyboardFallback = true;
-    }
+    await this.multimodalInput.fill(message);
 
     await this.prepareForGeneration();
 
@@ -194,32 +143,12 @@ export class ChatPage {
      * Trigger the send action and the API wait concurrently so we capture the
      * network response associated with this submission. Surfacing transport
      * failures immediately makes the suite easier to debug than waiting for the
-     * streaming assertions to eventually time out. When the framework keeps the
-     * submit button disabled (occasionally observed during slow hydration on
-     * hermetic runs) we fall back to the textarea keyboard shortcut which
-     * bypasses the disabled control.
+     * streaming assertions to eventually time out.
      */
-    if (usedKeyboardFallback) {
-      try {
-        await Promise.all([
-          this.waitForChatApiResponse(),
-          this.multimodalInput.press("Enter"),
-        ]);
-      } catch (error) {
-        // Surface the original enable assertion alongside any downstream
-        // failure so the caller understands why the fallback path executed.
-        throw error instanceof Error
-          ? Object.assign(error, {
-              cause: error.cause ?? enableAssertionError,
-            })
-          : error;
-      }
-    } else {
-      await Promise.all([
-        this.waitForChatApiResponse(),
-        sendButton.click(),
-      ]);
-    }
+    await Promise.all([
+      this.waitForChatApiResponse(),
+      this.sendButton.click(),
+    ]);
   }
 
   async isGenerationComplete() {
@@ -458,84 +387,12 @@ export class ChatPage {
      * working even when the rendered label changes (for example due to
      * different font fallbacks in offline Playwright runs).
      */
-    const suggestionButton = this.page.getByTestId("suggested-action-0");
-
-    await ChatPage.expect(suggestionButton).toBeVisible({ timeout: 30_000 });
-    await ChatPage.expect(suggestionButton).toBeEnabled({ timeout: 30_000 });
-
-    const userMessages = this.page.getByTestId("message-user");
-    const initialUserCount = await userMessages.count().catch(() => 0);
-
     await this.prepareForGeneration();
 
     await Promise.all([
       this.waitForChatApiResponse(),
-      suggestionButton.click(),
+      this.page.getByTestId("suggested-action-0").click(),
     ]);
-
-    const waitForUserMessage = async (timeout: number) =>
-      this.page.waitForFunction(
-        (args: { initialUserCount: number }) => {
-          const { initialUserCount } = args;
-          const userNodes = document.querySelectorAll(
-            '[data-testid="message-user"]'
-          );
-
-          return userNodes.length > initialUserCount;
-        },
-        { initialUserCount },
-        { timeout }
-      );
-
-    try {
-      await waitForUserMessage(30_000);
-      return;
-    } catch (initialError) {
-      const composerValue = (await this.multimodalInput.inputValue()).trim();
-
-      if (composerValue.length === 0) {
-        const fallbackText = await suggestionButton
-          .innerText()
-          .then((value) => value.trim())
-          .catch(() => "");
-
-        if (fallbackText.length === 0) {
-          throw new Error(
-            "Timed out waiting for the suggested action to append a user message",
-            initialError instanceof Error ? { cause: initialError } : undefined
-          );
-        }
-
-        await this.sendUserMessage(fallbackText);
-
-        await waitForUserMessage(30_000).catch((fallbackError) => {
-          throw new Error(
-            "Suggested action failed to submit even after triggering the manual fallback",
-            fallbackError instanceof Error
-              ? { cause: fallbackError }
-              : undefined
-          );
-        });
-
-        return;
-      }
-
-      await this.prepareForGeneration();
-
-      await Promise.all([
-        this.waitForChatApiResponse(),
-        this.multimodalInput.press("Enter"),
-      ]);
-
-      await waitForUserMessage(15_000).catch((fallbackError) => {
-        throw new Error(
-          "Suggested action failed to submit even after triggering the manual fallback",
-          fallbackError instanceof Error
-            ? { cause: fallbackError }
-            : undefined
-        );
-      });
-    }
   }
 
   async isElementVisible(elementId: string) {
@@ -807,84 +664,11 @@ export class ChatPage {
     this.pendingAssistantSnapshot = await this.captureAssistantSnapshot();
   }
 
-  private async syncComposerValue(message: string): Promise<void> {
-    const trimmedMessage = message.trim();
-
-    if (trimmedMessage.length === 0) {
-      return;
-    }
-
-    const selector = '[data-testid="multimodal-input"]';
-    const waitForMatch = () =>
-      this.page.waitForFunction(
-        (args: { expected: string; selector: string }) => {
-          const textarea = document.querySelector<HTMLTextAreaElement>(
-            args.selector
-          );
-
-          return textarea?.value.trim() === args.expected;
-        },
-        { expected: trimmedMessage, selector },
-        { timeout: 2_000 }
-      );
-
-    try {
-      await waitForMatch();
-      return;
-    } catch {}
-
-    await this.page.evaluate(
-      (args: { selector: string; value: string }) => {
-        const textarea = document.querySelector<HTMLTextAreaElement>(
-          args.selector
-        );
-
-        if (!textarea) {
-          throw new Error(
-            `Unable to locate the chat composer using selector: ${args.selector}`
-          );
-        }
-
-        textarea.value = args.value;
-        textarea.dispatchEvent(new Event("input", { bubbles: true }));
-        textarea.dispatchEvent(new Event("change", { bubbles: true }));
-      },
-      { selector, value: message }
-    );
-
-    await waitForMatch().catch((finalError) => {
-      throw new Error(
-        "Composer failed to synchronise with the requested text after applying the fallback",
-        finalError instanceof Error ? { cause: finalError } : undefined
-      );
-    });
-  }
-
   private async captureAssistantSnapshot(): Promise<
     NonNullable<typeof this.pendingAssistantSnapshot>
   > {
     const assistantMessages = this.page.getByTestId("message-assistant");
-    const userMessages = this.page.getByTestId("message-user");
-
-    const [count, userCount] = await Promise.all([
-      assistantMessages.count(),
-      userMessages.count().catch(() => 0),
-    ]);
-
-    const [latestUserMessageId, latestUserMessageText] = userCount > 0
-      ? await Promise.all([
-          userMessages
-            .nth(userCount - 1)
-            .getAttribute("data-message-id")
-            .catch(() => null),
-          userMessages
-            .nth(userCount - 1)
-            .getByTestId("message-content")
-            .innerText()
-            .then((value) => value.trim())
-            .catch(() => ""),
-        ])
-      : [null, ""];
+    const count = await assistantMessages.count();
 
     if (count === 0) {
       return {
@@ -892,9 +676,6 @@ export class ChatPage {
         latestArtifactCount: 0,
         latestMessageId: null,
         latestMessageText: "",
-        userCount,
-        latestUserMessageId,
-        latestUserMessageText,
       };
     }
 
@@ -917,9 +698,6 @@ export class ChatPage {
       latestArtifactCount,
       latestMessageId,
       latestMessageText,
-      userCount,
-      latestUserMessageId,
-      latestUserMessageText,
     };
   }
 
@@ -977,20 +755,8 @@ export class ChatPage {
      * stop button appears.
      */
     const networkTimeoutMarker = Symbol("chat-network-timeout");
-    /**
-     * Finance prompts can take close to a minute to warm the hermetic data
-     * adapters, especially when the Next.js dev server is still compiling the
-     * streaming route bundle. Relax the network timeout so we give the
-     * transport a fair chance to respond before falling back to DOM heuristics.
-     */
-    const networkTimeoutMs = 60_000;
-    /**
-     * Hermetic runs occasionally spend close to a minute compiling the finance
-     * API routes on the very first invocation. Giving the DOM fallback another
-     * half minute of headroom prevents us from failing the scenario right as
-     * the server responds.
-     */
-    const uiFallbackTimeoutMs = 90_000;
+    const networkTimeoutMs = 5_000;
+    const uiFallbackTimeoutMs = 45_000;
 
     try {
       await new Promise<void>((resolve, reject) => {
@@ -1193,29 +959,19 @@ export class ChatPage {
           .catch(() => "");
 
         const suffix = description.length > 0 ? `: ${description}` : "";
-        return {
-          kind: "toast" as const,
-          error: new Error(`Chat UI reported an error toast${suffix}`),
-        };
-      })
-      .catch((error) => ({ kind: "toast-error" as const, error }));
-    const toastPromise = rawToastPromise.then((result) => result);
+        throw new Error(`Chat UI reported an error toast${suffix}`);
+      });
+    const toastPromise = rawToastPromise.catch((error) => {
+      throw error;
+    });
 
     const streamingPromise = this.pollForStreamingChange({
       baseline,
       timeoutMs,
-    }).then((didStream) => ({ kind: "stream" as const, didStream }));
+    });
 
     try {
-      const outcome = await Promise.race([toastPromise, streamingPromise]);
-
-      if (outcome.kind === "toast" || outcome.kind === "toast-error") {
-        throw outcome.error;
-      }
-
-      if (!outcome.didStream) {
-        throw new Error("Timed out waiting for chat UI to start streaming");
-      }
+      await Promise.race([toastPromise, streamingPromise]);
     } catch (error) {
       if (isTimeoutLikeError(error)) {
         throw new Error("Timed out waiting for chat UI to start streaming");
@@ -1223,6 +979,7 @@ export class ChatPage {
       throw error;
     } finally {
       rawToastPromise.catch(() => {});
+      streamingPromise.catch(() => {});
     }
   }
 
@@ -1233,6 +990,7 @@ export class ChatPage {
     chatModel: ChatModel;
     timeoutMs: number;
   }): Promise<Locator> {
+    const deadline = Date.now() + timeoutMs;
     const testIdLocator = this.page.getByTestId(
       `model-selector-item-${chatModel.id}`
     );
@@ -1242,7 +1000,6 @@ export class ChatPage {
     const menuItemLocator = this.page
       .getByRole("menuitem", { name: chatModel.name })
       .first();
-    const deadline = Date.now() + timeoutMs;
 
     while (Date.now() < deadline) {
       if ((await testIdLocator.count().catch(() => 0)) > 0) {
@@ -1271,98 +1028,23 @@ export class ChatPage {
   }: {
     baseline: AssistantSnapshot;
     timeoutMs: number;
-  }): Promise<boolean> {
+  }): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
     const assistantLocator = this.page.getByTestId("message-assistant");
     const spinnerLocator = this.page.getByTestId("message-assistant-loading");
-    const stopButtonLocator = this.stopButton;
-    const userLocator = this.page.getByTestId("message-user");
-    const sendButtonLocator = this.sendButton;
-    const pollIntervalMs = 200;
-    const maxIterations = Math.ceil(timeoutMs / pollIntervalMs);
 
-    for (let iteration = 0; iteration < maxIterations; iteration += 1) {
-      const [
-        assistantCount,
-        spinnerCount,
-        stopButtonCount,
-        userCount,
-        sendButtonDisabled,
-      ] = await Promise.all([
+    while (Date.now() < deadline) {
+      const [assistantCount, spinnerCount] = await Promise.all([
         assistantLocator.count().catch(() => 0),
         spinnerLocator.count().catch(() => 0),
-        stopButtonLocator.count().catch(() => 0),
-        userLocator.count().catch(() => 0),
-        sendButtonLocator
-          .first()
-          .isDisabled()
-          .catch(() => false),
       ]);
 
       if (spinnerCount > 0) {
-        return true;
-      }
-
-      if (stopButtonCount > 0) {
-        /**
-         * The composer swaps the send button for a stop control the moment a
-         * streaming request starts. Some journeys (notably suggested actions)
-         * briefly render the stop button before the assistant bubble or
-         * loading skeleton appear which previously caused the polling loop to
-         * overrun its timeout. Treat the visible stop button as a streaming
-         * signal so we unblock as soon as the UI enters the in-flight state.
-         */
-        const stopButtonVisible = await stopButtonLocator
-          .first()
-          .isVisible()
-          .catch(() => false);
-
-        if (stopButtonVisible) {
-          return true;
-        }
-      }
-
-      if (userCount > baseline.userCount) {
-        /**
-         * Suggested actions append the user bubble immediately before the
-         * assistant skeleton or stop control render. Treat the increased user
-         * count as proof that the request is underway so we do not burn through
-         * the fallback timeout waiting for the spinner to appear.
-         */
-        return true;
-      }
-
-      if (sendButtonDisabled) {
-        /**
-         * The composer disables the primary action while a submission is in
-         * flight. Some transports (notably hermetic finance prompts) keep the
-         * stop control hidden until the first chunk arrives, so fall back to
-         * the disabled state as soon as it flips.
-         */
-        return true;
-      }
-
-      if (userCount > 0) {
-        const latestUser = userLocator.nth(userCount - 1);
-        const [latestUserId, latestUserText] = await Promise.all([
-          latestUser.getAttribute("data-message-id").catch(() => null),
-          latestUser
-            .getByTestId("message-content")
-            .innerText()
-            .then((value) => value.trim())
-            .catch(() => ""),
-        ]);
-
-        if (latestUserId && latestUserId !== baseline.latestUserMessageId) {
-          return true;
-        }
-
-        if (latestUserText && latestUserText !== baseline.latestUserMessageText) {
-          return true;
-        }
+        return;
       }
 
       if (assistantCount > baseline.count) {
-        return true;
+        return;
       }
 
       if (assistantCount > 0) {
@@ -1381,22 +1063,22 @@ export class ChatPage {
         ]);
 
         if (latestId && latestId !== baseline.latestMessageId) {
-          return true;
+          return;
         }
 
         if (latestText && latestText !== baseline.latestMessageText) {
-          return true;
+          return;
         }
 
         if (latestArtifactCount > baseline.latestArtifactCount) {
-          return true;
+          return;
         }
       }
 
-      await this.page.waitForTimeout(pollIntervalMs);
+      await this.page.waitForTimeout(200);
     }
 
-    return false;
+    throw new Error("Timed out waiting for chat UI to start streaming");
   }
 
   private async waitForVoteRequest(direction: "up" | "down"): Promise<void> {

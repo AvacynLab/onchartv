@@ -52,15 +52,6 @@ export default function Page() {
           console.error("Failed to refresh session before redirecting", error);
         }
 
-        /**
-         * Give the toast portal a generous (~750ms) rendering window before the
-         * navigation replaces the auth shell. The hermetic Playwright workers
-         * run on constrained CI hardware where React effects and paint cycles
-         * can lag noticeably; extending the delay keeps the success notification
-         * visible long enough for the regression suite to observe it.
-         */
-        await new Promise((resolve) => setTimeout(resolve, 750));
-
         router.replace(destination);
       })();
     }
