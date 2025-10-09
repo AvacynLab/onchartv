@@ -783,12 +783,16 @@ describe("ChatPage generation helpers", () => {
       }),
     };
     const page = {
+      waitForFunction: vi.fn().mockImplementation(async () => {
+        order.push("composer-ready");
+      }),
       getByTestId: vi.fn((testId: string) => {
         if (testId === "multimodal-input") {
           return {
-            click: vi.fn(),
-            fill: vi.fn(),
-          };
+            click: vi.fn(async () => order.push("multimodal-click")),
+            fill: vi.fn(async () => order.push("multimodal-fill")),
+            inputValue: vi.fn().mockResolvedValue("Hello"),
+          } as unknown as ReturnType<Page["getByTestId"]>;
         }
 
         if (testId === "send-button") {
@@ -844,6 +848,9 @@ describe("ChatPage generation helpers", () => {
         order.push("suggestion-click");
       }),
     };
+    const userMessagesLocator = {
+      count: vi.fn().mockResolvedValue(0),
+    };
     const page = {
       getByTestId: vi.fn((testId: string) => {
         if (testId === "suggested-action-0") {
@@ -855,10 +862,15 @@ describe("ChatPage generation helpers", () => {
           return assistantLocator;
         }
 
+        if (testId === "message-user") {
+          return userMessagesLocator;
+        }
+
         if (testId === "multimodal-input") {
           return {
             click: vi.fn(),
             fill: vi.fn(),
+            inputValue: vi.fn().mockResolvedValue("fallback"),
           };
         }
 
@@ -892,14 +904,34 @@ describe("ChatPage generation helpers", () => {
         order.push("wait");
       });
 
-    await chatPage.sendUserMessageFromSuggestion();
+    const originalExpect = ChatPage.expect;
+    const toBeVisible = vi.fn().mockResolvedValue(undefined);
+    const toHaveCount = vi.fn().mockResolvedValue(undefined);
+    ChatPage.expect = vi
+      .fn((locator: unknown) => {
+        if (locator === suggestionLocator) {
+          return { toBeVisible } as any;
+        }
+        if (locator === userMessagesLocator) {
+          return { toHaveCount } as any;
+        }
+        throw new Error("Unexpected locator passed to ChatPage.expect");
+      }) as any;
 
-    expect(captureSpy).toHaveBeenCalledOnce();
-    expect(waitSpy).toHaveBeenCalledOnce();
-    expect(order.indexOf("capture-call")).toBeLessThan(
-      order.indexOf("suggestion-click")
-    );
-    expect((chatPage as any).pendingAssistantSnapshot).toEqual(baseline);
+    try {
+      await chatPage.sendUserMessageFromSuggestion();
+
+      expect(captureSpy).toHaveBeenCalledOnce();
+      expect(waitSpy).toHaveBeenCalledOnce();
+      expect(toBeVisible).toHaveBeenCalledWith({ timeout: 15_000 });
+      expect(toHaveCount).toHaveBeenCalledWith(1, { timeout: 5_000 });
+      expect(order.indexOf("capture-call")).toBeLessThan(
+        order.indexOf("suggestion-click")
+      );
+      expect((chatPage as any).pendingAssistantSnapshot).toEqual(baseline);
+    } finally {
+      ChatPage.expect = originalExpect;
+    }
   });
 
   it("records a snapshot before editing the latest user message", async () => {

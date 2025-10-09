@@ -137,6 +137,45 @@ export class ChatPage {
     await this.multimodalInput.click();
     await this.multimodalInput.fill(message);
 
+    try {
+      await this.page.waitForFunction(
+        () => {
+          const composer = document.querySelector<HTMLTextAreaElement>(
+            '[data-testid="multimodal-input"]'
+          );
+          const sendButton = document.querySelector<HTMLButtonElement>(
+            '[data-testid="send-button"]'
+          );
+
+          if (!composer || !sendButton) {
+            return false;
+          }
+
+          if (composer.value.trim().length === 0) {
+            return false;
+          }
+
+          return !sendButton.disabled;
+        },
+        undefined,
+        { timeout: 30_000 }
+      );
+    } catch (error) {
+      const composerValue = await this.multimodalInput
+        .inputValue()
+        .catch(() => "");
+      const diagnostic =
+        composerValue.trim().length > 0
+          ? ` Composer retained value: "${composerValue}".`
+          : " Composer remained empty.";
+
+      throw new Error(
+        "Composer failed to capture the outbound message before submission." +
+          diagnostic,
+        error instanceof Error ? { cause: error } : undefined
+      );
+    }
+
     await this.prepareForGeneration();
 
     /**
@@ -387,12 +426,38 @@ export class ChatPage {
      * working even when the rendered label changes (for example due to
      * different font fallbacks in offline Playwright runs).
      */
+    const suggestion = this.page.getByTestId("suggested-action-0");
+    await ChatPage.expect(suggestion).toBeVisible({ timeout: 15_000 });
+
+    const userMessages = this.page.getByTestId("message-user");
+    const initialUserCount = await userMessages.count();
+
     await this.prepareForGeneration();
 
     await Promise.all([
       this.waitForChatApiResponse(),
-      this.page.getByTestId("suggested-action-0").click(),
+      suggestion.click(),
     ]);
+
+    try {
+      await ChatPage.expect(userMessages).toHaveCount(initialUserCount + 1, {
+        timeout: 5_000,
+      });
+    } catch (error) {
+      const composerValue = await this.multimodalInput
+        .inputValue()
+        .catch(() => "");
+      const diagnostic =
+        composerValue.trim().length > 0
+          ? ` Composer retained value: "${composerValue}".`
+          : " Composer remained empty.";
+
+      throw new Error(
+        "Timed out waiting for the suggested action to append a user message." +
+          diagnostic,
+        error instanceof Error ? { cause: error } : undefined
+      );
+    }
   }
 
   async isElementVisible(elementId: string) {

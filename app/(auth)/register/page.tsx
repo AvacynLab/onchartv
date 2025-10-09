@@ -52,6 +52,12 @@ export default function Page() {
           console.error("Failed to refresh session before redirecting", error);
         }
 
+        /**
+         * Give the success toast a brief window to render before navigating away
+         * so hermetic Playwright runs can reliably observe the notification.
+         */
+        await new Promise((resolve) => setTimeout(resolve, 300));
+
         router.replace(destination);
       })();
     }
