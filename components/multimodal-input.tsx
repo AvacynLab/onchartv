@@ -237,8 +237,15 @@ function PureMultimodalInput({
        */
       const finalText = resolvedCommand?.prompt ?? trimmedPrompt;
 
-      const payloadParts = attachments.map((attachment) => ({
-        type: "file" as const,
+      /**
+       * Normalise les pièces du message envoyées au SDK AI.
+       * L'alias repose sur `ChatMessage` pour suivre l'évolution du contrat
+       * entre notre composer et le transport sans dupliquer les unions de
+       * types (`text`, `file`, etc.). Une recompilation suffit donc à signaler
+       * tout nouveau type de pièce ajouté côté SDK.
+       */
+      const payloadParts: ChatMessage["parts"][number][] = attachments.map((attachment) => ({
+        type: "file",
         url: attachment.url,
         name: attachment.name,
         mediaType: attachment.contentType,
@@ -246,7 +253,7 @@ function PureMultimodalInput({
 
       if (finalText.length > 0) {
         payloadParts.push({
-          type: "text" as const,
+          type: "text",
           text: finalText,
         });
       }
