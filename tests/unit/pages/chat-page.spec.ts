@@ -784,13 +784,6 @@ describe("ChatPage generation helpers", () => {
     };
     const page = {
       getByTestId: vi.fn((testId: string) => {
-        if (testId === "multimodal-input") {
-          return {
-            click: vi.fn(),
-            fill: vi.fn(),
-          };
-        }
-
         if (testId === "send-button") {
           return sendButtonLocator;
         }
@@ -818,6 +811,11 @@ describe("ChatPage generation helpers", () => {
         order.push("capture-call");
         return baseline;
       });
+    const composerSpy = vi
+      .spyOn(chatPage as any, "waitForComposerReady")
+      .mockImplementation(async () => {
+        order.push("composer-ready");
+      });
     const waitSpy = vi
       .spyOn(chatPage as any, "waitForChatApiResponse")
       .mockImplementation(async () => {
@@ -827,10 +825,9 @@ describe("ChatPage generation helpers", () => {
     await chatPage.sendUserMessage("Hello");
 
     expect(captureSpy).toHaveBeenCalledOnce();
+    expect(composerSpy).toHaveBeenCalledWith("Hello");
     expect(waitSpy).toHaveBeenCalledOnce();
-    expect(order.indexOf("capture-call")).toBeLessThan(
-      order.indexOf("send-click")
-    );
+    expect(order.indexOf("capture-call")).toBeLessThan(order.indexOf("send-click"));
     expect((chatPage as any).pendingAssistantSnapshot).toEqual(baseline);
   });
 
@@ -844,6 +841,9 @@ describe("ChatPage generation helpers", () => {
         order.push("suggestion-click");
       }),
     };
+    const userMessagesLocator = {
+      count: vi.fn().mockResolvedValue(0),
+    };
     const page = {
       getByTestId: vi.fn((testId: string) => {
         if (testId === "suggested-action-0") {
@@ -855,10 +855,15 @@ describe("ChatPage generation helpers", () => {
           return assistantLocator;
         }
 
+        if (testId === "message-user") {
+          return userMessagesLocator;
+        }
+
         if (testId === "multimodal-input") {
           return {
             click: vi.fn(),
             fill: vi.fn(),
+            inputValue: vi.fn().mockResolvedValue("fallback"),
           };
         }
 
@@ -892,14 +897,34 @@ describe("ChatPage generation helpers", () => {
         order.push("wait");
       });
 
-    await chatPage.sendUserMessageFromSuggestion();
+    const originalExpect = ChatPage.expect;
+    const toBeVisible = vi.fn().mockResolvedValue(undefined);
+    const toHaveCount = vi.fn().mockResolvedValue(undefined);
+    ChatPage.expect = vi
+      .fn((locator: unknown) => {
+        if (locator === suggestionLocator) {
+          return { toBeVisible } as any;
+        }
+        if (locator === userMessagesLocator) {
+          return { toHaveCount } as any;
+        }
+        throw new Error("Unexpected locator passed to ChatPage.expect");
+      }) as any;
 
-    expect(captureSpy).toHaveBeenCalledOnce();
-    expect(waitSpy).toHaveBeenCalledOnce();
-    expect(order.indexOf("capture-call")).toBeLessThan(
-      order.indexOf("suggestion-click")
-    );
-    expect((chatPage as any).pendingAssistantSnapshot).toEqual(baseline);
+    try {
+      await chatPage.sendUserMessageFromSuggestion();
+
+      expect(captureSpy).toHaveBeenCalledOnce();
+      expect(waitSpy).toHaveBeenCalledOnce();
+      expect(toBeVisible).toHaveBeenCalledWith({ timeout: 15_000 });
+      expect(toHaveCount).toHaveBeenCalledWith(1, { timeout: 5_000 });
+      expect(order.indexOf("capture-call")).toBeLessThan(
+        order.indexOf("suggestion-click")
+      );
+      expect((chatPage as any).pendingAssistantSnapshot).toEqual(baseline);
+    } finally {
+      ChatPage.expect = originalExpect;
+    }
   });
 
   it("records a snapshot before editing the latest user message", async () => {
@@ -1006,6 +1031,75 @@ describe("ChatPage generation helpers", () => {
     });
     expect(messageEditorSendButton.waitFor).toHaveBeenNthCalledWith(2, {
       state: "detached",
+    });
+  });
+
+  describe("waitForComposerReady", () => {
+    it("retypes the message until the composer stabilises and the send button enables", async () => {
+      const order: string[] = [];
+      const fillMock = vi.fn(async (value: string) => order.push(`fill:${value}`));
+      const typeMock = vi.fn(async (value: string) => order.push(`type:${value}`));
+      const inputValueMock = vi
+        .fn()
+        .mockResolvedValueOnce("")
+        .mockResolvedValueOnce("Hello world")
+        .mockResolvedValue("Hello world");
+      const isEnabledMock = vi
+        .fn()
+        .mockResolvedValueOnce(false)
+        .mockResolvedValue(true);
+      const stopVisibleMock = vi.fn().mockResolvedValue(false);
+      const waitForTimeoutMock = vi.fn(async () => {
+        order.push("wait");
+      });
+
+      const page = {
+        getByTestId: vi.fn((testId: string) => {
+          if (testId === "multimodal-input") {
+            return {
+              click: vi.fn(async () => order.push("click")),
+              fill: fillMock,
+              type: typeMock,
+              inputValue: inputValueMock,
+            } as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
+          if (testId === "send-button") {
+            return {
+              isEnabled: isEnabledMock,
+            } as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
+          if (testId === "stop-button") {
+            return {
+              isVisible: stopVisibleMock,
+            } as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
+          throw new Error(`Unexpected test id: ${testId}`);
+        }),
+        waitForTimeout: waitForTimeoutMock,
+      } satisfies Partial<Page>;
+
+      const chatPage = new ChatPage(page as Page);
+
+      await (chatPage as any).waitForComposerReady("Hello world", {
+        timeout: 1_000,
+        pollInterval: 50,
+      });
+
+      expect(fillMock).toHaveBeenNthCalledWith(1, "");
+      expect(typeMock).toHaveBeenNthCalledWith(1, "Hello world");
+      expect(fillMock).toHaveBeenNthCalledWith(2, "");
+      expect(typeMock).toHaveBeenNthCalledWith(2, "Hello world");
+      expect(fillMock).toHaveBeenCalledTimes(2);
+      expect(typeMock).toHaveBeenCalledTimes(2);
+      expect(inputValueMock).toHaveBeenCalledTimes(3);
+      expect(isEnabledMock).toHaveBeenCalledTimes(2);
+      expect(waitForTimeoutMock).toHaveBeenCalledTimes(2);
+      expect(stopVisibleMock).toHaveBeenCalled();
+      expect(order[0]).toBe("click");
+      expect(order).toContain("wait");
     });
   });
 });

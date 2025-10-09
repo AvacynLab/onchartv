@@ -180,12 +180,20 @@ export async function signInPlaywrightUser({
   );
 }
 
+/**
+ * Bootstrap a fully authenticated Playwright context backed by a deterministic
+ * test user. Optional chat model preferences can be provided so specialised
+ * suites (for example reasoning journeys) can preload their desired provider
+ * without relying on brittle UI interactions during setup.
+ */
 export async function createAuthenticatedContext({
   browser,
   name,
+  preferredChatModelId,
 }: {
   browser: Browser;
   name: string;
+  preferredChatModelId?: string;
 }): Promise<UserContext> {
   const directory = path.join(__dirname, "../playwright/.sessions");
 
@@ -269,6 +277,37 @@ export async function createAuthenticatedContext({
     password: resolvedPassword,
   });
 
+  /**
+   * Store the reasoning chat model preference directly via cookies so the
+   * Playwright bootstrap no longer depends on the Radix-driven selector menu.
+   * Recent upgrades to Radix changed the menu item roles which made the UI
+   * interaction brittle and caused the hermetic suites to fail when the items
+   * rendered in a slightly different structure. Persisting the cookie mirrors
+   * what the server action would emit and keeps the preferred model stable
+   * across warm and cold starts alike.
+   */
+  const preferredModel = preferredChatModelId
+    ? chatModels.find((model) => model.id === preferredChatModelId)
+    : null;
+
+  if (preferredChatModelId && !preferredModel) {
+    throw new Error(
+      `Unable to locate the preferred chat model: ${preferredChatModelId}`
+    );
+  }
+
+  if (preferredModel) {
+    const cookieUrl = new URL(baseURL);
+
+    await context.addCookies([
+      {
+        name: "chat-model",
+        value: preferredModel.id,
+        url: `${cookieUrl.origin}/`,
+      },
+    ]);
+  }
+
   const page = await context.newPage();
   const chatPage = new ChatPage(page);
   await chatPage.createNewChat();
@@ -276,39 +315,30 @@ export async function createAuthenticatedContext({
   const composerInput = page.getByPlaceholder("Send a message...");
 
   /**
-   * Wait for the chat composer to hydrate before touching the model selector.
-   * When the dev server cold starts (notably in CI), the chat shell streams in
-   * chunks and the selector is rendered near the end of the payload. Guarding on
-   * the shared textarea gives us a reliable hydration signal even when the
-   * model selector itself is still loading.
+   * Wait for the chat composer to hydrate before verifying the selected model.
+   * The textarea renders earlier than the selector so this gives us a reliable
+   * signal that the client bundle has streamed in.
    */
   await expect(composerInput).toBeVisible({ timeout: 60_000 });
 
-  const modelSelector = page.getByTestId("model-selector");
+  if (preferredModel) {
+    const selectedModelName = await chatPage
+      .getSelectedModel()
+      .then((value) => value.trim());
 
-  // Allow the chat shell to hydrate before interacting with the selector.
-  await expect(modelSelector).toBeVisible({ timeout: 60_000 });
-  await expect(modelSelector).toBeEnabled();
-
-  /**
-   * Resolve the human-readable label for the reasoning model directly from the
-   * shared chat model catalog. The product copy recently changed from the
-   * generic "Reasoning model" wording to the branded "Grok Reasoning" label,
-   * which caused the hard-coded assertion below to fall out of sync and break
-   * every Playwright journey during authentication.
-   */
-  const reasoningModel = chatModels.find(
-    (model) => model.id === "chat-model-reasoning"
-  );
-
-  if (!reasoningModel) {
-    throw new Error("Unable to locate the reasoning chat model metadata");
+    if (selectedModelName !== preferredModel.name) {
+      /**
+       * Fallback to the interactive selector only when the cookie approach
+       * fails (for example when the component renames the label). This keeps
+       * the hermetic bootstrap resilient without masking legitimate
+       * regressions in the selector itself.
+       */
+      await chatPage.chooseModelFromSelector(preferredModel.id);
+      await expect(chatPage.getSelectedModel()).resolves.toEqual(
+        preferredModel.name
+      );
+    }
   }
-
-  await chatPage.chooseModelFromSelector(reasoningModel.id);
-  await expect(chatPage.getSelectedModel()).resolves.toEqual(
-    reasoningModel.name
-  );
 
   await page.waitForTimeout(1000);
   await context.storageState({ path: storageFile });

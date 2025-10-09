@@ -130,7 +130,24 @@ export class AuthPage {
   }
 
   async expectToastToContain(text: string) {
-    await expect(this.page.getByTestId("toast")).toContainText(text);
+    const toast = this.page.getByTestId("toast");
+
+    try {
+      /**
+       * The auth flows redirect immediately after the toast fires which can
+       * leave the notification hidden while the client transitions to the
+       * chat workspace. Wait explicitly for the toast container to mount so we
+       * surface a precise error when the UI forgets to announce the outcome.
+       */
+      await toast.waitFor({ state: "visible", timeout: 60_000 });
+    } catch (error) {
+      throw new Error(
+        `Timed out waiting for toast containing: "${text}"`,
+        error instanceof Error ? { cause: error } : undefined
+      );
+    }
+
+    await expect(toast).toContainText(text);
   }
 
   async openSidebar() {
