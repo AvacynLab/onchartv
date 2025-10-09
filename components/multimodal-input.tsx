@@ -303,10 +303,54 @@ function PureMultimodalInput({
   }, [dispatchPrompt, input]);
 
   const handleSuggestionSelection = useCallback(
-    (text: string) => {
-      dispatchPrompt({ text });
+    (rawSuggestion: string) => {
+      /**
+       * Suggested prompts bypass the controlled textarea, so normalise and
+       * validate the payload locally before dispatching it to the chat SDK.
+       * Keeping the guard rails here mirrors the form submission path and
+       * protects the Playwright journeys from queuing empty messages when the
+       * suggestion label is unexpectedly blank.
+       */
+      const trimmedSuggestion = rawSuggestion.trim();
+
+      if (trimmedSuggestion.length === 0) {
+        toast.error(
+          "Unable to send the suggested prompt because it did not include any text."
+        );
+        return;
+      }
+
+      const resolvedCommand = resolveSlashCommand(trimmedSuggestion);
+      const finalText = resolvedCommand?.prompt ?? trimmedSuggestion;
+
+      const payloadParts: ChatMessage["parts"][number][] = [];
+
+      if (finalText.length > 0) {
+        payloadParts.push({
+          type: "text",
+          text: finalText,
+        });
+      }
+
+      if (payloadParts.length === 0) {
+        toast.error(
+          "The suggested prompt did not produce a valid payload to send to the assistant."
+        );
+        return;
+      }
+
+      window.history.replaceState({}, "", `/chat/${chatId}`);
+
+      sendMessage({
+        role: "user",
+        parts: payloadParts,
+      });
+
+      if (width && width > 768) {
+        textareaRef.current?.focus();
+      }
     },
-    [dispatchPrompt]
+    [chatId, sendMessage, width]
   );
 
   const uploadFile = useCallback(async (file: File) => {
