@@ -347,9 +347,38 @@ function PureMultimodalInput({
         return;
       }
 
+      /**
+       * Mirror a manual submission by populating the composer before we trigger
+       * the form action. This keeps the DOM, the controlled state, and the
+       * localStorage draft in sync so the e2e helpers observe the same
+       * behaviour whether the user typed the prompt or selected it.
+       */
+      setInput(trimmedSuggestion);
+      setLocalStorageInput(trimmedSuggestion);
+
+      const textarea = textareaRef.current;
+      if (textarea) {
+        textarea.value = trimmedSuggestion;
+        adjustHeight();
+        textarea.focus();
+      }
+
+      /**
+       * Trigger the shared dispatcher directly so the streaming lifecycle
+       * mirrors a manual submission even when the hermetic transport resolves
+       * synchronously. Relying solely on `requestSubmit` can leave the form
+       * without a microtask to flush, meaning Playwright never observes the
+       * transition into the `streaming` status.
+       */
       void dispatchPrompt({ text: trimmedSuggestion });
     },
-    [dispatchPrompt, status]
+    [
+      adjustHeight,
+      dispatchPrompt,
+      setInput,
+      setLocalStorageInput,
+      status,
+    ]
   );
 
   const uploadFile = useCallback(async (file: File) => {
