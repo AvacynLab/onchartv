@@ -320,37 +320,26 @@ function PureMultimodalInput({
         return;
       }
 
-      const resolvedCommand = resolveSlashCommand(trimmedSuggestion);
-      const finalText = resolvedCommand?.prompt ?? trimmedSuggestion;
+      /**
+       * Reuse the main composer dispatcher so quick actions share the exact
+       * same validation, slash-command rewriting and post-send cleanup as the
+       * manual submission path. Returning early when the dispatcher rejects the
+       * payload keeps the E2E suite aligned with the user-facing error toasts.
+       */
+      const dispatched = dispatchPrompt({
+        text: trimmedSuggestion,
+        attachmentsOverride: [],
+      });
 
-      const payloadParts: ChatMessage["parts"][number][] = [];
-
-      if (finalText.length > 0) {
-        payloadParts.push({
-          type: "text",
-          text: finalText,
-        });
-      }
-
-      if (payloadParts.length === 0) {
-        toast.error(
-          "The suggested prompt did not produce a valid payload to send to the assistant."
-        );
+      if (!dispatched) {
         return;
       }
-
-      window.history.replaceState({}, "", `/chat/${chatId}`);
-
-      sendMessage({
-        role: "user",
-        parts: payloadParts,
-      });
 
       if (width && width > 768) {
         textareaRef.current?.focus();
       }
     },
-    [chatId, sendMessage, width]
+    [dispatchPrompt, width]
   );
 
   const uploadFile = useCallback(async (file: File) => {
