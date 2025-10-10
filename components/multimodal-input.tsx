@@ -348,18 +348,28 @@ function PureMultimodalInput({
       }
 
       /**
+       * Injecte d'abord la suggestion dans l'état contrôlé du composer pour
+       * refléter visuellement le texte que l'on s'apprête à soumettre. Cette
+       * étape maintient l'expérience utilisateur (le champ affiche brièvement
+       * le prompt sélectionné) et garantit que les observateurs Playwright qui
+       * s'appuient sur la valeur du textarea détectent l'envoi imminent. Le
+       * dispatcher partagé réinitialise ensuite l'entrée comme pour un envoi
+       * manuel.
+       */
+      setInput(trimmedSuggestion);
+
+      /**
        * Aligne les actions rapides sur le chemin d'envoi classique : on
        * délègue directement au dispatcher partagé afin de générer la requête
        * réseau, réinitialiser le composer et déclencher les mêmes toasts
-       * d'erreur éventuels qu'un envoi manuel. L'état contrôlé du textarea
-       * reste quant à lui vide — exactement comme si l'utilisateur avait saisi
-       * le message avant d'appuyer sur « Send ».
+       * d'erreur éventuels qu'un envoi manuel.
        */
       void dispatchPrompt({ text: trimmedSuggestion });
     },
     [
       dispatchPrompt,
       status,
+      setInput,
     ]
   );
 
