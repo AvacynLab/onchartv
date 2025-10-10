@@ -94,7 +94,10 @@ function shouldRenderAutomationToast(): boolean {
    * fallback toast reliably renders across CI and local runs, while production
    * browsers skip the synthetic overlay entirely.
    */
-  const playwrightFlagEnabled = process.env.NEXT_PUBLIC_PLAYWRIGHT === "true";
+  const playwrightFlagEnabled =
+    process.env.NEXT_PUBLIC_PLAYWRIGHT === "true" ||
+    process.env.PLAYWRIGHT === "true" ||
+    process.env.CI_PLAYWRIGHT === "true";
   const webdriverEnabled =
     typeof navigator !== "undefined" &&
     typeof (navigator as Navigator & { webdriver?: boolean }).webdriver ===

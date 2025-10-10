@@ -115,6 +115,22 @@ export function MessageEditor({
               });
 
               /**
+               * React batches the state update above, so yield to the event loop
+               * before requesting a regeneration. This guarantees the latest
+               * user message is committed to the chat store before the transport
+               * inspects it, keeping the hermetic reasoning fixtures
+               * deterministic.
+               */
+              await new Promise<void>((resolve) => {
+                if (typeof queueMicrotask === "function") {
+                  queueMicrotask(resolve);
+                  return;
+                }
+
+                setTimeout(resolve, 0);
+              });
+
+              /**
                * Start the regeneration before collapsing the editor so the
                * chat helpers capture the freshly edited prompt. Once the
                * request is inflight we immediately swap back to the standard

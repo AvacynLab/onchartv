@@ -342,15 +342,33 @@ function PureMultimodalInput({
         return;
       }
 
-      startTransition(() => {
-        setInput(trimmedSuggestion);
-      });
+      setInput(trimmedSuggestion);
 
       const textarea = textareaRef.current;
       if (textarea) {
         textarea.value = trimmedSuggestion;
         adjustHeight();
         textarea.focus();
+
+        const form = textarea.form;
+
+        if (form) {
+          /**
+           * Reuse the form submission pipeline when available so quick actions
+           * follow the exact same lifecycle as manual sends. This guarantees
+           * that validation, attachment handling, and status updates remain in
+           * lock-step for both paths, which the Playwright helpers rely on when
+           * polling for streaming state.
+           */
+          try {
+            form.requestSubmit();
+            return;
+          } catch {
+            // If `requestSubmit` fails (older browsers, detached DOM, etc.),
+            // fall back to dispatching directly below so the prompt still
+            // reaches the transport layer.
+          }
+        }
       }
 
       await dispatchPrompt({ text: trimmedSuggestion });
