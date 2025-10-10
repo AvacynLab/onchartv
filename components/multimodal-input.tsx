@@ -375,10 +375,20 @@ function PureMultimodalInput({
         });
       }
 
-      const sendPromise = sendMessage({
-        role: "user",
-        parts: payloadParts,
-      });
+      /**
+       * `sendMessage` retourne un `PromiseLike` dans l'application mais nos tests
+       * unitaires le remplacent parfois par un simple `vi.fn()` synchrone. On
+       * enveloppe donc systématiquement le résultat dans `Promise.resolve` pour
+       * obtenir un contrat homogène : les promesses conservent leurs rejets
+       * natifs, tandis que les retours `void` deviennent des promesses
+       * immédiatement résolues que l'on peut chaîner de façon sûre.
+       */
+      const sendPromise = Promise.resolve(
+        sendMessage({
+          role: "user",
+          parts: payloadParts,
+        })
+      );
 
       void sendPromise.catch((error) => {
         console.error("Failed to dispatch chat prompt", error);
