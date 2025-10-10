@@ -371,33 +371,6 @@ function PureMultimodalInput({
        * retombe sur le dispatcher partagé pour garantir que le prompt finit
        * malgré tout par être envoyé.
        */
-      const form = textarea?.form ?? undefined;
-      const hasNativeSubmit =
-        typeof form?.requestSubmit === "function";
-
-      if (hasNativeSubmit) {
-        const submitter = form?.querySelector<HTMLButtonElement>(
-          '[data-testid="send-button"]'
-        );
-
-        /**
-         * Ne tente d'emprunter la voie native que si le bouton d'envoi est déjà
-         * cliquable. Lorsque le contrôleur React n'a pas encore synchronisé son
-         * état, le bouton reste désactivé et `requestSubmit` ignore tout
-         * simplement l'appel — ce qui laisserait Playwright attendre un stream
-         * qui ne démarrera jamais. Dans ce cas on retombe sur le dispatcher
-         * partagé afin de garantir l'émission du prompt.
-         */
-        const submitDisabled =
-          submitter?.disabled === true ||
-          submitter?.getAttribute("aria-disabled") === "true";
-
-        if (!submitDisabled) {
-          form.requestSubmit(submitter ?? undefined);
-          return;
-        }
-      }
-
       void dispatchPrompt({ text: trimmedSuggestion });
     },
     [
