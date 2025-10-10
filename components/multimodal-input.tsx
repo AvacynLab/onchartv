@@ -328,10 +328,10 @@ function PureMultimodalInput({
     (rawSuggestion: string) => {
       /**
        * Suggested prompts bypass the controlled textarea, so normalise and
-       * validate the payload locally before dispatching it to the chat SDK.
-       * Keeping the guard rails here mirrors the form submission path and
-       * protects the Playwright journeys from queuing empty messages when the
-       * suggestion label is unexpectedly blank.
+       * validate the payload locally before dispatching it to the shared chat
+       * helper. Deferring to `dispatchPrompt` ensures we reuse the exact same
+       * validation, slash-command rewriting, attachment handling, and
+       * post-send cleanup that backs the manual composer submission path.
        */
       const trimmedSuggestion = rawSuggestion.trim();
 
@@ -342,86 +342,14 @@ function PureMultimodalInput({
         return;
       }
 
-      if (uploadQueue.length > 0) {
-        toast.error(
-          "Please wait for the files to finish uploading before sending!"
-        );
-        return;
-      }
-
       if (status === "submitted" || status === "streaming") {
         toast.error("Please wait for the model to finish its response!");
         return;
       }
 
-      window.history.replaceState({}, "", `/chat/${chatId}`);
-
-      const resolvedCommand = resolveSlashCommand(trimmedSuggestion);
-      const finalText = resolvedCommand?.prompt ?? trimmedSuggestion;
-
-      const payloadParts: ChatMessage["parts"][number][] = attachments.map(
-        (attachment) => ({
-          type: "file",
-          url: attachment.url,
-          name: attachment.name,
-          mediaType: attachment.contentType,
-        })
-      );
-
-      if (finalText.length > 0) {
-        payloadParts.push({
-          type: "text",
-          text: finalText,
-        });
-      }
-
-      /**
-       * `sendMessage` retourne un `PromiseLike` dans l'application mais nos tests
-       * unitaires le remplacent parfois par un simple `vi.fn()` synchrone. On
-       * enveloppe donc systématiquement le résultat dans `Promise.resolve` pour
-       * obtenir un contrat homogène : les promesses conservent leurs rejets
-       * natifs, tandis que les retours `void` deviennent des promesses
-       * immédiatement résolues que l'on peut chaîner de façon sûre.
-       */
-      const sendPromise = Promise.resolve(
-        sendMessage({
-          role: "user",
-          parts: payloadParts,
-        })
-      );
-
-      void sendPromise.catch((error) => {
-        console.error("Failed to dispatch chat prompt", error);
-        toast.error("We couldn't send your message. Please try again.");
-      });
-
-      setAttachments([]);
-      setLocalStorageInput("");
-      resetHeight();
-      setInput("");
-
-      if (textareaRef.current) {
-        textareaRef.current.value = "";
-        adjustHeight();
-
-        if (width && width > 768) {
-          textareaRef.current.focus();
-        }
-      }
+      void dispatchPrompt({ text: trimmedSuggestion });
     },
-    [
-      adjustHeight,
-      attachments,
-      chatId,
-      resetHeight,
-      sendMessage,
-      setAttachments,
-      setInput,
-      setLocalStorageInput,
-      status,
-      uploadQueue.length,
-      width,
-    ]
+    [dispatchPrompt, status]
   );
 
   const uploadFile = useCallback(async (file: File) => {
