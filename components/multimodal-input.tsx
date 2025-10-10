@@ -325,7 +325,7 @@ function PureMultimodalInput({
   }, [dispatchPrompt, input]);
 
   const handleSuggestionSelection = useCallback(
-    async (rawSuggestion: string) => {
+    (rawSuggestion: string) => {
       /**
        * Suggested prompts bypass the controlled textarea, so normalise and
        * validate the payload locally before dispatching it to the chat SDK.
@@ -342,6 +342,11 @@ function PureMultimodalInput({
         return;
       }
 
+      if (status === "submitted" || status === "streaming") {
+        toast.error("Please wait for the model to finish its response!");
+        return;
+      }
+
       setInput(trimmedSuggestion);
 
       const textarea = textareaRef.current;
@@ -349,35 +354,11 @@ function PureMultimodalInput({
         textarea.value = trimmedSuggestion;
         adjustHeight();
         textarea.focus();
-
-        const form = textarea.form;
-
-        if (form) {
-          /**
-           * Reuse the form submission pipeline when available so quick actions
-           * follow the exact same lifecycle as manual sends. This guarantees
-           * that validation, attachment handling, and status updates remain in
-           * lock-step for both paths, which the Playwright helpers rely on when
-           * polling for streaming state.
-           */
-          try {
-            form.requestSubmit();
-            return;
-          } catch {
-            // If `requestSubmit` fails (older browsers, detached DOM, etc.),
-            // fall back to dispatching directly below so the prompt still
-            // reaches the transport layer.
-          }
-        }
       }
 
-      await dispatchPrompt({ text: trimmedSuggestion });
+      submitForm();
     },
-    [
-      adjustHeight,
-      dispatchPrompt,
-      setInput,
-    ]
+    [adjustHeight, setInput, status, submitForm]
   );
 
   const uploadFile = useCallback(async (file: File) => {

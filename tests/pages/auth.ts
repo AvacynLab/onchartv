@@ -117,6 +117,10 @@ export class AuthPage {
     const userNavButton = this.page.getByTestId("user-nav-button");
     await expect(userNavButton).toBeVisible();
 
+    await userNavButton.evaluate((element) => {
+      element.scrollIntoView({ block: "center", inline: "nearest" });
+    });
+    await userNavButton.scrollIntoViewIfNeeded();
     await userNavButton.click();
     const userNavMenu = this.page.getByTestId("user-nav-menu");
     await expect(userNavMenu).toBeVisible();
@@ -153,8 +157,25 @@ export class AuthPage {
   }
 
   async openSidebar() {
+    const sidebarState = await this.page
+      .evaluate(() => {
+        const sidebar = document.querySelector('[data-sidebar="sidebar"]');
+        const container = sidebar?.closest('[data-state]');
+        return container?.getAttribute("data-state") ?? null;
+      })
+      .catch(() => null);
+
+    if (sidebarState === "expanded") {
+      return;
+    }
+
     const sidebarToggleButton = this.page.getByTestId("sidebar-toggle-button");
     await sidebarToggleButton.click();
+    await this.page.waitForFunction(() => {
+      const sidebar = document.querySelector('[data-sidebar="sidebar"]');
+      const container = sidebar?.closest('[data-state]');
+      return container?.getAttribute("data-state") === "expanded";
+    });
   }
 
   async persistSessionCookies() {

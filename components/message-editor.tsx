@@ -122,11 +122,13 @@ export function MessageEditor({
                * deterministic.
                */
               await new Promise<void>((resolve) => {
-                if (typeof queueMicrotask === "function") {
-                  queueMicrotask(resolve);
-                  return;
-                }
-
+                /**
+                 * Yield to the next macrotask so React can flush the
+                 * `setMessages` update before we invoke `regenerate()`. This
+                 * keeps the edited prompt in sync with the transport helpers,
+                 * which inspect the chat store immediately after the
+                 * regeneration starts.
+                 */
                 setTimeout(resolve, 0);
               });
 
