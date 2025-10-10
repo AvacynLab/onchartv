@@ -321,11 +321,11 @@ function PureMultimodalInput({
     const domValue = textareaRef.current?.value ?? "";
     const effectiveText = input.trim().length > 0 ? input : domValue;
 
-    void dispatchPrompt({ text: effectiveText });
+    return dispatchPrompt({ text: effectiveText });
   }, [dispatchPrompt, input]);
 
   const handleSuggestionSelection = useCallback(
-    (rawSuggestion: string) => {
+    async (rawSuggestion: string) => {
       /**
        * Suggested prompts bypass the controlled textarea, so normalise and
        * validate the payload locally before dispatching it to the chat SDK.
@@ -357,15 +357,28 @@ function PureMultimodalInput({
       }
 
       /**
-       * Reuse the regular submit helper so the quick action follows the exact
-       * same validation/dispatch path as manual sends. The textarea's DOM value
-       * already mirrors the suggestion above, allowing `submitForm` to pick it
-       * up via its DOM fallback even if React has not flushed the controlled
-       * state yet.
+       * Reuse the shared dispatcher so the quick action suit la même logique
+       * de validation et d'assemblage que l'envoi manuel. En transmettant le
+       * texte nettoyé directement, on évite de dépendre de la synchronisation
+       * du DOM lorsque React n'a pas encore reflété la valeur contrôlée du
+       * textarea.
        */
-      submitForm();
+      /**
+       * Déclencher directement l'envoi asynchrone garantit que le clic sur une
+       * suggestion démarre immédiatement le streaming, même si le textarea
+       * contrôlé n'a pas encore reflété la valeur tronquée ci-dessus. Le
+       * dispatcher renvoie `false` lorsque la validation locale échoue (par
+       * exemple si un upload est encore en cours) ; dans ce cas on laisse le
+       * composer dans l'état actuel afin que l'utilisateur puisse corriger le
+       * problème.
+       */
+      const dispatched = await dispatchPrompt({ text: trimmedSuggestion });
+
+      if (!dispatched) {
+        return;
+      }
     },
-    [adjustHeight, setInput, status, submitForm]
+    [adjustHeight, dispatchPrompt, setInput, status]
   );
 
   const uploadFile = useCallback(async (file: File) => {
@@ -473,7 +486,7 @@ function PureMultimodalInput({
             return;
           }
 
-          submitForm();
+          void submitForm();
         }}
       >
         {(attachments.length > 0 || uploadQueue.length > 0) && (
