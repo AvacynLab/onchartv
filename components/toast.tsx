@@ -103,8 +103,18 @@ function shouldRenderAutomationToast(): boolean {
     typeof (navigator as Navigator & { webdriver?: boolean }).webdriver ===
       "boolean" &&
     (navigator as Navigator & { webdriver?: boolean }).webdriver === true;
+  /**
+   * Chromium-based automation (e.g. Playwright's bundled browsers) may not
+   * expose the `navigator.webdriver` flag reliably in preview builds. Falling
+   * back to the user agent keeps the bridge active for headless runs without
+   * leaking the synthetic toast into regular production sessions.
+   */
+  const headlessBrowserDetected =
+    typeof navigator !== "undefined" &&
+    typeof navigator.userAgent === "string" &&
+    navigator.userAgent.toLowerCase().includes("headless");
 
-  return playwrightFlagEnabled || webdriverEnabled;
+  return playwrightFlagEnabled || webdriverEnabled || headlessBrowserDetected;
 }
 
 function renderAutomationToast(props: Omit<ToastProps, "id">) {

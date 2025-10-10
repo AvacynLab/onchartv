@@ -357,15 +357,15 @@ function PureMultimodalInput({
       }
 
       /**
-       * Trigger the shared dispatcher directly instead of routing through the
-       * synthetic form submission helper. Dispatching here guarantees the
-       * chat SDK receives the payload even if React has not yet flushed the
-       * controlled textarea updates, which previously caused the e2e flow to
-       * stall while waiting for streaming to begin.
+       * Reuse the regular submit helper so the quick action follows the exact
+       * same validation/dispatch path as manual sends. The textarea's DOM value
+       * already mirrors the suggestion above, allowing `submitForm` to pick it
+       * up via its DOM fallback even if React has not flushed the controlled
+       * state yet.
        */
-      void dispatchPrompt({ text: trimmedSuggestion });
+      submitForm();
     },
-    [adjustHeight, dispatchPrompt, setInput, status]
+    [adjustHeight, setInput, status, submitForm]
   );
 
   const uploadFile = useCallback(async (file: File) => {

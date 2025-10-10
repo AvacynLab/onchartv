@@ -20,15 +20,22 @@ const AUTOMATION_TOAST_LIFETIME_MS = 4_000;
 
 describe("toast automation bridge", () => {
   let originalWebdriver: boolean | undefined;
+  let originalUserAgent: string | undefined;
 
   beforeEach(() => {
-    originalWebdriver =
-      typeof navigator !== "undefined" ? (navigator as Navigator & { webdriver?: boolean }).webdriver : undefined;
-
     if (typeof navigator !== "undefined") {
+      const automationNavigator = navigator as Navigator & { webdriver?: boolean };
+      originalWebdriver = automationNavigator.webdriver;
+      originalUserAgent = automationNavigator.userAgent;
+
       Object.defineProperty(navigator, "webdriver", {
         configurable: true,
         value: true,
+      });
+
+      Object.defineProperty(navigator, "userAgent", {
+        configurable: true,
+        value: originalUserAgent ?? "Mozilla/5.0",
       });
     }
 
@@ -38,14 +45,26 @@ describe("toast automation bridge", () => {
 
   afterEach(() => {
     if (typeof navigator !== "undefined") {
+      const automationNavigator = navigator as Navigator & { webdriver?: boolean };
       if (originalWebdriver === undefined) {
         // biome-ignore lint/performance/noDelete: clean up the automation stub between specs.
         // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
-        delete (navigator as Navigator & { webdriver?: boolean }).webdriver;
+        delete automationNavigator.webdriver;
       } else {
         Object.defineProperty(navigator, "webdriver", {
           configurable: true,
           value: originalWebdriver,
+        });
+      }
+
+      if (originalUserAgent === undefined) {
+        // biome-ignore lint/performance/noDelete: clean up the automation stub between specs.
+        // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+        delete (navigator as Navigator & { userAgent?: string }).userAgent;
+      } else {
+        Object.defineProperty(navigator, "userAgent", {
+          configurable: true,
+          value: originalUserAgent,
         });
       }
     }
@@ -75,5 +94,27 @@ describe("toast automation bridge", () => {
     vi.advanceTimersByTime(AUTOMATION_TOAST_LIFETIME_MS);
 
     expect(document.getElementById(AUTOMATION_BRIDGE_ID)).toBeNull();
+  });
+
+  it("activates when running under headless automation user agents", () => {
+    if (typeof navigator === "undefined") {
+      throw new Error("Navigator should be defined in the test environment");
+    }
+
+    Object.defineProperty(navigator, "webdriver", {
+      configurable: true,
+      value: false,
+    });
+
+    Object.defineProperty(navigator, "userAgent", {
+      configurable: true,
+      value: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/130.0.0.0 Safari/537.36",
+    });
+
+    toast({ type: "success", description: "Headless detection" });
+
+    const bridge = document.getElementById(AUTOMATION_BRIDGE_ID);
+    expect(bridge).not.toBeNull();
+    expect(bridge).toHaveTextContent("Headless detection");
   });
 });
