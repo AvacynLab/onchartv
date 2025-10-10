@@ -325,7 +325,7 @@ function PureMultimodalInput({
   }, [dispatchPrompt, input]);
 
   const handleSuggestionSelection = useCallback(
-    async (rawSuggestion: string) => {
+    (rawSuggestion: string) => {
       /**
        * Suggested prompts bypass the controlled textarea, so normalise and
        * validate the payload locally before dispatching it to the chat SDK.
@@ -342,43 +342,76 @@ function PureMultimodalInput({
         return;
       }
 
+      if (uploadQueue.length > 0) {
+        toast.error(
+          "Please wait for the files to finish uploading before sending!"
+        );
+        return;
+      }
+
       if (status === "submitted" || status === "streaming") {
         toast.error("Please wait for the model to finish its response!");
         return;
       }
 
-      setInput(trimmedSuggestion);
+      window.history.replaceState({}, "", `/chat/${chatId}`);
 
-      const textarea = textareaRef.current;
-      if (textarea) {
-        textarea.value = trimmedSuggestion;
-        adjustHeight();
-        textarea.focus();
+      const resolvedCommand = resolveSlashCommand(trimmedSuggestion);
+      const finalText = resolvedCommand?.prompt ?? trimmedSuggestion;
+
+      const payloadParts: ChatMessage["parts"][number][] = attachments.map(
+        (attachment) => ({
+          type: "file",
+          url: attachment.url,
+          name: attachment.name,
+          mediaType: attachment.contentType,
+        })
+      );
+
+      if (finalText.length > 0) {
+        payloadParts.push({
+          type: "text",
+          text: finalText,
+        });
       }
 
-      /**
-       * Reuse the shared dispatcher so the quick action suit la même logique
-       * de validation et d'assemblage que l'envoi manuel. En transmettant le
-       * texte nettoyé directement, on évite de dépendre de la synchronisation
-       * du DOM lorsque React n'a pas encore reflété la valeur contrôlée du
-       * textarea.
-       */
-      /**
-       * Déclencher directement l'envoi asynchrone garantit que le clic sur une
-       * suggestion démarre immédiatement le streaming, même si le textarea
-       * contrôlé n'a pas encore reflété la valeur tronquée ci-dessus. Le
-       * dispatcher renvoie `false` lorsque la validation locale échoue (par
-       * exemple si un upload est encore en cours) ; dans ce cas on laisse le
-       * composer dans l'état actuel afin que l'utilisateur puisse corriger le
-       * problème.
-       */
-      const dispatched = await dispatchPrompt({ text: trimmedSuggestion });
+      const sendPromise = sendMessage({
+        role: "user",
+        parts: payloadParts,
+      });
 
-      if (!dispatched) {
-        return;
+      void sendPromise.catch((error) => {
+        console.error("Failed to dispatch chat prompt", error);
+        toast.error("We couldn't send your message. Please try again.");
+      });
+
+      setAttachments([]);
+      setLocalStorageInput("");
+      resetHeight();
+      setInput("");
+
+      if (textareaRef.current) {
+        textareaRef.current.value = "";
+        adjustHeight();
+
+        if (width && width > 768) {
+          textareaRef.current.focus();
+        }
       }
     },
-    [adjustHeight, dispatchPrompt, setInput, status]
+    [
+      adjustHeight,
+      attachments,
+      chatId,
+      resetHeight,
+      sendMessage,
+      setAttachments,
+      setInput,
+      setLocalStorageInput,
+      status,
+      uploadQueue.length,
+      width,
+    ]
   );
 
   const uploadFile = useCallback(async (file: File) => {
