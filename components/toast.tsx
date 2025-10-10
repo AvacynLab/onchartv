@@ -82,12 +82,30 @@ export function toast(props: Omit<ToastProps, "id">) {
   return result;
 }
 
-function renderAutomationToast(props: Omit<ToastProps, "id">) {
+function shouldRenderAutomationToast(): boolean {
   if (typeof window === "undefined" || typeof document === "undefined") {
-    return;
+    return false;
   }
 
-  if (typeof navigator === "undefined" || navigator.webdriver !== true) {
+  /**
+   * Playwright toggles either the dedicated NEXT_PUBLIC flag (when we boot the
+   * dev server manually for the suite) or exposes the `navigator.webdriver`
+   * property when browsers run in automation mode. Check both signals so the
+   * fallback toast reliably renders across CI and local runs, while production
+   * browsers skip the synthetic overlay entirely.
+   */
+  const playwrightFlagEnabled = process.env.NEXT_PUBLIC_PLAYWRIGHT === "true";
+  const webdriverEnabled =
+    typeof navigator !== "undefined" &&
+    typeof (navigator as Navigator & { webdriver?: boolean }).webdriver ===
+      "boolean" &&
+    (navigator as Navigator & { webdriver?: boolean }).webdriver === true;
+
+  return playwrightFlagEnabled || webdriverEnabled;
+}
+
+function renderAutomationToast(props: Omit<ToastProps, "id">) {
+  if (!shouldRenderAutomationToast()) {
     return;
   }
 

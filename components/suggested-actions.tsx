@@ -7,7 +7,7 @@ import { Suggestion } from "./elements/suggestion";
 import type { VisibilityType } from "./visibility-selector";
 
 type SuggestedActionsProps = {
-  onSelectSuggestion: (text: string) => void;
+  onSelectSuggestion: (text: string) => void | Promise<void>;
   selectedVisibilityType: VisibilityType;
 };
 

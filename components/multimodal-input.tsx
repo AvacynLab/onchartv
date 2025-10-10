@@ -325,7 +325,7 @@ function PureMultimodalInput({
   }, [dispatchPrompt, input]);
 
   const handleSuggestionSelection = useCallback(
-    (rawSuggestion: string) => {
+    async (rawSuggestion: string) => {
       /**
        * Suggested prompts bypass the controlled textarea, so normalise and
        * validate the payload locally before dispatching it to the chat SDK.
@@ -351,30 +351,9 @@ function PureMultimodalInput({
         textarea.value = trimmedSuggestion;
         adjustHeight();
         textarea.focus();
-
-        const form = textarea.form;
-        if (form) {
-          let submitted = false;
-
-          if (typeof form.requestSubmit === "function") {
-            form.requestSubmit();
-            submitted = true;
-          } else {
-            const submitEvent = new Event("submit", {
-              bubbles: true,
-              cancelable: true,
-            });
-            form.dispatchEvent(submitEvent);
-            submitted = true;
-          }
-
-          if (submitted) {
-            return;
-          }
-        }
       }
 
-      void dispatchPrompt({ text: trimmedSuggestion });
+      await dispatchPrompt({ text: trimmedSuggestion });
     },
     [
       adjustHeight,
