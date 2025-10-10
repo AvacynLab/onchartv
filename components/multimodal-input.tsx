@@ -114,6 +114,7 @@ function PureMultimodalInput({
   usage?: AppUsage;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
   const { width } = useWindowSize();
 
   const adjustHeight = useCallback(() => {
@@ -358,15 +359,33 @@ function PureMultimodalInput({
        */
       setInput(trimmedSuggestion);
 
+      if (textareaRef.current) {
+        textareaRef.current.value = trimmedSuggestion;
+        adjustHeight();
+      }
+
+      const form = formRef.current;
+
+      if (form) {
+        /**
+         * Submit the underlying form so the quick action follows the exact same
+         * validation and status transitions as a manual send (the `submitForm`
+         * helper eventually calls `dispatchPrompt`). Falling back to a direct
+         * dispatcher invocation keeps the UI functional even if the ref becomes
+         * unavailable during future refactors.
+         */
+        form.requestSubmit();
+        return;
+      }
+
       /**
-       * Aligne les actions rapides sur le chemin d'envoi classique : on
-       * délègue directement au dispatcher partagé afin de générer la requête
-       * réseau, réinitialiser le composer et déclencher les mêmes toasts
-       * d'erreur éventuels qu'un envoi manuel.
+       * Align quick actions with the classic submit path by delegating to the
+       * shared dispatcher when programmatic submission is not possible.
        */
       void dispatchPrompt({ text: trimmedSuggestion });
     },
     [
+      adjustHeight,
       dispatchPrompt,
       status,
       setInput,
@@ -469,6 +488,7 @@ function PureMultimodalInput({
       />
 
       <PromptInput
+        ref={formRef}
         className="rounded-xl border border-border bg-background p-3 shadow-xs transition-all duration-200 focus-within:border-border hover:border-muted-foreground/50"
         onSubmit={(event) => {
           event.preventDefault();
