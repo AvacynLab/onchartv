@@ -320,26 +320,58 @@ function PureMultimodalInput({
         return;
       }
 
-      /**
-       * Reuse the main composer dispatcher so quick actions share the exact
-       * same validation, slash-command rewriting and post-send cleanup as the
-       * manual submission path. Returning early when the dispatcher rejects the
-       * payload keeps the E2E suite aligned with the user-facing error toasts.
-       */
-      const dispatched = dispatchPrompt({
-        text: trimmedSuggestion,
-        attachmentsOverride: [],
-      });
-
-      if (!dispatched) {
+      if (uploadQueue.length > 0) {
+        toast.error(
+          "Please wait for the files to finish uploading before sending!"
+        );
         return;
       }
+
+      /**
+       * Mirror the manual submission path by rewriting slash commands and
+       * clearing residual composer state before handing the payload to
+       * `sendMessage`. Keeping the logic inline avoids the previous regression
+       * where delegating to `dispatchPrompt` failed to trigger streaming during
+       * hermetic Playwright runs.
+       */
+      const resolvedCommand = resolveSlashCommand(trimmedSuggestion);
+      const finalText = resolvedCommand?.prompt ?? trimmedSuggestion;
+
+      window.history.replaceState({}, "", `/chat/${chatId}`);
+
+      const payloadParts: ChatMessage["parts"][number][] = [];
+
+      if (finalText.length > 0) {
+        payloadParts.push({
+          type: "text",
+          text: finalText,
+        });
+      }
+
+      sendMessage({
+        role: "user", 
+        parts: payloadParts,
+      });
+
+      setAttachments([]);
+      setLocalStorageInput("");
+      resetHeight();
+      setInput("");
 
       if (width && width > 768) {
         textareaRef.current?.focus();
       }
     },
-    [dispatchPrompt, width]
+    [
+      chatId,
+      resetHeight,
+      sendMessage,
+      setAttachments,
+      setInput,
+      setLocalStorageInput,
+      uploadQueue.length,
+      width,
+    ]
   );
 
   const uploadFile = useCallback(async (file: File) => {

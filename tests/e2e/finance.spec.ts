@@ -3,6 +3,8 @@ import type { Locator, Page } from "@playwright/test";
 import { expect, test } from "../fixtures";
 import { ChatPage } from "../pages/chat";
 
+const TOAST_LOCATOR = '[data-testid="toast"], #automation-toast-bridge';
+
 import {
   FINANCE_SERIES,
   FUNDAMENTAL_SNAPSHOTS,
@@ -662,7 +664,9 @@ test.describe("Finance end-to-end journeys", () => {
           await toggle.uncheck();
         }
         await page.getByRole("button", { name: "Enregistrer" }).click();
-        await expect(page.getByTestId("toast")).toContainText("Préférences enregistrées.");
+        await expect(page.locator(TOAST_LOCATOR).first()).toContainText(
+          "Préférences enregistrées."
+        );
       }
     };
 

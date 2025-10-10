@@ -15,6 +15,49 @@ const AUTOMATION_BRIDGE_ID = "automation-toast-bridge";
 const AUTOMATION_TOAST_LIFETIME_MS = 4_000;
 const automationTimers = new WeakMap<HTMLElement, number>();
 
+function clearAutomationTimer(element: HTMLElement | null) {
+  if (!element) {
+    return;
+  }
+
+  const existingTimer = automationTimers.get(element);
+  if (existingTimer !== undefined) {
+    window.clearTimeout(existingTimer);
+    automationTimers.delete(element);
+  }
+}
+
+function detachBridgeWhenNativeToastAppears(bridge: HTMLDivElement) {
+  /**
+   * Keep polling for a short window so we can immediately drop the automation
+   * bridge once the real Sonner portal renders a toast. This prevents
+   * Playwright's strict-mode locators from detecting multiple `data-testid`
+   * matches while still guaranteeing a visible notification if hydration lags
+   * behind in CI.
+   */
+  const startedAt = performance.now();
+
+  const poll = () => {
+    const nativeToast = document.querySelector(
+      `[data-testid="toast"]:not(#${AUTOMATION_BRIDGE_ID})`
+    );
+
+    if (nativeToast) {
+      clearAutomationTimer(bridge);
+      bridge.remove();
+      return;
+    }
+
+    if (performance.now() - startedAt >= AUTOMATION_TOAST_LIFETIME_MS) {
+      return;
+    }
+
+    window.requestAnimationFrame(poll);
+  };
+
+  window.requestAnimationFrame(poll);
+}
+
 export function toast(props: Omit<ToastProps, "id">) {
   /**
    * Playwright assertions expect a single toast to appear after each auth
@@ -80,10 +123,9 @@ function renderAutomationToast(props: Omit<ToastProps, "id">) {
   bridge.dataset.type = props.type;
   bridge.textContent = props.description;
 
-  const existingTimer = automationTimers.get(bridge);
-  if (existingTimer !== undefined) {
-    window.clearTimeout(existingTimer);
-  }
+  clearAutomationTimer(bridge);
+
+  detachBridgeWhenNativeToastAppears(bridge);
 
   const timeoutId = window.setTimeout(() => {
     bridge?.remove();

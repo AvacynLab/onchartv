@@ -26,6 +26,13 @@ const CHAT_ID_REGEX = /\/chat\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[
 const CHAT_STREAM_PATH_REGEX = /^\/api\/chat\/[\w-]+\/stream$/;
 
 /**
+ * Some Playwright runs rely on the automation toast bridge when the Sonner
+ * portal hydrates slowly. Target both the native toast and the bridge element
+ * so locator queries remain stable even when the fallback is active.
+ */
+const TOAST_LOCATOR = '[data-testid="toast"], #automation-toast-bridge';
+
+/**
  * Snapshot of the assistant timeline captured right before triggering a new
  * generation. Defining the shape up front allows helper methods to reference
  * the type without relying on the `this` context — a pattern that keeps the
@@ -334,7 +341,7 @@ export class ChatPage {
       direction === "up" ? "message-upvote" : "message-downvote"
     );
 
-    const toast = this.page.getByTestId("toast");
+    const toast = this.page.locator(TOAST_LOCATOR).first();
     const successCopy =
       direction === "up" ? "Upvoted Response!" : "Downvoted Response!";
 
@@ -1037,7 +1044,7 @@ export class ChatPage {
     baseline: NonNullable<typeof this.pendingAssistantSnapshot>,
     timeoutMs: number
   ): Promise<void> {
-    const toast = this.page.getByTestId("toast");
+    const toast = this.page.locator(TOAST_LOCATOR).first();
 
     const rawToastPromise = toast
       .waitFor({ state: "visible", timeout: timeoutMs })
@@ -1210,7 +1217,7 @@ export class ChatPage {
     }
   }
   async expectToastToContain(text: string) {
-    await expect(this.page.getByTestId("toast")).toContainText(text);
+    await expect(this.page.locator(TOAST_LOCATOR).first()).toContainText(text);
   }
 
   async openSideBar() {

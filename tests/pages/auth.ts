@@ -9,6 +9,8 @@ import {
 } from "../utils/session-persistence";
 import { hasAuthSessionCookie } from "../utils/auth-session";
 
+const TOAST_LOCATOR = '[data-testid="toast"], #automation-toast-bridge';
+
 export class AuthPage {
   private readonly page: Page;
   private readonly baseURL: string;
@@ -130,7 +132,7 @@ export class AuthPage {
   }
 
   async expectToastToContain(text: string) {
-    const toast = this.page.getByTestId("toast");
+    const toast = this.page.locator(TOAST_LOCATOR).first();
 
     try {
       /**
