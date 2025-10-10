@@ -348,36 +348,17 @@ function PureMultimodalInput({
       }
 
       /**
-       * Mirror a manual submission by populating the composer before we trigger
-       * the form action. This keeps the DOM, the controlled state, and the
-       * localStorage draft in sync so the e2e helpers observe the same
-       * behaviour whether the user typed the prompt or selected it.
-       */
-      setInput(trimmedSuggestion);
-      setLocalStorageInput(trimmedSuggestion);
-
-      const textarea = textareaRef.current;
-      if (textarea) {
-        textarea.value = trimmedSuggestion;
-        adjustHeight();
-        textarea.focus();
-      }
-
-      /**
-       * Préfère déclencher l'action de formulaire native afin que la même
-       * logique que le bouton "Send" s'applique (validation, analytics,
-       * historique). Certains environnements (tests unitaires JSDOM, anciens
-       * navigateurs) ne supportent pas `requestSubmit`. Dans ce cas précis on
-       * retombe sur le dispatcher partagé pour garantir que le prompt finit
-       * malgré tout par être envoyé.
+       * Aligne les actions rapides sur le chemin d'envoi classique : on
+       * délègue directement au dispatcher partagé afin de générer la requête
+       * réseau, réinitialiser le composer et déclencher les mêmes toasts
+       * d'erreur éventuels qu'un envoi manuel. L'état contrôlé du textarea
+       * reste quant à lui vide — exactement comme si l'utilisateur avait saisi
+       * le message avant d'appuyer sur « Send ».
        */
       void dispatchPrompt({ text: trimmedSuggestion });
     },
     [
-      adjustHeight,
       dispatchPrompt,
-      setInput,
-      setLocalStorageInput,
       status,
     ]
   );
