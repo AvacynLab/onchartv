@@ -364,12 +364,22 @@ function PureMultimodalInput({
       }
 
       /**
-       * Trigger the shared dispatcher directly so the streaming lifecycle
-       * mirrors a manual submission even when the hermetic transport resolves
-       * synchronously. Relying solely on `requestSubmit` can leave the form
-       * without a microtask to flush, meaning Playwright never observes the
-       * transition into the `streaming` status.
+       * Préfère déclencher l'action de formulaire native afin que la même
+       * logique que le bouton "Send" s'applique (validation, analytics,
+       * historique). Certains environnements (tests unitaires JSDOM, anciens
+       * navigateurs) ne supportent pas `requestSubmit`. Dans ce cas précis on
+       * retombe sur le dispatcher partagé pour garantir que le prompt finit
+       * malgré tout par être envoyé.
        */
+      const form = textarea?.form ?? undefined;
+      const hasNativeSubmit =
+        typeof form?.requestSubmit === "function";
+
+      if (hasNativeSubmit) {
+        form.requestSubmit();
+        return;
+      }
+
       void dispatchPrompt({ text: trimmedSuggestion });
     },
     [

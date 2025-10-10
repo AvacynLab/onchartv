@@ -170,12 +170,24 @@ export class AuthPage {
     }
 
     const sidebarToggleButton = this.page.getByTestId("sidebar-toggle-button");
-    await sidebarToggleButton.click();
-    await this.page.waitForFunction(() => {
-      const sidebar = document.querySelector('[data-sidebar="sidebar"]');
-      const container = sidebar?.closest('[data-state]');
-      return container?.getAttribute("data-state") === "expanded";
+
+    // Garantit que le bouton est dans le viewport avant d'interagir : en
+    // mode sidebar compact, le toggle peut être partiellement masqué lorsque
+    // Playwright restaure une session existante.
+    await sidebarToggleButton.evaluate((element) => {
+      element.scrollIntoView({ block: "center", inline: "center" });
     });
+    await sidebarToggleButton.scrollIntoViewIfNeeded();
+    await sidebarToggleButton.click();
+    await this.page.waitForFunction(
+      () => {
+        const sidebar = document.querySelector('[data-sidebar="sidebar"]');
+        const container = sidebar?.closest('[data-state]');
+        return container?.getAttribute("data-state") === "expanded";
+      },
+      undefined,
+      { timeout: 30_000 }
+    );
   }
 
   async persistSessionCookies() {
