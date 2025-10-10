@@ -361,6 +361,8 @@ function PureMultimodalInput({
     [dispatchPrompt, input, waitForIdle]
   );
 
+  const formRef = useRef<HTMLFormElement>(null);
+
   const handleSuggestionSelection = useCallback(
     async (rawSuggestion: string) => {
       /**
@@ -393,6 +395,13 @@ function PureMultimodalInput({
       if (textareaRef.current) {
         textareaRef.current.value = trimmedSuggestion;
         adjustHeight();
+      }
+
+      const form = formRef.current;
+
+      if (form) {
+        form.requestSubmit();
+        return;
       }
 
       const didDispatch = await submitForm(trimmedSuggestion);
@@ -510,6 +519,7 @@ function PureMultimodalInput({
       />
 
       <PromptInput
+        ref={formRef}
         className="rounded-xl border border-border bg-background p-3 shadow-xs transition-all duration-200 focus-within:border-border hover:border-muted-foreground/50"
         onSubmit={(event) => {
           event.preventDefault();
