@@ -299,7 +299,17 @@ function PureMultimodalInput({
   );
 
   const submitForm = useCallback(() => {
-    dispatchPrompt({ text: input });
+    /**
+     * Lorsque Playwright pilote la zone de saisie, la mise à jour du state
+     * React peut arriver un ou deux frames après la mutation DOM effectuée par
+     * `page.type`. On retombe donc sur la valeur réellement présente dans le
+     * textarea afin d'éviter de bloquer l'envoi si le state n'a pas encore été
+     * synchronisé.
+     */
+    const domValue = textareaRef.current?.value ?? "";
+    const effectiveText = input.trim().length > 0 ? input : domValue;
+
+    dispatchPrompt({ text: effectiveText });
   }, [dispatchPrompt, input]);
 
   const handleSuggestionSelection = useCallback(
@@ -320,57 +330,10 @@ function PureMultimodalInput({
         return;
       }
 
-      if (uploadQueue.length > 0) {
-        toast.error(
-          "Please wait for the files to finish uploading before sending!"
-        );
-        return;
-      }
-
-      /**
-       * Mirror the manual submission path by rewriting slash commands and
-       * clearing residual composer state before handing the payload to
-       * `sendMessage`. Keeping the logic inline avoids the previous regression
-       * where delegating to `dispatchPrompt` failed to trigger streaming during
-       * hermetic Playwright runs.
-       */
-      const resolvedCommand = resolveSlashCommand(trimmedSuggestion);
-      const finalText = resolvedCommand?.prompt ?? trimmedSuggestion;
-
-      window.history.replaceState({}, "", `/chat/${chatId}`);
-
-      const payloadParts: ChatMessage["parts"][number][] = [];
-
-      if (finalText.length > 0) {
-        payloadParts.push({
-          type: "text",
-          text: finalText,
-        });
-      }
-
-      sendMessage({
-        role: "user", 
-        parts: payloadParts,
-      });
-
-      setAttachments([]);
-      setLocalStorageInput("");
-      resetHeight();
-      setInput("");
-
-      if (width && width > 768) {
-        textareaRef.current?.focus();
-      }
+      dispatchPrompt({ text: trimmedSuggestion });
     },
     [
-      chatId,
-      resetHeight,
-      sendMessage,
-      setAttachments,
-      setInput,
-      setLocalStorageInput,
-      uploadQueue.length,
-      width,
+      dispatchPrompt,
     ]
   );
 
@@ -438,8 +401,16 @@ function PureMultimodalInput({
     [setAttachments, uploadFile]
   );
 
+  /**
+   * Les tests e2e remplissent parfois le textarea plus vite que React ne
+   * propage la nouvelle valeur au state contrôlé. En retombant sur la valeur du
+   * DOM lorsque le state est encore vide, on garantit que le bouton d'envoi se
+   * réactive dès que du texte est réellement présent.
+   */
+  const domInputValue = textareaRef.current?.value?.trim() ?? "";
   const trimmedInput = input.trim();
-  const canSubmit = trimmedInput.length > 0 || attachments.length > 0;
+  const effectiveInput = trimmedInput.length > 0 ? trimmedInput : domInputValue;
+  const canSubmit = effectiveInput.length > 0 || attachments.length > 0;
   const isUploadInProgress = uploadQueue.length > 0;
 
   return (
