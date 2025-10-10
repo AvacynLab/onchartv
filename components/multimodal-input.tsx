@@ -114,7 +114,6 @@ function PureMultimodalInput({
   usage?: AppUsage;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const formRef = useRef<HTMLFormElement>(null);
   const { width } = useWindowSize();
 
   const adjustHeight = useCallback(() => {
@@ -326,7 +325,7 @@ function PureMultimodalInput({
   }, [dispatchPrompt, input]);
 
   const handleSuggestionSelection = useCallback(
-    (rawSuggestion: string) => {
+    async (rawSuggestion: string) => {
       /**
        * Suggested prompts bypass the controlled textarea, so normalise and
        * validate the payload locally before dispatching it to the shared chat
@@ -364,25 +363,21 @@ function PureMultimodalInput({
         adjustHeight();
       }
 
-      const form = formRef.current;
+      const didDispatch = await dispatchPrompt({ text: trimmedSuggestion });
 
-      if (form) {
+      if (!didDispatch) {
         /**
-         * Submit the underlying form so the quick action follows the exact same
-         * validation and status transitions as a manual send (the `submitForm`
-         * helper eventually calls `dispatchPrompt`). Falling back to a direct
-         * dispatcher invocation keeps the UI functional even if the ref becomes
-         * unavailable during future refactors.
+         * When dispatching fails (for example because uploads are still in
+         * flight), keep the suggestion staged in the composer so the user can
+         * address the validation error without losing the generated text.
          */
-        form.requestSubmit();
-        return;
-      }
+        setInput(trimmedSuggestion);
 
-      /**
-       * Align quick actions with the classic submit path by delegating to the
-       * shared dispatcher when programmatic submission is not possible.
-       */
-      void dispatchPrompt({ text: trimmedSuggestion });
+        if (textareaRef.current) {
+          textareaRef.current.value = trimmedSuggestion;
+          adjustHeight();
+        }
+      }
     },
     [
       adjustHeight,
@@ -488,7 +483,6 @@ function PureMultimodalInput({
       />
 
       <PromptInput
-        ref={formRef}
         className="rounded-xl border border-border bg-background p-3 shadow-xs transition-all duration-200 focus-within:border-border hover:border-muted-foreground/50"
         onSubmit={(event) => {
           event.preventDefault();
