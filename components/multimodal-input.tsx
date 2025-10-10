@@ -139,16 +139,22 @@ function PureMultimodalInput({
     ""
   );
 
+  const hasHydratedRef = useRef(false);
+
   useEffect(() => {
-    if (textareaRef.current) {
-      const domValue = textareaRef.current.value;
-      // Prefer DOM value over localStorage to handle hydration
-      const finalValue = domValue || localStorageInput || "";
-      setInput(finalValue);
-      adjustHeight();
+    if (hasHydratedRef.current) {
+      return;
     }
-    // Only run once after hydration
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
+    if (!textareaRef.current) {
+      return;
+    }
+
+    const domValue = textareaRef.current.value;
+    const finalValue = domValue || localStorageInput || "";
+    setInput(finalValue);
+    adjustHeight();
+    hasHydratedRef.current = true;
   }, [adjustHeight, localStorageInput, setInput]);
 
   useEffect(() => {
@@ -336,10 +342,44 @@ function PureMultimodalInput({
         return;
       }
 
+      startTransition(() => {
+        setInput(trimmedSuggestion);
+      });
+
+      const textarea = textareaRef.current;
+      if (textarea) {
+        textarea.value = trimmedSuggestion;
+        adjustHeight();
+        textarea.focus();
+
+        const form = textarea.form;
+        if (form) {
+          let submitted = false;
+
+          if (typeof form.requestSubmit === "function") {
+            form.requestSubmit();
+            submitted = true;
+          } else {
+            const submitEvent = new Event("submit", {
+              bubbles: true,
+              cancelable: true,
+            });
+            form.dispatchEvent(submitEvent);
+            submitted = true;
+          }
+
+          if (submitted) {
+            return;
+          }
+        }
+      }
+
       void dispatchPrompt({ text: trimmedSuggestion });
     },
     [
+      adjustHeight,
       dispatchPrompt,
+      setInput,
     ]
   );
 

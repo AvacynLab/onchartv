@@ -1,8 +1,9 @@
 import React from "react";
 import "@testing-library/jest-dom/vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { UIMessage } from "ai";
+import type { Attachment } from "@/lib/types";
 
 (globalThis as unknown as { React: typeof React }).React = React;
 
@@ -98,5 +99,48 @@ describe("MultimodalInput", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("active le bouton d'envoi lorsqu'un message est saisi", async () => {
+    const Wrapper = () => {
+      const [input, setInput] = React.useState("");
+      const [attachments, setAttachments] = React.useState<Attachment[]>([]);
+
+      return (
+        <MultimodalInput
+          {...baseProps}
+          attachments={attachments}
+          input={input}
+          setAttachments={setAttachments as any}
+          setInput={setInput}
+        />
+      );
+    };
+
+    render(<Wrapper />);
+
+    const textarea = screen.getByTestId("multimodal-input");
+    fireEvent.change(textarea, { target: { value: "Pourquoi le ciel est bleu?" } });
+
+    const sendButton = await screen.findByTestId("send-button");
+    await waitFor(() => expect(sendButton).toBeEnabled());
+  });
+
+  it("restaure la saisie depuis le localStorage après hydratation", async () => {
+    window.localStorage.setItem("input", JSON.stringify("Bonjour depuis le stockage"));
+
+    const setInput = vi.fn();
+
+    render(
+      <MultimodalInput
+        {...baseProps}
+        input=""
+        setInput={setInput as any}
+      />
+    );
+
+    await waitFor(() => {
+      expect(setInput).toHaveBeenCalledWith("Bonjour depuis le stockage");
+    });
   });
 });
