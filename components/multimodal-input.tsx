@@ -222,6 +222,30 @@ function PureMultimodalInput({
 
   const shouldRenderStopButton = isStopButtonVisible;
 
+  const statusRef = useRef(status);
+
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
+
+  const waitForIdle = useCallback(async () => {
+    const timeoutMs = 15_000;
+    const pollIntervalMs = 150;
+    const deadline = Date.now() + timeoutMs;
+
+    while (ACTIVE_CHAT_STATUSES.has(statusRef.current)) {
+      if (Date.now() > deadline) {
+        return false;
+      }
+
+      await new Promise((resolve) => {
+        setTimeout(resolve, pollIntervalMs);
+      });
+    }
+
+    return true;
+  }, []);
+
   const dispatchPrompt = useCallback(
     async ({ text, attachmentsOverride }: DispatchPromptOptions) => {
       const trimmedInput = text.trim();
@@ -310,19 +334,32 @@ function PureMultimodalInput({
     ]
   );
 
-  const submitForm = useCallback(() => {
-    /**
-     * Lorsque Playwright pilote la zone de saisie, la mise à jour du state
-     * React peut arriver un ou deux frames après la mutation DOM effectuée par
-     * `page.type`. On retombe donc sur la valeur réellement présente dans le
-     * textarea afin d'éviter de bloquer l'envoi si le state n'a pas encore été
-     * synchronisé.
-     */
-    const domValue = textareaRef.current?.value ?? "";
-    const effectiveText = input.trim().length > 0 ? input : domValue;
+  const submitForm = useCallback(
+    async (overrideText?: string) => {
+      const idle = await waitForIdle();
 
-    return dispatchPrompt({ text: effectiveText });
-  }, [dispatchPrompt, input]);
+      if (!idle) {
+        toast.error("Please wait for the model to finish its response!");
+        return false;
+      }
+
+      /**
+       * Lorsque Playwright pilote la zone de saisie, la mise à jour du state
+       * React peut arriver un ou deux frames après la mutation DOM effectuée
+       * par `page.type`. On retombe donc sur la valeur réellement présente dans
+       * le textarea afin d'éviter de bloquer l'envoi si le state n'a pas encore
+       * été synchronisé. Lorsqu'une suggestion est fournie, l'appelant peut
+       * transmettre `overrideText` pour court-circuiter ce calcul et soumettre
+       * directement le prompt normalisé.
+       */
+      const domValue = textareaRef.current?.value ?? "";
+      const fallbackText = input.trim().length > 0 ? input : domValue;
+      const effectiveText = overrideText ?? fallbackText;
+
+      return dispatchPrompt({ text: effectiveText });
+    },
+    [dispatchPrompt, input, waitForIdle]
+  );
 
   const handleSuggestionSelection = useCallback(
     async (rawSuggestion: string) => {
@@ -342,11 +379,6 @@ function PureMultimodalInput({
         return;
       }
 
-      if (status === "submitted" || status === "streaming") {
-        toast.error("Please wait for the model to finish its response!");
-        return;
-      }
-
       /**
        * Injecte d'abord la suggestion dans l'état contrôlé du composer pour
        * refléter visuellement le texte que l'on s'apprête à soumettre. Cette
@@ -363,7 +395,7 @@ function PureMultimodalInput({
         adjustHeight();
       }
 
-      const didDispatch = await dispatchPrompt({ text: trimmedSuggestion });
+      const didDispatch = await submitForm(trimmedSuggestion);
 
       if (!didDispatch) {
         /**
@@ -379,12 +411,7 @@ function PureMultimodalInput({
         }
       }
     },
-    [
-      adjustHeight,
-      dispatchPrompt,
-      status,
-      setInput,
-    ]
+    [adjustHeight, setInput, submitForm]
   );
 
   const uploadFile = useCallback(async (file: File) => {
@@ -486,11 +513,6 @@ function PureMultimodalInput({
         className="rounded-xl border border-border bg-background p-3 shadow-xs transition-all duration-200 focus-within:border-border hover:border-muted-foreground/50"
         onSubmit={(event) => {
           event.preventDefault();
-          if (status === "submitted" || status === "streaming") {
-            toast.error("Please wait for the model to finish its response!");
-            return;
-          }
-
           void submitForm();
         }}
       >
