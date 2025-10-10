@@ -217,7 +217,7 @@ function PureMultimodalInput({
   const shouldRenderStopButton = isStopButtonVisible;
 
   const dispatchPrompt = useCallback(
-    ({ text, attachmentsOverride }: DispatchPromptOptions) => {
+    async ({ text, attachmentsOverride }: DispatchPromptOptions) => {
       const trimmedInput = text.trim();
       const effectiveAttachments = attachmentsOverride ?? attachments;
       const hasText = trimmedInput.length > 0;
@@ -269,10 +269,16 @@ function PureMultimodalInput({
         });
       }
 
-      sendMessage({
-        role: "user",
-        parts: payloadParts,
-      });
+      try {
+        await sendMessage({
+          role: "user",
+          parts: payloadParts,
+        });
+      } catch (error) {
+        console.error("Failed to dispatch chat prompt", error);
+        toast.error("We couldn't send your message. Please try again.");
+        return false;
+      }
 
       setAttachments([]);
       setLocalStorageInput("");
@@ -309,7 +315,7 @@ function PureMultimodalInput({
     const domValue = textareaRef.current?.value ?? "";
     const effectiveText = input.trim().length > 0 ? input : domValue;
 
-    dispatchPrompt({ text: effectiveText });
+    void dispatchPrompt({ text: effectiveText });
   }, [dispatchPrompt, input]);
 
   const handleSuggestionSelection = useCallback(
@@ -330,7 +336,7 @@ function PureMultimodalInput({
         return;
       }
 
-      dispatchPrompt({ text: trimmedSuggestion });
+      void dispatchPrompt({ text: trimmedSuggestion });
     },
     [
       dispatchPrompt,
