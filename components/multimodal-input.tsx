@@ -365,10 +365,10 @@ function PureMultimodalInput({
     async (rawSuggestion: string) => {
       /**
        * Suggested prompts bypass the controlled textarea, so normalise and
-       * validate the payload locally before dispatching it to the shared chat
-       * helper. Deferring to `dispatchPrompt` ensures we reuse the exact same
-       * validation, slash-command rewriting, attachment handling, and
-       * post-send cleanup that backs the manual composer submission path.
+       * validate the payload locally before delegating to the shared submit
+       * helper. Reusing `submitForm` keeps validation, slash-command rewriting,
+       * and clean-up logic identical to the manual flow triggered by the Send
+       * button.
        */
       const trimmedSuggestion = rawSuggestion.trim();
 
@@ -379,23 +379,16 @@ function PureMultimodalInput({
         return;
       }
 
-      /**
-       * Injecte d'abord la suggestion dans l'état contrôlé du composer pour
-       * refléter visuellement le texte que l'on s'apprête à soumettre. Cette
-       * étape maintient l'expérience utilisateur (le champ affiche brièvement
-       * le prompt sélectionné) et garantit que les observateurs Playwright qui
-       * s'appuient sur la valeur du textarea détectent l'envoi imminent. Le
-       * dispatcher partagé réinitialise ensuite l'entrée comme pour un envoi
-       * manuel.
-       */
-      const idle = await waitForIdle();
+      // Surface the selection in the controlled composer so the user – and the
+      // Playwright helpers – can observe the outbound prompt before it streams.
+      setInput(trimmedSuggestion);
 
-      if (!idle) {
-        toast.error("Please wait for the model to finish its response!");
-        return;
+      if (textareaRef.current) {
+        textareaRef.current.value = trimmedSuggestion;
+        adjustHeight();
       }
 
-      const didDispatch = await dispatchPrompt({ text: trimmedSuggestion });
+      const didDispatch = await submitForm(trimmedSuggestion);
 
       if (!didDispatch) {
         /**
@@ -403,15 +396,13 @@ function PureMultimodalInput({
          * flight), keep the suggestion staged in the composer so the user can
          * address the validation error without losing the generated text.
          */
-        setInput(trimmedSuggestion);
-
         if (textareaRef.current) {
           textareaRef.current.value = trimmedSuggestion;
           adjustHeight();
         }
       }
     },
-    [adjustHeight, dispatchPrompt, setInput, waitForIdle]
+    [adjustHeight, setInput, submitForm]
   );
 
   const uploadFile = useCallback(async (file: File) => {
