@@ -479,14 +479,17 @@ function PureMultimodalInput({
   );
 
   /**
-   * Les tests e2e remplissent parfois le textarea plus vite que React ne
-   * propage la nouvelle valeur au state contrôlé. En retombant sur la valeur du
-   * DOM lorsque le state est encore vide, on garantit que le bouton d'envoi se
-   * réactive dès que du texte est réellement présent.
+   * Les runs Playwright peuvent taper plus vite que React ne réconcilie la
+   * valeur contrôlée, d'où le recours à la valeur du DOM. On prend également en
+   * compte `input` pour couvrir le cas inverse (DOM réinitialisé mais state
+   * toujours peuplé) et conserver un bouton d'envoi activé dès qu'une des deux
+   * sources contient du texte.
    */
-  const canSubmit =
-    (textareaRef.current?.value?.trim().length ?? 0) > 0 ||
-    attachments.length > 0;
+  const composerLength = Math.max(
+    input.trim().length,
+    textareaRef.current?.value?.trim().length ?? 0
+  );
+  const canSubmit = composerLength > 0 || attachments.length > 0;
   const isUploadInProgress = uploadQueue.length > 0;
 
   return (
