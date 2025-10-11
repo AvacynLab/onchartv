@@ -89,6 +89,10 @@ describe("ChatPage.waitForChatApiResponse", () => {
       requestfailed: new Set(),
     };
 
+    const stopButtonLocator = {
+      isVisible: vi.fn().mockResolvedValue(false),
+    };
+
     const page = {
       on: vi.fn((event: string, handler: (...args: any[]) => unknown) => {
         listeners[event]?.add(handler);
@@ -96,7 +100,14 @@ describe("ChatPage.waitForChatApiResponse", () => {
       off: vi.fn((event: string, handler: (...args: any[]) => unknown) => {
         listeners[event]?.delete(handler);
       }),
+      locator: vi.fn((selector: string) => {
+        throw new Error(`Unexpected locator access: ${selector}`);
+      }),
       getByTestId: vi.fn((testId: string) => {
+        if (testId === "stop-button") {
+          return stopButtonLocator as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
         throw new Error(`Unexpected test id access: ${testId}`);
       }),
       waitForFunction: vi.fn(),
@@ -223,18 +234,36 @@ describe("ChatPage.waitForChatApiResponse", () => {
       );
       const toastInnerText = vi.fn().mockResolvedValue("");
       const waitForFunction = vi.fn().mockResolvedValue(undefined);
+      const toastLocatorHandle = {
+        waitFor: toastWaitFor,
+        innerText: toastInnerText,
+      } as const;
 
       const harness = createEventHarness();
       (harness.page.getByTestId as ReturnType<typeof vi.fn>).mockImplementation(
         (testId: string) => {
           if (testId === "toast") {
+            return toastLocatorHandle as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
+          if (testId === "stop-button") {
             return {
-              waitFor: toastWaitFor,
-              innerText: toastInnerText,
+              isVisible: vi.fn().mockResolvedValue(false),
             } as unknown as ReturnType<Page["getByTestId"]>;
           }
 
           throw new Error(`Unexpected test id ${testId}`);
+        }
+      );
+      (harness.page.locator as ReturnType<typeof vi.fn>).mockImplementation(
+        (selector: string) => {
+          if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+            return {
+              first: () => toastLocatorHandle,
+            } as unknown as ReturnType<Page["locator"]>;
+          }
+
+          throw new Error(`Unexpected locator access: ${selector}`);
         }
       );
 
@@ -301,15 +330,16 @@ describe("ChatPage.waitForChatApiResponse", () => {
       const spinnerCount = vi
         .fn()
         .mockImplementation(async () => (spinnerCalls++ === 0 ? 1 : 0));
+      const toastLocatorHandle = {
+        waitFor: toastWaitFor,
+        innerText: toastInnerText,
+      } as const;
 
       const harness = createEventHarness();
       (harness.page.getByTestId as ReturnType<typeof vi.fn>).mockImplementation(
         (testId: string) => {
           if (testId === "toast") {
-            return {
-              waitFor: toastWaitFor,
-              innerText: toastInnerText,
-            } as unknown as ReturnType<Page["getByTestId"]>;
+            return toastLocatorHandle as unknown as ReturnType<Page["getByTestId"]>;
           }
 
           if (testId === "message-assistant") {
@@ -325,7 +355,24 @@ describe("ChatPage.waitForChatApiResponse", () => {
             } as unknown as ReturnType<Page["getByTestId"]>;
           }
 
+          if (testId === "stop-button") {
+            return {
+              isVisible: vi.fn().mockResolvedValue(false),
+            } as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
           throw new Error(`Unexpected test id ${testId}`);
+        }
+      );
+      (harness.page.locator as ReturnType<typeof vi.fn>).mockImplementation(
+        (selector: string) => {
+          if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+            return {
+              first: () => toastLocatorHandle,
+            } as unknown as ReturnType<Page["locator"]>;
+          }
+
+          throw new Error(`Unexpected locator access: ${selector}`);
         }
       );
 
@@ -351,7 +398,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
       expect(
         (harness.page.getByTestId as ReturnType<typeof vi.fn>).mock.calls
           .flat()
-      ).not.toContain("stop-button");
+      ).toContain("stop-button");
     } finally {
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
@@ -377,15 +424,16 @@ describe("ChatPage.waitForChatApiResponse", () => {
         }),
       };
       const spinnerCount = vi.fn().mockResolvedValue(0);
+      const toastLocatorHandle = {
+        waitFor: toastWaitFor,
+        innerText: toastInnerText,
+      } as const;
 
       const harness = createEventHarness();
       (harness.page.getByTestId as ReturnType<typeof vi.fn>).mockImplementation(
         (testId: string) => {
           if (testId === "toast") {
-            return {
-              waitFor: toastWaitFor,
-              innerText: toastInnerText,
-            } as unknown as ReturnType<Page["getByTestId"]>;
+            return toastLocatorHandle as unknown as ReturnType<Page["getByTestId"]>;
           }
 
           if (testId === "message-assistant") {
@@ -401,7 +449,24 @@ describe("ChatPage.waitForChatApiResponse", () => {
             } as unknown as ReturnType<Page["getByTestId"]>;
           }
 
+          if (testId === "stop-button") {
+            return {
+              isVisible: vi.fn().mockResolvedValue(false),
+            } as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
           throw new Error(`Unexpected test id ${testId}`);
+        }
+      );
+      (harness.page.locator as ReturnType<typeof vi.fn>).mockImplementation(
+        (selector: string) => {
+          if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+            return {
+              first: () => toastLocatorHandle,
+            } as unknown as ReturnType<Page["locator"]>;
+          }
+
+          throw new Error(`Unexpected locator access: ${selector}`);
         }
       );
 
@@ -415,10 +480,11 @@ describe("ChatPage.waitForChatApiResponse", () => {
 
       let caughtError: unknown;
       try {
-        const waitPromise = (chatPage as any).waitForUiStreamingFallback(
-          baselineSnapshot,
-          45_000
-        );
+        const waitPromise = (chatPage as any).waitForUiStreamingFallback({
+          baseline: baselineSnapshot,
+          baselineStopButtonVisible: false,
+          timeoutMs: 45_000,
+        });
 
         await vi.advanceTimersByTimeAsync(45_000);
 
@@ -442,6 +508,82 @@ describe("ChatPage.waitForChatApiResponse", () => {
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
     }
+  });
+
+  it("treats a fresh stop button toggle as evidence of streaming", async () => {
+    const toastWaitFor = vi.fn().mockImplementation(
+      () => new Promise(() => {})
+    );
+    const toastInnerText = vi.fn().mockResolvedValue("");
+    const assistantCount = vi.fn().mockResolvedValue(0);
+    const spinnerCount = vi.fn().mockResolvedValue(0);
+    const stopVisible = vi
+      .fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const waitForTimeout = vi.fn().mockResolvedValue(undefined);
+
+    const page = {
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "toast") {
+          return {
+            waitFor: toastWaitFor,
+            innerText: toastInnerText,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant") {
+          return {
+            count: assistantCount,
+            nth: vi.fn(),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant-loading") {
+          return {
+            count: spinnerCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "stop-button") {
+          return {
+            isVisible: stopVisible,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        throw new Error(`Unexpected test id: ${testId}`);
+      }),
+      locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+          return {
+            first: () => ({
+              waitFor: toastWaitFor,
+              innerText: toastInnerText,
+            }),
+          } as unknown as ReturnType<Page["locator"]>;
+        }
+
+        throw new Error(`Unexpected locator access: ${selector}`);
+      }),
+      waitForTimeout: waitForTimeout as unknown as Page["waitForTimeout"],
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+    const baselineSnapshot = {
+      count: 0,
+      latestArtifactCount: 0,
+      latestMessageId: null,
+      latestMessageText: "",
+    } as const;
+
+    await (chatPage as any).waitForUiStreamingFallback({
+      baseline: baselineSnapshot,
+      baselineStopButtonVisible: false,
+      timeoutMs: 5_000,
+    });
+
+    expect(stopVisible).toHaveBeenCalledTimes(2);
+    expect(waitForTimeout).toHaveBeenCalled();
   });
 });
 
@@ -539,6 +681,10 @@ describe("ChatPage vote helpers", () => {
     const toastWaitFor = vi.fn().mockResolvedValue(undefined);
     const toastToContain = vi.fn().mockResolvedValue(undefined);
     const waitForTimeout = vi.fn().mockResolvedValue(undefined);
+    const toastLocatorHandle = {
+      waitFor: toastWaitFor,
+      innerText: vi.fn().mockResolvedValue("Upvoted Response!"),
+    } as const;
 
     const page = {
       waitForResponse: vi.fn().mockResolvedValue({
@@ -556,12 +702,19 @@ describe("ChatPage vote helpers", () => {
           return voteButton as unknown as ReturnType<Page["getByTestId"]>;
         }
         if (testId === "toast") {
-          return {
-            waitFor: toastWaitFor,
-          } as unknown as ReturnType<Page["getByTestId"]>;
+          return toastLocatorHandle as unknown as ReturnType<Page["getByTestId"]>;
         }
 
         throw new Error(`Unexpected test id: ${testId}`);
+      }),
+      locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+          return {
+            first: () => toastLocatorHandle,
+          } as unknown as ReturnType<Page["locator"]>;
+        }
+
+        throw new Error(`Unexpected locator access: ${selector}`);
       }),
       waitForTimeout,
     } satisfies Partial<Page>;
@@ -601,6 +754,10 @@ describe("ChatPage vote helpers", () => {
     };
     const toastWaitFor = vi.fn().mockRejectedValue(new Error("timeout"));
     const waitForTimeout = vi.fn().mockResolvedValue(undefined);
+    const toastLocatorHandle = {
+      waitFor: toastWaitFor,
+      innerText: vi.fn().mockResolvedValue(""),
+    } as const;
 
     const page = {
       waitForResponse: vi.fn().mockResolvedValue({
@@ -618,11 +775,18 @@ describe("ChatPage vote helpers", () => {
           return voteButton as unknown as ReturnType<Page["getByTestId"]>;
         }
         if (testId === "toast") {
-          return {
-            waitFor: toastWaitFor,
-          } as unknown as ReturnType<Page["getByTestId"]>;
+          return toastLocatorHandle as unknown as ReturnType<Page["getByTestId"]>;
         }
         throw new Error(`Unexpected test id: ${testId}`);
+      }),
+      locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+          return {
+            first: () => toastLocatorHandle,
+          } as unknown as ReturnType<Page["locator"]>;
+        }
+
+        throw new Error(`Unexpected locator access: ${selector}`);
       }),
       waitForTimeout,
     } satisfies Partial<Page>;
@@ -649,6 +813,10 @@ describe("ChatPage vote helpers", () => {
     };
     const toastWaitFor = vi.fn().mockRejectedValue(new Error("timeout"));
     const waitForTimeout = vi.fn().mockResolvedValue(undefined);
+    const toastLocatorHandle = {
+      waitFor: toastWaitFor,
+      innerText: vi.fn().mockResolvedValue(""),
+    } as const;
 
     const page = {
       waitForResponse: vi.fn().mockResolvedValue({
@@ -666,11 +834,18 @@ describe("ChatPage vote helpers", () => {
           return voteButton as unknown as ReturnType<Page["getByTestId"]>;
         }
         if (testId === "toast") {
-          return {
-            waitFor: toastWaitFor,
-          } as unknown as ReturnType<Page["getByTestId"]>;
+          return toastLocatorHandle as unknown as ReturnType<Page["getByTestId"]>;
         }
         throw new Error(`Unexpected test id: ${testId}`);
+      }),
+      locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+          return {
+            first: () => toastLocatorHandle,
+          } as unknown as ReturnType<Page["locator"]>;
+        }
+
+        throw new Error(`Unexpected locator access: ${selector}`);
       }),
       waitForTimeout,
     } satisfies Partial<Page>;
@@ -793,6 +968,12 @@ describe("ChatPage generation helpers", () => {
           return assistantLocator;
         }
 
+        if (testId === "stop-button") {
+          return {
+            isVisible: vi.fn().mockResolvedValue(false),
+          };
+        }
+
         throw new Error(`Unexpected test id: ${testId}`);
       }),
     } satisfies Partial<Page>;
@@ -870,6 +1051,12 @@ describe("ChatPage generation helpers", () => {
         if (testId === "send-button") {
           return {
             click: vi.fn(),
+          };
+        }
+
+        if (testId === "stop-button") {
+          return {
+            isVisible: vi.fn().mockResolvedValue(false),
           };
         }
 
@@ -986,6 +1173,12 @@ describe("ChatPage generation helpers", () => {
         }
 
         if (testId === "message-attachments") {
+          return {
+            isVisible: vi.fn().mockResolvedValue(false),
+          };
+        }
+
+        if (testId === "stop-button") {
           return {
             isVisible: vi.fn().mockResolvedValue(false),
           };

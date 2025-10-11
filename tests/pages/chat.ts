@@ -68,6 +68,13 @@ export class ChatPage {
    */
   private pendingVoteRequest: Promise<void> | null = null;
 
+  /**
+   * Record whether the stop button was visible when the next generation cycle
+   * started so polling can differentiate between the residual cooldown from the
+   * previous run and a fresh streaming toggle.
+   */
+  private pendingStopButtonWasVisible = false;
+
   constructor(page: Page) {
     this.page = page;
   }
@@ -694,6 +701,9 @@ export class ChatPage {
    */
   private async prepareForGeneration(): Promise<void> {
     this.pendingAssistantSnapshot = await this.captureAssistantSnapshot();
+    this.pendingStopButtonWasVisible = await this.stopButton
+      .isVisible()
+      .catch(() => false);
   }
 
   private async waitForComposerReady(
@@ -1037,13 +1047,22 @@ export class ChatPage {
       this.pendingAssistantSnapshot ??
       (await this.captureAssistantSnapshot());
 
-    await this.waitForUiStreamingFallback(baselineSnapshot, uiFallbackTimeoutMs);
+    await this.waitForUiStreamingFallback({
+      baseline: baselineSnapshot,
+      baselineStopButtonVisible: this.pendingStopButtonWasVisible,
+      timeoutMs: uiFallbackTimeoutMs,
+    });
   }
 
-  private async waitForUiStreamingFallback(
-    baseline: NonNullable<typeof this.pendingAssistantSnapshot>,
-    timeoutMs: number
-  ): Promise<void> {
+  private async waitForUiStreamingFallback({
+    baseline,
+    baselineStopButtonVisible,
+    timeoutMs,
+  }: {
+    baseline: NonNullable<typeof this.pendingAssistantSnapshot>;
+    baselineStopButtonVisible: boolean;
+    timeoutMs: number;
+  }): Promise<void> {
     const toast = this.page.locator(TOAST_LOCATOR).first();
 
     const rawToastPromise = toast
@@ -1063,6 +1082,7 @@ export class ChatPage {
 
     const streamingPromise = this.pollForStreamingChange({
       baseline,
+      baselineStopButtonVisible,
       timeoutMs,
     });
 
@@ -1120,23 +1140,40 @@ export class ChatPage {
 
   private async pollForStreamingChange({
     baseline,
+    baselineStopButtonVisible,
     timeoutMs,
   }: {
     baseline: AssistantSnapshot;
+    baselineStopButtonVisible: boolean;
     timeoutMs: number;
   }): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     const assistantLocator = this.page.getByTestId("message-assistant");
     const spinnerLocator = this.page.getByTestId("message-assistant-loading");
+    const stopButtonLocator = this.stopButton;
+    let hasObservedStopButtonHidden = !baselineStopButtonVisible;
 
     while (Date.now() < deadline) {
-      const [assistantCount, spinnerCount] = await Promise.all([
+      const [assistantCount, spinnerCount, stopVisible] = await Promise.all([
         assistantLocator.count().catch(() => 0),
         spinnerLocator.count().catch(() => 0),
+        stopButtonLocator.isVisible().catch(() => false),
       ]);
 
       if (spinnerCount > 0) {
         return;
+      }
+
+      if (stopVisible) {
+        if (!baselineStopButtonVisible) {
+          return;
+        }
+
+        if (hasObservedStopButtonHidden) {
+          return;
+        }
+      } else if (baselineStopButtonVisible && !hasObservedStopButtonHidden) {
+        hasObservedStopButtonHidden = true;
       }
 
       if (assistantCount > baseline.count) {
