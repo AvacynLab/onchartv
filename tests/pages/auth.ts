@@ -9,6 +9,8 @@ import {
 } from "../utils/session-persistence";
 import { hasAuthSessionCookie } from "../utils/auth-session";
 
+const TOAST_LOCATOR = '[data-testid="toast"], #automation-toast-bridge';
+
 export class AuthPage {
   private readonly page: Page;
   private readonly baseURL: string;
@@ -115,6 +117,10 @@ export class AuthPage {
     const userNavButton = this.page.getByTestId("user-nav-button");
     await expect(userNavButton).toBeVisible();
 
+    await userNavButton.evaluate((element) => {
+      element.scrollIntoView({ block: "center", inline: "nearest" });
+    });
+    await userNavButton.scrollIntoViewIfNeeded();
     await userNavButton.click();
     const userNavMenu = this.page.getByTestId("user-nav-menu");
     await expect(userNavMenu).toBeVisible();
@@ -130,7 +136,7 @@ export class AuthPage {
   }
 
   async expectToastToContain(text: string) {
-    const toast = this.page.getByTestId("toast");
+    const toast = this.page.locator(TOAST_LOCATOR).first();
 
     try {
       /**
@@ -151,8 +157,37 @@ export class AuthPage {
   }
 
   async openSidebar() {
+    const sidebarState = await this.page
+      .evaluate(() => {
+        const sidebar = document.querySelector('[data-sidebar="sidebar"]');
+        const container = sidebar?.closest('[data-state]');
+        return container?.getAttribute("data-state") ?? null;
+      })
+      .catch(() => null);
+
+    if (sidebarState === "expanded") {
+      return;
+    }
+
     const sidebarToggleButton = this.page.getByTestId("sidebar-toggle-button");
+
+    // Garantit que le bouton est dans le viewport avant d'interagir : en
+    // mode sidebar compact, le toggle peut être partiellement masqué lorsque
+    // Playwright restaure une session existante.
+    await sidebarToggleButton.evaluate((element) => {
+      element.scrollIntoView({ block: "center", inline: "center" });
+    });
+    await sidebarToggleButton.scrollIntoViewIfNeeded();
     await sidebarToggleButton.click();
+    await this.page.waitForFunction(
+      () => {
+        const sidebar = document.querySelector('[data-sidebar="sidebar"]');
+        const container = sidebar?.closest('[data-state]');
+        return container?.getAttribute("data-state") === "expanded";
+      },
+      undefined,
+      { timeout: 30_000 }
+    );
   }
 
   async persistSessionCookies() {

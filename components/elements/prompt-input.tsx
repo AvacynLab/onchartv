@@ -7,7 +7,7 @@ import type {
   HTMLAttributes,
   KeyboardEventHandler,
 } from "react";
-import { Children } from "react";
+import { Children, forwardRef } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -21,15 +21,25 @@ import { cn } from "@/lib/utils";
 
 export type PromptInputProps = HTMLAttributes<HTMLFormElement>;
 
-export const PromptInput = ({ className, ...props }: PromptInputProps) => (
-  <form
-    className={cn(
-      "w-full overflow-hidden rounded-xl border bg-background shadow-xs",
-      className
-    )}
-    {...props}
-  />
+/**
+ * Light wrapper around a form element that preserves the styling of the chat
+ * composer. The component is `forwardRef`-aware so consumers can programmatically
+ * submit the form (for example when a quick action should behave exactly like a
+ * manual "Send" interaction).
+ */
+export const PromptInput = forwardRef<HTMLFormElement, PromptInputProps>(
+  ({ className, ...props }, ref) => (
+    <form
+      ref={ref}
+      className={cn(
+        "w-full overflow-hidden rounded-xl border bg-background shadow-xs",
+        className
+      )}
+      {...props}
+    />
+  )
 );
+PromptInput.displayName = "PromptInput";
 
 export type PromptInputTextareaProps = ComponentProps<typeof Textarea> & {
   minHeight?: number;

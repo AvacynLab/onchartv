@@ -16,6 +16,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { flushSync } from "react-dom";
 import { toast } from "sonner";
 import { useLocalStorage, useWindowSize } from "usehooks-ts";
 import { saveChatModelAsCookie } from "@/app/(chat)/actions";
@@ -64,6 +65,19 @@ const ACTIVE_CHAT_STATUSES: ReadonlySet<UseChatHelpers<ChatMessage>["status"]> =
  * composant même lorsque le modèle a déjà terminé.
  */
 export const STOP_BUTTON_MINIMUM_DURATION_MS = 750;
+
+type DispatchPromptOptions = {
+  /**
+   * Texte brut à envoyer au modèle. Il sera automatiquement nettoyé et
+   * réécrit via `resolveSlashCommand` si nécessaire.
+   */
+  text: string;
+  /**
+   * Jeux de pièces à joindre explicitement. Par défaut, on réutilise les
+   * pièces présentes dans l'état local du composer.
+   */
+  attachmentsOverride?: Attachment[];
+};
 
 function PureMultimodalInput({
   chatId,
@@ -126,16 +140,22 @@ function PureMultimodalInput({
     ""
   );
 
+  const hasHydratedRef = useRef(false);
+
   useEffect(() => {
-    if (textareaRef.current) {
-      const domValue = textareaRef.current.value;
-      // Prefer DOM value over localStorage to handle hydration
-      const finalValue = domValue || localStorageInput || "";
-      setInput(finalValue);
-      adjustHeight();
+    if (hasHydratedRef.current) {
+      return;
     }
-    // Only run once after hydration
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
+    if (!textareaRef.current) {
+      return;
+    }
+
+    const domValue = textareaRef.current.value;
+    const finalValue = domValue || localStorageInput || "";
+    setInput(finalValue);
+    adjustHeight();
+    hasHydratedRef.current = true;
   }, [adjustHeight, localStorageInput, setInput]);
 
   useEffect(() => {
@@ -203,54 +223,196 @@ function PureMultimodalInput({
 
   const shouldRenderStopButton = isStopButtonVisible;
 
-  const submitForm = useCallback(() => {
-    window.history.replaceState({}, "", `/chat/${chatId}`);
+  const statusRef = useRef(status);
 
-    const resolvedCommand = resolveSlashCommand(input);
-    /**
-     * When the user relies on a finance-oriented slash command (for example
-     * `/chart BTCUSD 1D`), rewrite the outbound prompt so the assistant
-     * receives an explicit instruction to yield the relevant artefact. The
-     * helper keeps the feature testable in isolation and lets us expand the
-     * command surface without entangling the transport layer.
-     */
-    const finalText = resolvedCommand?.prompt ?? input;
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
 
-    sendMessage({
-      role: "user",
-      parts: [
-        ...attachments.map((attachment) => ({
-          type: "file" as const,
+  const waitForIdle = useCallback(async () => {
+    const timeoutMs = 15_000;
+    const pollIntervalMs = 150;
+    const deadline = Date.now() + timeoutMs;
+
+    while (ACTIVE_CHAT_STATUSES.has(statusRef.current)) {
+      if (Date.now() > deadline) {
+        return false;
+      }
+
+      await new Promise((resolve) => {
+        setTimeout(resolve, pollIntervalMs);
+      });
+    }
+
+    return true;
+  }, []);
+
+  const dispatchPrompt = useCallback(
+    async ({ text, attachmentsOverride }: DispatchPromptOptions) => {
+      const trimmedInput = text.trim();
+      const effectiveAttachments = attachmentsOverride ?? attachments;
+      const hasText = trimmedInput.length > 0;
+      const hasAttachments = effectiveAttachments.length > 0;
+
+      if (uploadQueue.length > 0) {
+        toast.error(
+          "Please wait for the files to finish uploading before sending!"
+        );
+        return false;
+      }
+
+      if (!hasText && !hasAttachments) {
+        toast.error("Please enter a message or attach a file before sending!");
+        return false;
+      }
+
+      window.history.replaceState({}, "", `/chat/${chatId}`);
+
+      const resolvedCommand = resolveSlashCommand(trimmedInput);
+      /**
+       * When the user relies on a finance-oriented slash command (for example
+       * `/chart BTCUSD 1D`), rewrite the outbound prompt so the assistant
+       * receives an explicit instruction to yield the relevant artefact. The
+       * helper keeps the feature testable in isolation and lets us expand the
+       * command surface without entangling the transport layer.
+       */
+      const finalText = resolvedCommand?.prompt ?? trimmedInput;
+
+      /**
+       * Normalise les pièces du message envoyées au SDK AI.
+       * L'alias repose sur `ChatMessage` pour suivre l'évolution du contrat
+       * entre notre composer et le transport sans dupliquer les unions de types
+       * (`text`, `file`, etc.). Une recompilation suffit donc à signaler tout
+       * nouveau type de pièce ajouté côté SDK.
+       */
+      const payloadParts: ChatMessage["parts"][number][] =
+        effectiveAttachments.map((attachment) => ({
+          type: "file",
           url: attachment.url,
           name: attachment.name,
           mediaType: attachment.contentType,
-        })),
-        {
+        }));
+
+      if (finalText.length > 0) {
+        payloadParts.push({
           type: "text",
           text: finalText,
-        },
-      ],
-    });
+        });
+      }
 
-    setAttachments([]);
-    setLocalStorageInput("");
-    resetHeight();
-    setInput("");
+      try {
+        await sendMessage({
+          role: "user",
+          parts: payloadParts,
+        });
+      } catch (error) {
+        console.error("Failed to dispatch chat prompt", error);
+        toast.error("We couldn't send your message. Please try again.");
+        return false;
+      }
 
-    if (width && width > 768) {
-      textareaRef.current?.focus();
-    }
-  }, [
-    input,
-    setInput,
-    attachments,
-    sendMessage,
-    setAttachments,
-    setLocalStorageInput,
-    width,
-    chatId,
-    resetHeight,
-  ]);
+      setAttachments([]);
+      setLocalStorageInput("");
+      resetHeight();
+      setInput("");
+
+      if (width && width > 768) {
+        textareaRef.current?.focus();
+      }
+
+      return true;
+    },
+    [
+      attachments,
+      chatId,
+      resetHeight,
+      sendMessage,
+      setAttachments,
+      setInput,
+      setLocalStorageInput,
+      uploadQueue.length,
+      width,
+    ]
+  );
+
+  const submitForm = useCallback(
+    async (overrideText?: string) => {
+      const idle = await waitForIdle();
+
+      if (!idle) {
+        toast.error("Please wait for the model to finish its response!");
+        return false;
+      }
+
+      /**
+       * Lorsque Playwright pilote la zone de saisie, la mise à jour du state
+       * React peut arriver un ou deux frames après la mutation DOM effectuée
+       * par `page.type`. On retombe donc sur la valeur réellement présente dans
+       * le textarea afin d'éviter de bloquer l'envoi si le state n'a pas encore
+       * été synchronisé. Lorsqu'une suggestion est fournie, l'appelant peut
+       * transmettre `overrideText` pour court-circuiter ce calcul et soumettre
+       * directement le prompt normalisé.
+       */
+      const domValue = textareaRef.current?.value ?? "";
+      const fallbackText = input.trim().length > 0 ? input : domValue;
+      const effectiveText = overrideText ?? fallbackText;
+
+      return dispatchPrompt({ text: effectiveText });
+    },
+    [dispatchPrompt, input, waitForIdle]
+  );
+
+  const formRef = useRef<HTMLFormElement>(null);
+
+  const handleSuggestionSelection = useCallback(
+    async (rawSuggestion: string) => {
+      /**
+       * Suggested prompts bypass the controlled textarea, so normalise them
+       * locally and stage the value in the composer before delegating to the
+       * shared submit helper. Mirroring the manual workflow ensures
+       * `submitForm` observes the same state that a user-generated keystroke
+       * would have produced, keeping validation and slash-command rewriting in
+       * sync with the button-triggered path.
+       */
+      const trimmedSuggestion = rawSuggestion.trim();
+
+      if (trimmedSuggestion.length === 0) {
+        toast.error(
+          "Unable to send the suggested prompt because it did not include any text."
+        );
+        return;
+      }
+
+      flushSync(() => {
+        setInput(trimmedSuggestion);
+      });
+
+      if (textareaRef.current) {
+        textareaRef.current.value = trimmedSuggestion;
+        adjustHeight();
+      }
+
+      /**
+       * Submit the normalised suggestion directly so the dispatcher does not
+       * depend on the controlled state finishing its async update. We still
+       * staged the textarea for visual parity, but `submitForm` receives the
+       * source text explicitly to avoid transient empty submissions that would
+       * otherwise bypass streaming in automation runs.
+       */
+      const didDispatch = await submitForm(trimmedSuggestion);
+
+      if (!didDispatch && textareaRef.current) {
+        /**
+         * Lorsque l'envoi échoue (par exemple parce qu'un streaming est encore
+         * actif), la valeur reste visible dans le composer afin que
+         * l'utilisateur puisse réessayer sans perdre la suggestion.
+         */
+        textareaRef.current.value = trimmedSuggestion;
+        adjustHeight();
+      }
+    },
+    [adjustHeight, setInput, submitForm]
+  );
 
   const uploadFile = useCallback(async (file: File) => {
     const formData = new FormData();
@@ -316,15 +478,25 @@ function PureMultimodalInput({
     [setAttachments, uploadFile]
   );
 
+  /**
+   * Les tests e2e remplissent parfois le textarea plus vite que React ne
+   * propage la nouvelle valeur au state contrôlé. En retombant sur la valeur du
+   * DOM lorsque le state est encore vide, on garantit que le bouton d'envoi se
+   * réactive dès que du texte est réellement présent.
+   */
+  const canSubmit =
+    (textareaRef.current?.value?.trim().length ?? 0) > 0 ||
+    attachments.length > 0;
+  const isUploadInProgress = uploadQueue.length > 0;
+
   return (
     <div className={cn("relative flex w-full flex-col gap-4", className)}>
       {messages.length === 0 &&
         attachments.length === 0 &&
         uploadQueue.length === 0 && (
           <SuggestedActions
-            chatId={chatId}
+            onSelectSuggestion={handleSuggestionSelection}
             selectedVisibilityType={selectedVisibilityType}
-            sendMessage={sendMessage}
           />
         )}
 
@@ -338,15 +510,11 @@ function PureMultimodalInput({
       />
 
       <PromptInput
+        ref={formRef}
         className="rounded-xl border border-border bg-background p-3 shadow-xs transition-all duration-200 focus-within:border-border hover:border-muted-foreground/50"
         onSubmit={(event) => {
           event.preventDefault();
-          if (status === "submitted" || status === "streaming") {
-            toast.error("Please wait for the model to finish its response!");
-            return;
-          }
-
-          submitForm();
+          void submitForm();
         }}
       >
         {(attachments.length > 0 || uploadQueue.length > 0) && (
@@ -425,8 +593,9 @@ function PureMultimodalInput({
             <StopButton setMessages={setMessages} stop={stop} />
           ) : (
             <PromptInputSubmit
+              aria-disabled={!canSubmit || isUploadInProgress}
               className="size-8 rounded-full bg-primary text-primary-foreground transition-colors duration-200 hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground"
-              disabled={!input.trim() || uploadQueue.length > 0}
+              disabled={!canSubmit || isUploadInProgress}
               status={status}
             >
               <ArrowUpIcon size={14} />
