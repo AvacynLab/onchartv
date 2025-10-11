@@ -770,9 +770,7 @@ export class ChatPage {
     );
   }
 
-  private async captureAssistantSnapshot(): Promise<
-    NonNullable<typeof this.pendingAssistantSnapshot>
-  > {
+  private async captureAssistantSnapshot(): Promise<AssistantSnapshot> {
     const assistantMessages = this.page.getByTestId("message-assistant");
     const count = await assistantMessages.count();
 
@@ -1059,7 +1057,7 @@ export class ChatPage {
     baselineStopButtonVisible,
     timeoutMs,
   }: {
-    baseline: NonNullable<typeof this.pendingAssistantSnapshot>;
+    baseline: AssistantSnapshot;
     baselineStopButtonVisible: boolean;
     timeoutMs: number;
   }): Promise<void> {
