@@ -16,6 +16,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { flushSync } from "react-dom";
 import { toast } from "sonner";
 import { useLocalStorage, useWindowSize } from "usehooks-ts";
 import { saveChatModelAsCookie } from "@/app/(chat)/actions";
@@ -361,6 +362,8 @@ function PureMultimodalInput({
     [dispatchPrompt, input, waitForIdle]
   );
 
+  const formRef = useRef<HTMLFormElement>(null);
+
   const handleSuggestionSelection = useCallback(
     async (rawSuggestion: string) => {
       /**
@@ -379,23 +382,18 @@ function PureMultimodalInput({
         return;
       }
 
-      // Surface the selection in the controlled composer so the user – and the
-      // Playwright helpers – can observe the outbound prompt before it streams.
-      setInput(trimmedSuggestion);
-
-      if (textareaRef.current) {
-        textareaRef.current.value = trimmedSuggestion;
-        adjustHeight();
-      }
-
       const didDispatch = await submitForm(trimmedSuggestion);
 
       if (!didDispatch) {
         /**
-         * When dispatching fails (for example because uploads are still in
-         * flight), keep the suggestion staged in the composer so the user can
-         * address the validation error without losing the generated text.
+         * Lorsque l'envoi échoue (par exemple parce qu'un streaming est encore
+         * actif), on restaure la valeur saisie dans le textarea afin que
+         * l'utilisateur puisse réessayer sans perdre la suggestion.
          */
+        flushSync(() => {
+          setInput(trimmedSuggestion);
+        });
+
         if (textareaRef.current) {
           textareaRef.current.value = trimmedSuggestion;
           adjustHeight();
@@ -501,6 +499,7 @@ function PureMultimodalInput({
       />
 
       <PromptInput
+        ref={formRef}
         className="rounded-xl border border-border bg-background p-3 shadow-xs transition-all duration-200 focus-within:border-border hover:border-muted-foreground/50"
         onSubmit={(event) => {
           event.preventDefault();
