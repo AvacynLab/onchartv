@@ -75,6 +75,13 @@ export class ChatPage {
    */
   private pendingStopButtonWasVisible = false;
 
+  /**
+   * Record the send button visibility before dispatching a message so the UI
+   * polling fallback can recognise when the stop control takes over, even if
+   * the spinner fails to render during fast hermetic runs.
+   */
+  private pendingSendButtonWasVisible = false;
+
   constructor(page: Page) {
     this.page = page;
   }
@@ -704,6 +711,9 @@ export class ChatPage {
     this.pendingStopButtonWasVisible = await this.stopButton
       .isVisible()
       .catch(() => false);
+    this.pendingSendButtonWasVisible = await this.sendButton
+      .isVisible()
+      .catch(() => false);
   }
 
   private async waitForComposerReady(
@@ -1048,6 +1058,7 @@ export class ChatPage {
     await this.waitForUiStreamingFallback({
       baseline: baselineSnapshot,
       baselineStopButtonVisible: this.pendingStopButtonWasVisible,
+      baselineSendButtonVisible: this.pendingSendButtonWasVisible,
       timeoutMs: uiFallbackTimeoutMs,
     });
   }
@@ -1055,10 +1066,12 @@ export class ChatPage {
   private async waitForUiStreamingFallback({
     baseline,
     baselineStopButtonVisible,
+    baselineSendButtonVisible,
     timeoutMs,
   }: {
     baseline: AssistantSnapshot;
     baselineStopButtonVisible: boolean;
+    baselineSendButtonVisible: boolean;
     timeoutMs: number;
   }): Promise<void> {
     const toast = this.page.locator(TOAST_LOCATOR).first();
@@ -1081,6 +1094,7 @@ export class ChatPage {
     const streamingPromise = this.pollForStreamingChange({
       baseline,
       baselineStopButtonVisible,
+      baselineSendButtonVisible,
       timeoutMs,
     });
 
@@ -1139,27 +1153,45 @@ export class ChatPage {
   private async pollForStreamingChange({
     baseline,
     baselineStopButtonVisible,
+    baselineSendButtonVisible,
     timeoutMs,
   }: {
     baseline: AssistantSnapshot;
     baselineStopButtonVisible: boolean;
+    baselineSendButtonVisible: boolean;
     timeoutMs: number;
   }): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     const assistantLocator = this.page.getByTestId("message-assistant");
     const spinnerLocator = this.page.getByTestId("message-assistant-loading");
     const stopButtonLocator = this.stopButton;
+    const sendButtonLocator = this.sendButton;
     let hasObservedStopButtonHidden = !baselineStopButtonVisible;
+    let hasObservedSendButtonVisible = baselineSendButtonVisible;
 
     while (Date.now() < deadline) {
-      const [assistantCount, spinnerCount, stopVisible] = await Promise.all([
+      const [
+        assistantCount,
+        spinnerCount,
+        stopVisible,
+        sendVisible,
+      ] = await Promise.all([
         assistantLocator.count().catch(() => 0),
         spinnerLocator.count().catch(() => 0),
         stopButtonLocator.isVisible().catch(() => false),
+        sendButtonLocator.isVisible().catch(() => false),
       ]);
 
       if (spinnerCount > 0) {
         return;
+      }
+
+      if (!sendVisible) {
+        if (hasObservedSendButtonVisible) {
+          return;
+        }
+      } else if (!hasObservedSendButtonVisible) {
+        hasObservedSendButtonVisible = true;
       }
 
       if (stopVisible) {

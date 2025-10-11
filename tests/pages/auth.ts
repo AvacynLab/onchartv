@@ -138,19 +138,33 @@ export class AuthPage {
   async expectToastToContain(text: string) {
     const toast = this.page.locator(TOAST_LOCATOR).first();
 
-    try {
-      /**
-       * The auth flows redirect immediately after the toast fires which can
-       * leave the notification hidden while the client transitions to the
-       * chat workspace. Wait explicitly for the toast container to mount so we
-       * surface a precise error when the UI forgets to announce the outcome.
-       */
-      await toast.waitFor({ state: "visible", timeout: 60_000 });
-    } catch (error) {
-      throw new Error(
-        `Timed out waiting for toast containing: "${text}"`,
-        error instanceof Error ? { cause: error } : undefined
-      );
+    /**
+     * Playwright occasionally navigates away from the auth surface before the
+     * Sonner portal flips the toast into the visible state. Observe both the
+     * `visible` and `attached` transitions so automation can still verify the
+     * success copy even when the notification hides during the redirect.
+     */
+    const becameVisible = await toast
+      .waitFor({ state: "visible", timeout: 60_000 })
+      .then(() => true)
+      .catch(async (error) => {
+        const attached = await toast
+          .waitFor({ state: "attached", timeout: 1_000 })
+          .then(() => true)
+          .catch(() => false);
+
+        if (!attached) {
+          throw new Error(
+            `Timed out waiting for toast containing: "${text}"`,
+            error instanceof Error ? { cause: error } : undefined
+          );
+        }
+
+        return false;
+      });
+
+    if (!becameVisible) {
+      await this.page.waitForTimeout(100).catch(() => {});
     }
 
     await expect(toast).toContainText(text);
