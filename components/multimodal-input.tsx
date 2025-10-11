@@ -388,14 +388,14 @@ function PureMultimodalInput({
        * dispatcher partagé réinitialise ensuite l'entrée comme pour un envoi
        * manuel.
        */
-      setInput(trimmedSuggestion);
+      const idle = await waitForIdle();
 
-      if (textareaRef.current) {
-        textareaRef.current.value = trimmedSuggestion;
-        adjustHeight();
+      if (!idle) {
+        toast.error("Please wait for the model to finish its response!");
+        return;
       }
 
-      const didDispatch = await submitForm(trimmedSuggestion);
+      const didDispatch = await dispatchPrompt({ text: trimmedSuggestion });
 
       if (!didDispatch) {
         /**
@@ -411,7 +411,7 @@ function PureMultimodalInput({
         }
       }
     },
-    [adjustHeight, setInput, submitForm]
+    [adjustHeight, dispatchPrompt, setInput, waitForIdle]
   );
 
   const uploadFile = useCallback(async (file: File) => {
