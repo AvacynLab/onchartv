@@ -367,11 +367,12 @@ function PureMultimodalInput({
   const handleSuggestionSelection = useCallback(
     async (rawSuggestion: string) => {
       /**
-       * Suggested prompts bypass the controlled textarea, so normalise and
-       * validate the payload locally before delegating to the shared submit
-       * helper. Reusing `submitForm` keeps validation, slash-command rewriting,
-       * and clean-up logic identical to the manual flow triggered by the Send
-       * button.
+       * Suggested prompts bypass the controlled textarea, so normalise them
+       * locally and stage the value in the composer before delegating to the
+       * shared submit helper. Mirroring the manual workflow ensures
+       * `submitForm` observes the same state that a user-generated keystroke
+       * would have produced, keeping validation and slash-command rewriting in
+       * sync with the button-triggered path.
        */
       const trimmedSuggestion = rawSuggestion.trim();
 
@@ -382,22 +383,32 @@ function PureMultimodalInput({
         return;
       }
 
+      flushSync(() => {
+        setInput(trimmedSuggestion);
+      });
+
+      if (textareaRef.current) {
+        textareaRef.current.value = trimmedSuggestion;
+        adjustHeight();
+      }
+
+      /**
+       * Submit the normalised suggestion directly so the dispatcher does not
+       * depend on the controlled state finishing its async update. We still
+       * staged the textarea for visual parity, but `submitForm` receives the
+       * source text explicitly to avoid transient empty submissions that would
+       * otherwise bypass streaming in automation runs.
+       */
       const didDispatch = await submitForm(trimmedSuggestion);
 
-      if (!didDispatch) {
+      if (!didDispatch && textareaRef.current) {
         /**
          * Lorsque l'envoi échoue (par exemple parce qu'un streaming est encore
-         * actif), on restaure la valeur saisie dans le textarea afin que
+         * actif), la valeur reste visible dans le composer afin que
          * l'utilisateur puisse réessayer sans perdre la suggestion.
          */
-        flushSync(() => {
-          setInput(trimmedSuggestion);
-        });
-
-        if (textareaRef.current) {
-          textareaRef.current.value = trimmedSuggestion;
-          adjustHeight();
-        }
+        textareaRef.current.value = trimmedSuggestion;
+        adjustHeight();
       }
     },
     [adjustHeight, setInput, submitForm]
