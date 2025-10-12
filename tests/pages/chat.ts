@@ -936,231 +936,20 @@ export class ChatPage {
     const networkTimeoutMs = 15_000;
     const uiFallbackTimeoutMs = 45_000;
 
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const page = this.page;
-        const browserContext = page.context?.();
-        /**
-         * Network activity triggered by Playwright fixtures can originate from
-         * either the page itself (UI-driven fetches) or the enclosing browser
-         * context (APIRequestContext helpers). Observing both emitters ensures
-         * the guard reacts to transports initiated during hermetic setup,
-         * including the quick-action flows exercised by the CI suite.
-         */
-        const eventTargets: Array<{
-          on: (event: string, listener: (...args: unknown[]) => void) => void;
-          off: (event: string, listener: (...args: unknown[]) => void) => void;
-        }> = [page as any];
-
-        if (
-          browserContext &&
-          typeof (browserContext as { on?: unknown }).on === "function" &&
-          typeof (browserContext as { off?: unknown }).off === "function"
-        ) {
-          eventTargets.push(browserContext as any);
-        }
-
-        let settled = false;
-        let timer: ReturnType<typeof setTimeout>;
-        let sawMatchingRequest = false;
-
-        const cleanup = () => {
-          clearTimeout(timer);
-          for (const target of eventTargets) {
-            target.off("request", handleRequest);
-            target.off("response", handleResponse);
-            target.off("requestfailed", handleFailure);
-          }
-        };
-
-        const settle = (result: "resolve" | "reject", reason?: unknown) => {
-          if (settled) {
-            return;
-          }
-
-          settled = true;
-          cleanup();
-
-          if (result === "resolve") {
-            resolve();
-          } else {
-            reject(reason);
-          }
-        };
-
-        const handleRequest = (request: unknown) => {
-          if (!this.matchesChatApiRequest(request as any)) {
-            return;
-          }
-
-          sawMatchingRequest = true;
-        };
-
-        const handleResponse = async (response: unknown) => {
-          const candidate =
-            typeof response === "object" &&
-            response !== null &&
-            "request" in response
-              ? (response as any).request()
-              : null;
-
-          if (!this.matchesChatApiRequest(candidate)) {
-            return;
-          }
-
-          try {
-            if (!(response as any).ok()) {
-              let bodySnippet = "";
-
-              try {
-                bodySnippet = await (response as any).text();
-              } catch {
-                bodySnippet = "";
-              }
-
-              const trimmedBody = bodySnippet.trim().slice(0, 1_000);
-              const diagnostic =
-                trimmedBody.length > 0 ? ` – ${trimmedBody}` : "";
-
-              settle(
-                "reject",
-                new Error(
-                  `Chat API request failed with ${(response as any).status()} ${(response as any).statusText()}${diagnostic}`
-                )
-              );
-              return;
-            }
-
-            settle("resolve");
-          } catch (error) {
-            settle(
-              "reject",
-              error instanceof Error
-                ? error
-                : new Error("Chat API response handling failed")
-            );
-          }
-        };
-
-        const handleFailure = async (request: unknown) => {
-          const candidate = request as any;
-
-          if (!this.matchesChatApiRequest(candidate)) {
-            return;
-          }
-
-          let diagnostic = "";
-          let normalizedDiagnostic = "";
-          try {
-            // Normalise Playwright's optional `failure()` accessor so the
-            // helper can surface the original network error text without
-            // tripping strict type checks in the Vitest environment.
-            const failureFn =
-              candidate &&
-              typeof candidate === "object" &&
-              "failure" in candidate &&
-              typeof (candidate as { failure?: unknown }).failure === "function"
-                ? (candidate as { failure: () => unknown }).failure
-                : null;
-
-            const failureDetails = await Promise.resolve(
-              failureFn ? failureFn() : null
-            );
-            // Some runtimes expose richer error payloads (Chromium) while
-            // others only emit bare network codes. Gate access through a
-            // structural check so we stay compatible everywhere.
-            const failureText =
-              failureDetails &&
-              typeof failureDetails === "object" &&
-              "errorText" in failureDetails &&
-              typeof (failureDetails as { errorText?: unknown }).errorText ===
-                "string"
-                ? (failureDetails as { errorText: string }).errorText.trim()
-                : "";
-            diagnostic = failureText ? ` – ${failureText}` : "";
-            normalizedDiagnostic = failureText.toUpperCase();
-          } catch {
-            diagnostic = "";
-            normalizedDiagnostic = "";
-          }
-
-          // Offline Playwright runs may surface ENETUNREACH/ERR_NETWORK_* when
-          // Chromium blocks requests to the hermetic Next.js server while it is
-          // still compiling. Treat those as soft failures so we can fall back to
-          // DOM-based polling instead of failing the scenario outright.
-          const offlineFailureSignals = [
-            "ENETUNREACH",
-            "ERR_NETWORK_CHANGED",
-            "ERR_INTERNET_DISCONNECTED",
-            "ERR_NETWORK_IO_SUSPENDED",
-            "ERR_CONNECTION_REFUSED",
-            "ERR_CONNECTION_RESET",
-            "ERR_ADDRESS_UNREACHABLE",
-          ];
-
-          if (
-            offlineFailureSignals.some((signal) =>
-              normalizedDiagnostic.includes(signal)
-            )
-          ) {
-            console.warn(
-              "Chat API network request failed in offline mode; falling back to UI polling.",
-              {
-                failure:
-                  diagnostic.length > 0
-                    ? diagnostic.trim().replace(/^–\s*/, "")
-                    : offlineFailureSignals.find((signal) =>
-                        normalizedDiagnostic.includes(signal)
-                      ),
-                url:
-                  typeof candidate?.url === "function"
-                    ? candidate.url()
-                    : undefined,
-              }
-            );
-
-            settle("reject", networkTimeoutMarker);
-            return;
-          }
-
-          settle(
-            "reject",
-            new Error(
-              `Chat API request failed before receiving a response${diagnostic}`
-            )
-          );
-        };
-
-        timer = setTimeout(() => {
-          if (sawMatchingRequest) {
-            settle("resolve");
-            return;
-          }
-
-          settle("reject", networkTimeoutMarker);
-        }, networkTimeoutMs);
-
-        for (const target of eventTargets) {
-          target.on("request", handleRequest);
-          target.on("response", handleResponse);
-          target.on("requestfailed", handleFailure);
-        }
-      });
-
-      return;
-    } catch (error) {
-      if (error !== networkTimeoutMarker) {
-        throw error instanceof Error
-          ? error
-          : new Error("Chat API request failed");
-      }
-    }
-
     const baselineSnapshot =
       this.pendingAssistantSnapshot ??
       (await this.captureAssistantSnapshot());
 
-    await this.waitForUiStreamingFallback({
+    /**
+     * Kick off the UI polling guard alongside the network listener so we reuse
+     * the baseline state no matter which signal resolves first. When the
+     * Playwright driver misses the streaming transport entirely, the DOM still
+     * reflects progress almost immediately (new user echoes, send-button
+     * toggles, etc.), so starting the fallback eagerly avoids idling for the
+     * full network timeout before observing the UI transition we already
+     * expect.
+     */
+    const fallbackPromise = this.waitForUiStreamingFallback({
       baseline: baselineSnapshot,
       baselineUserMessageCount: this.pendingUserMessageCount,
       baselineStopButtonVisible: this.pendingStopButtonWasVisible,
@@ -1168,6 +957,264 @@ export class ChatPage {
       baselineSendButtonEnabled: this.pendingSendButtonWasEnabled,
       timeoutMs: uiFallbackTimeoutMs,
     });
+
+    const page = this.page;
+    const browserContext =
+      typeof page.context === "function" ? page.context() : null;
+
+    type NetworkEvent =
+      | { kind: "request"; request: unknown }
+      | { kind: "response"; response: unknown }
+      | { kind: "failure"; request: unknown };
+
+    const requestMatcher = (candidate: unknown) =>
+      this.matchesChatApiRequest(candidate as any);
+
+    const watchers: Array<Promise<NetworkEvent>> = [];
+
+    const pushWatcher = (promise: Promise<NetworkEvent>) => {
+      watchers.push(
+        promise.catch((error) => {
+          if (isTimeoutLikeError(error)) {
+            return new Promise<NetworkEvent>(() => {});
+          }
+          throw error;
+        })
+      );
+    };
+
+    pushWatcher(
+      page
+        .waitForRequest((request) => requestMatcher(request))
+        .then((request) => ({ kind: "request", request }))
+    );
+
+    pushWatcher(
+      page
+        .waitForResponse((response) =>
+          requestMatcher(
+            typeof response?.request === "function"
+              ? response.request()
+              : response?.request ?? null
+          )
+        )
+        .then((response) => ({ kind: "response", response }))
+    );
+
+    pushWatcher(
+      page
+        .waitForEvent("requestfailed", {
+          predicate: (request) => requestMatcher(request),
+        })
+        .then((request) => ({ kind: "failure", request }))
+    );
+
+    if (browserContext && typeof browserContext.waitForEvent === "function") {
+      pushWatcher(
+        browserContext
+          .waitForEvent("request", {
+            predicate: (request) => requestMatcher(request),
+          })
+          .then((request) => ({ kind: "request", request }))
+      );
+
+      pushWatcher(
+        browserContext
+          .waitForEvent("response", {
+            predicate: (response) =>
+              requestMatcher(
+                response && typeof (response as any).request === "function"
+                  ? (response as any).request()
+                  : null
+              ),
+          })
+          .then((response) => ({ kind: "response", response }))
+      );
+
+      pushWatcher(
+        browserContext
+          .waitForEvent("requestfailed", {
+            predicate: (request) => requestMatcher(request),
+          })
+          .then((request) => ({ kind: "failure", request }))
+      );
+    }
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    try {
+      const networkResult = await Promise.race<NetworkEvent | never>([
+        ...watchers,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(networkTimeoutMarker), networkTimeoutMs);
+        }),
+      ]);
+
+      fallbackPromise.catch(() => {});
+
+      if (networkResult.kind === "response") {
+        const response = networkResult.response as any;
+        try {
+          if (!response?.ok?.()) {
+            let bodySnippet = "";
+            try {
+              bodySnippet = await response.text?.();
+            } catch {
+              bodySnippet = "";
+            }
+
+            const trimmedBody = bodySnippet.trim().slice(0, 1_000);
+            const diagnostic =
+              trimmedBody.length > 0 ? ` – ${trimmedBody}` : "";
+
+            throw new Error(
+              `Chat API request failed with ${response?.status?.()} ${response?.statusText?.()}${diagnostic}`
+            );
+          }
+        } catch (error) {
+          throw error instanceof Error
+            ? error
+            : new Error("Chat API response handling failed");
+        }
+
+        return;
+      }
+
+      if (networkResult.kind === "failure") {
+        const candidate = networkResult.request as any;
+        let diagnostic = "";
+        let normalizedDiagnostic = "";
+        try {
+          const failureFn =
+            candidate &&
+            typeof candidate === "object" &&
+            "failure" in candidate &&
+            typeof (candidate as { failure?: unknown }).failure === "function"
+              ? (candidate as { failure: () => unknown }).failure
+              : null;
+
+          const failureDetails = await Promise.resolve(
+            failureFn ? failureFn() : null
+          );
+          const failureText =
+            failureDetails &&
+            typeof failureDetails === "object" &&
+            "errorText" in failureDetails &&
+            typeof (failureDetails as { errorText?: unknown }).errorText ===
+              "string"
+              ? (failureDetails as { errorText: string }).errorText.trim()
+              : "";
+          diagnostic = failureText ? ` – ${failureText}` : "";
+          normalizedDiagnostic = failureText.toUpperCase();
+        } catch {
+          diagnostic = "";
+          normalizedDiagnostic = "";
+        }
+
+        const offlineFailureSignals = [
+          "ENETUNREACH",
+          "ERR_NETWORK_CHANGED",
+          "ERR_INTERNET_DISCONNECTED",
+          "ERR_NETWORK_IO_SUSPENDED",
+          "ERR_CONNECTION_REFUSED",
+          "ERR_CONNECTION_RESET",
+          "ERR_ADDRESS_UNREACHABLE",
+        ];
+
+        if (
+          offlineFailureSignals.some((signal) =>
+            normalizedDiagnostic.includes(signal)
+          )
+        ) {
+          console.warn(
+            "Chat API network request failed in offline mode; falling back to UI polling.",
+            {
+              failure:
+                diagnostic.length > 0
+                  ? diagnostic.trim().replace(/^–\s*/, "")
+                  : offlineFailureSignals.find((signal) =>
+                      normalizedDiagnostic.includes(signal)
+                    ),
+              url:
+                typeof candidate?.url === "function"
+                  ? candidate.url()
+                  : undefined,
+            }
+          );
+
+          throw networkTimeoutMarker;
+        }
+
+        throw new Error(
+          `Chat API request failed before receiving a response${diagnostic}`
+        );
+      }
+
+      if (networkResult.kind === "request") {
+        const request = networkResult.request as any;
+        if (request && typeof request.response === "function") {
+          try {
+            const response = await Promise.race([
+              Promise.resolve(request.response()),
+              new Promise<null>((resolve) =>
+                setTimeout(() => resolve(null), 1_000)
+              ),
+            ]);
+
+            if (response && typeof (response as any).ok === "function") {
+              if (!(response as any).ok()) {
+                let bodySnippet = "";
+                try {
+                  bodySnippet = await (response as any).text();
+                } catch {
+                  bodySnippet = "";
+                }
+
+                const trimmedBody = bodySnippet.trim().slice(0, 1_000);
+                const diagnostic =
+                  trimmedBody.length > 0 ? ` – ${trimmedBody}` : "";
+
+                throw new Error(
+                  `Chat API request failed with ${(response as any).status()} ${(response as any).statusText()}${diagnostic}`
+                );
+              }
+            }
+          } catch (error) {
+            if (error === networkTimeoutMarker) {
+              throw error;
+            }
+
+            throw error instanceof Error
+              ? error
+              : new Error("Chat API request inspection failed");
+          }
+        }
+
+        return;
+      }
+
+      return;
+    } catch (error) {
+      if (error !== networkTimeoutMarker) {
+        fallbackPromise.catch(() => {});
+        throw error instanceof Error
+          ? error
+          : new Error("Chat API request failed");
+      }
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+      for (const watcher of watchers) {
+        watcher.catch(() => {});
+      }
+    }
+
+    try {
+      await fallbackPromise;
+    } finally {
+      fallbackPromise.catch(() => {});
+    }
   }
 
   private async waitForUiStreamingFallback({

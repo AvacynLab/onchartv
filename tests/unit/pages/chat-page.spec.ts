@@ -17,12 +17,16 @@ type MockResponseOptions = {
 const createMockRequest = ({
   url,
   method = "POST",
+  response,
 }: {
   url: string;
   method?: string;
+  response?: () => unknown;
 }) => ({
   url: () => url,
   method: () => method,
+  response:
+    response ?? vi.fn().mockResolvedValue(null),
 });
 
 const createMockResponse = ({
@@ -45,6 +49,8 @@ const createMockResponse = ({
 });
 
 type MockResponse = ReturnType<typeof createMockResponse>;
+
+const TOAST_SELECTOR = '[data-testid="toast"], #automation-toast-bridge';
 
 describe("ChatPage navigation", () => {
   it("navigates directly to /chat and waits for the chat controls", async () => {
@@ -101,8 +107,52 @@ describe("ChatPage.waitForChatApiResponse", () => {
       requestfailed: new Set<(...args: any[]) => unknown>(),
     });
 
+    const createWaiterRegistry = () => ({
+      request: new Set<{
+        predicate: (payload: unknown) => boolean;
+        resolve: (payload: unknown) => void;
+      }>(),
+      response: new Set<{
+        predicate: (payload: unknown) => boolean;
+        resolve: (payload: unknown) => void;
+      }>(),
+      requestfailed: new Set<{
+        predicate: (payload: unknown) => boolean;
+        resolve: (payload: unknown) => void;
+      }>(),
+    });
+
     const pageListeners = createListenerRegistry();
     const contextListeners = createListenerRegistry();
+    const pageWaiters = createWaiterRegistry();
+    const contextWaiters = createWaiterRegistry();
+
+    const registerWaiter = (
+      registry: ReturnType<typeof createWaiterRegistry>,
+      event: keyof ReturnType<typeof createWaiterRegistry>,
+      predicate: (payload: unknown) => boolean
+    ) =>
+      new Promise<unknown>((resolve) => {
+        registry[event].add({ predicate, resolve });
+      });
+
+    const emitFrom = async (
+      listeners: ReturnType<typeof createListenerRegistry>,
+      waiters: ReturnType<typeof createWaiterRegistry>,
+      event: keyof ReturnType<typeof createListenerRegistry>,
+      payload: unknown
+    ) => {
+      for (const waiter of Array.from(waiters[event])) {
+        if (waiter.predicate(payload)) {
+          waiters[event].delete(waiter);
+          waiter.resolve(payload);
+        }
+      }
+
+      for (const handler of Array.from(listeners[event] ?? [])) {
+        await handler(payload);
+      }
+    };
 
     const createEmitter = (
       registry: ReturnType<typeof createListenerRegistry>
@@ -117,6 +167,26 @@ describe("ChatPage.waitForChatApiResponse", () => {
 
     const browserContext = {
       ...createEmitter(contextListeners),
+      waitForEvent: vi.fn(
+        (
+          event: string,
+          options?: { predicate?: (payload: unknown) => boolean }
+        ) => {
+          if (
+            event === "request" ||
+            event === "response" ||
+            event === "requestfailed"
+          ) {
+            return registerWaiter(
+              contextWaiters,
+              event,
+              options?.predicate ?? (() => true)
+            ) as Promise<any>;
+          }
+
+          throw new Error(`Unexpected browser context event: ${event}`);
+        }
+      ),
     } satisfies Partial<BrowserContext>;
 
     const stopButtonLocator = {
@@ -127,10 +197,90 @@ describe("ChatPage.waitForChatApiResponse", () => {
       isEnabled: vi.fn().mockResolvedValue(true),
     };
 
+    const assistantContentLocator = {
+      innerText: vi.fn().mockResolvedValue(""),
+    };
+    const assistantArtifactsLocator = {
+      count: vi.fn().mockResolvedValue(0),
+    };
+    const assistantMessageLocator = {
+      getAttribute: vi.fn().mockResolvedValue(null),
+      getByTestId: vi
+        .fn((testId: string) => {
+          if (testId === "message-content") {
+            return assistantContentLocator as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
+          throw new Error(`Unexpected assistant test id access: ${testId}`);
+        })
+        .mockName("assistantMessageLocator.getByTestId"),
+      locator: vi
+        .fn(() =>
+          assistantArtifactsLocator as unknown as ReturnType<Page["locator"]>
+        )
+        .mockName("assistantMessageLocator.locator"),
+    };
+    const assistantLocator = {
+      count: vi.fn().mockResolvedValue(0),
+      nth: vi
+        .fn(() => assistantMessageLocator as unknown as ReturnType<Page["getByTestId"]>)
+        .mockName("assistantLocator.nth"),
+    };
+    const spinnerLocator = {
+      count: vi.fn().mockResolvedValue(0),
+    };
+    const userLocator = {
+      count: vi.fn().mockResolvedValue(0),
+    };
+    const toastLocator = {
+      first: vi
+        .fn(() => toastLocator as unknown as ReturnType<Locator["first"]>)
+        .mockName("toastLocator.first"),
+      waitFor: vi
+        .fn(() => new Promise<never>(() => {}))
+        .mockName("toastLocator.waitFor"),
+    };
+
     const page = {
       ...createEmitter(pageListeners),
       context: vi.fn(() => browserContext as BrowserContext),
+      waitForRequest: vi.fn(
+        (
+          predicate: (payload: unknown) => boolean,
+          _options?: { timeout?: number }
+        ) => registerWaiter(pageWaiters, "request", predicate)
+      ),
+      waitForResponse: vi.fn(
+        (
+          predicate: (payload: unknown) => boolean,
+          _options?: { timeout?: number }
+        ) => registerWaiter(pageWaiters, "response", predicate)
+      ),
+      waitForEvent: vi.fn(
+        (
+          event: string,
+          options?: { predicate?: (payload: unknown) => boolean }
+        ) => {
+          if (event !== "requestfailed" && event !== "response") {
+            throw new Error(`Unexpected page event: ${event}`);
+          }
+
+          return registerWaiter(
+            pageWaiters,
+            event,
+            options?.predicate ?? (() => true)
+          );
+        }
+      ),
       locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid$="-artifact"]') {
+          return assistantArtifactsLocator as unknown as ReturnType<Page["locator"]>;
+        }
+
+        if (selector === TOAST_SELECTOR) {
+          return toastLocator as unknown as ReturnType<Page["locator"]>;
+        }
+
         throw new Error(`Unexpected locator access: ${selector}`);
       }),
       getByTestId: vi.fn((testId: string) => {
@@ -142,38 +292,62 @@ describe("ChatPage.waitForChatApiResponse", () => {
           return sendButtonLocator as unknown as ReturnType<Page["getByTestId"]>;
         }
 
+        if (testId === "message-assistant") {
+          return assistantLocator as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant-loading") {
+          return spinnerLocator as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-user") {
+          return userLocator as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
         throw new Error(`Unexpected test id access: ${testId}`);
       }),
       waitForFunction: vi.fn(),
-      waitForTimeout: vi.fn().mockResolvedValue(undefined),
+      waitForTimeout: vi
+        .fn(() => Promise.resolve())
+        .mockName("page.waitForTimeout"),
     } satisfies Partial<Page>;
-
-    const emitFrom = async (
-      registry: ReturnType<typeof createListenerRegistry>,
-      event: "request" | "response" | "requestfailed",
-      payload: any
-    ) => {
-      for (const handler of Array.from(registry[event] ?? [])) {
-        await handler(payload);
-      }
-    };
 
     return {
       page: page as Page,
-      emitRequest: (payload: any) => emitFrom(pageListeners, "request", payload),
+      emitRequest: (payload: any) =>
+        emitFrom(pageListeners, pageWaiters, "request", payload),
       emitContextRequest: (payload: any) =>
-        emitFrom(contextListeners, "request", payload),
-      emitResponse: (payload: any) => emitFrom(pageListeners, "response", payload),
+        emitFrom(contextListeners, contextWaiters, "request", payload),
+      emitResponse: (payload: any) =>
+        emitFrom(pageListeners, pageWaiters, "response", payload),
       emitContextResponse: (payload: any) =>
-        emitFrom(contextListeners, "response", payload),
+        emitFrom(contextListeners, contextWaiters, "response", payload),
       emitFailure: (payload: any) =>
-        emitFrom(pageListeners, "requestfailed", payload),
+        emitFrom(pageListeners, pageWaiters, "requestfailed", payload),
       emitContextFailure: (payload: any) =>
-        emitFrom(contextListeners, "requestfailed", payload),
+        emitFrom(contextListeners, contextWaiters, "requestfailed", payload),
       listeners: { page: pageListeners, context: contextListeners },
       sendButtonLocator,
       stopButtonLocator,
     };
+  };
+
+  const stubFallback = (chatPage: ChatPage) =>
+    vi
+      .spyOn(chatPage as unknown as { waitForUiStreamingFallback: () => Promise<void> }, "waitForUiStreamingFallback")
+      .mockResolvedValue(undefined);
+
+  const seedPendingSnapshot = (chatPage: ChatPage) => {
+    (chatPage as any).pendingAssistantSnapshot = {
+      count: 0,
+      latestArtifactCount: 0,
+      latestMessageId: null,
+      latestMessageText: "",
+    };
+    (chatPage as any).pendingUserMessageCount = 0;
+    (chatPage as any).pendingStopButtonWasVisible = false;
+    (chatPage as any).pendingSendButtonWasVisible = true;
+    (chatPage as any).pendingSendButtonWasEnabled = true;
   };
 
   it("resolves once POST /api/chat responds, including query parameters", async () => {
@@ -181,15 +355,10 @@ describe("ChatPage.waitForChatApiResponse", () => {
     try {
       const harness = createEventHarness();
       const chatPage = new ChatPage(harness.page);
+      stubFallback(chatPage);
+      seedPendingSnapshot(chatPage);
 
       const waitPromise = (chatPage as any).waitForChatApiResponse();
-
-      expect(harness.listeners.page.request.size).toBe(1);
-      expect(harness.listeners.page.response.size).toBe(1);
-      expect(harness.listeners.page.requestfailed.size).toBe(1);
-      expect(harness.listeners.context.request.size).toBe(1);
-      expect(harness.listeners.context.response.size).toBe(1);
-      expect(harness.listeners.context.requestfailed.size).toBe(1);
 
       await harness.emitResponse(
         createMockResponse({
@@ -210,6 +379,8 @@ describe("ChatPage.waitForChatApiResponse", () => {
     try {
       const harness = createEventHarness();
       const chatPage = new ChatPage(harness.page);
+      stubFallback(chatPage);
+      seedPendingSnapshot(chatPage);
 
       const waitPromise = (chatPage as any).waitForChatApiResponse();
 
@@ -232,16 +403,19 @@ describe("ChatPage.waitForChatApiResponse", () => {
     try {
       const harness = createEventHarness();
       const chatPage = new ChatPage(harness.page);
+      stubFallback(chatPage);
+      seedPendingSnapshot(chatPage);
 
       const waitPromise = (chatPage as any).waitForChatApiResponse();
 
       await harness.emitRequest(
         createMockRequest({
           url: "http://localhost:3000/api/chat?chatId=slow-stream",
+          response: () => new Promise(() => {}),
         })
       );
 
-      await vi.advanceTimersByTimeAsync(15_000);
+      await vi.advanceTimersByTimeAsync(1_000);
 
       await expect(waitPromise).resolves.toBeUndefined();
     } finally {
@@ -255,6 +429,8 @@ describe("ChatPage.waitForChatApiResponse", () => {
     try {
       const harness = createEventHarness();
       const chatPage = new ChatPage(harness.page);
+      stubFallback(chatPage);
+      seedPendingSnapshot(chatPage);
 
       const waitPromise = (chatPage as any).waitForChatApiResponse();
 
@@ -278,6 +454,8 @@ describe("ChatPage.waitForChatApiResponse", () => {
     try {
       const harness = createEventHarness();
       const chatPage = new ChatPage(harness.page);
+      stubFallback(chatPage);
+      seedPendingSnapshot(chatPage);
 
       const waitPromise = (chatPage as any).waitForChatApiResponse();
 
@@ -419,12 +597,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
       );
 
       const chatPage = new ChatPage(harness.page);
-      (chatPage as any).pendingAssistantSnapshot = {
-        count: 0,
-        latestArtifactCount: 0,
-        latestMessageId: null,
-        latestMessageText: "",
-      };
+      seedPendingSnapshot(chatPage);
 
       const waitPromise = (chatPage as any).waitForChatApiResponse();
 
