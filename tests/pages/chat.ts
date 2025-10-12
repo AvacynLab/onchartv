@@ -862,26 +862,38 @@ export class ChatPage {
 
     const method =
       typeof candidate.method === "function" ? candidate.method() : null;
-
-    if (method && !["POST", "PATCH", "PUT"].includes(method.toUpperCase())) {
-      /**
-       * The chat SDK emits both POST (brand-new prompts) and PATCH/PUT verbs
-       * when resuming a stream. Accept the full set so Playwright can observe
-       * either code path without misclassifying unrelated requests.
-       */
-      return false;
-    }
+    const normalizedMethod = method?.toUpperCase() ?? null;
 
     const rawUrl = candidate.url();
-
+    
     try {
       const { pathname } = new URL(rawUrl);
 
-      if (pathname === "/api/chat") {
+      const isStreamPath = CHAT_STREAM_PATH_REGEX.test(pathname);
+      const isChatRoot = pathname === "/api/chat";
+
+      if (!isChatRoot && !isStreamPath) {
+        return false;
+      }
+
+      if (!normalizedMethod) {
         return true;
       }
 
-      return CHAT_STREAM_PATH_REGEX.test(pathname);
+      if (["POST", "PATCH", "PUT"].includes(normalizedMethod)) {
+        return true;
+      }
+
+      if (normalizedMethod === "GET") {
+        /**
+         * The Vercel AI SDK resumes Server-Sent Event streams via
+         * `GET /api/chat/:id/stream`. Accept the read transport so suggestion
+         * helpers observe the streaming hook without waiting for UI fallbacks.
+         */
+        return isStreamPath;
+      }
+
+      return false;
     } catch {
       /**
        * Unit tests occasionally stub the Playwright request object with bare
@@ -889,7 +901,26 @@ export class ChatPage {
        * permissive for those scenarios while the production code continues to
        * rely on full URL parsing.
        */
-      return rawUrl.includes("/api/chat");
+      const includesChatPath = rawUrl.includes("/api/chat");
+      const includesStreamSegment = rawUrl.includes("/stream");
+
+      if (!includesChatPath) {
+        return false;
+      }
+
+      if (!normalizedMethod) {
+        return true;
+      }
+
+      if (["POST", "PATCH", "PUT"].includes(normalizedMethod)) {
+        return true;
+      }
+
+      if (normalizedMethod === "GET") {
+        return includesStreamSegment;
+      }
+
+      return false;
     }
   }
 

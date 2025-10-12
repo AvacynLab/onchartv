@@ -175,6 +175,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
         createMockResponse({
           url: "http://localhost:3000/api/chat/fake-id/stream",
           ok: true,
+          method: "GET",
         })
       );
 
@@ -228,6 +229,29 @@ describe("ChatPage.waitForChatApiResponse", () => {
 
       await expect(waitPromise).rejects.toThrow(
         "Chat API request failed before receiving a response – net::ERR_ABORTED"
+      );
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("throws when a streaming GET transport fails before responding", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createEventHarness();
+      const chatPage = new ChatPage(harness.page);
+
+      const waitPromise = (chatPage as any).waitForChatApiResponse();
+
+      await harness.emitFailure({
+        method: () => "GET",
+        url: () => "http://localhost:3000/api/chat/example-id/stream",
+        failure: () => ({ errorText: "net::ERR_STREAM_CLOSED" }),
+      });
+
+      await expect(waitPromise).rejects.toThrow(
+        "Chat API request failed before receiving a response – net::ERR_STREAM_CLOSED"
       );
     } finally {
       vi.runOnlyPendingTimers();
