@@ -941,9 +941,11 @@ export class ChatPage {
         const page = this.page;
         let settled = false;
         let timer: ReturnType<typeof setTimeout>;
+        let sawMatchingRequest = false;
 
         const cleanup = () => {
           clearTimeout(timer);
+          page.off("request", handleRequest);
           page.off("response", handleResponse);
           page.off("requestfailed", handleFailure);
         };
@@ -961,6 +963,14 @@ export class ChatPage {
           } else {
             reject(reason);
           }
+        };
+
+        const handleRequest = (request: unknown) => {
+          if (!this.matchesChatApiRequest(request as any)) {
+            return;
+          }
+
+          sawMatchingRequest = true;
         };
 
         const handleResponse = async (response: unknown) => {
@@ -1099,9 +1109,15 @@ export class ChatPage {
         };
 
         timer = setTimeout(() => {
+          if (sawMatchingRequest) {
+            settle("resolve");
+            return;
+          }
+
           settle("reject", networkTimeoutMarker);
         }, networkTimeoutMs);
 
+        page.on("request", handleRequest);
         page.on("response", handleResponse);
         page.on("requestfailed", handleFailure);
       });

@@ -14,6 +14,17 @@ type MockResponseOptions = {
   method?: string;
 };
 
+const createMockRequest = ({
+  url,
+  method = "POST",
+}: {
+  url: string;
+  method?: string;
+}) => ({
+  url: () => url,
+  method: () => method,
+});
+
 const createMockResponse = ({
   url,
   ok,
@@ -85,6 +96,7 @@ describe("ChatPage navigation", () => {
 describe("ChatPage.waitForChatApiResponse", () => {
   const createEventHarness = () => {
     const listeners: Record<string, Set<(...args: any[]) => unknown>> = {
+      request: new Set(),
       response: new Set(),
       requestfailed: new Set(),
     };
@@ -122,7 +134,10 @@ describe("ChatPage.waitForChatApiResponse", () => {
       waitForTimeout: vi.fn().mockResolvedValue(undefined),
     } satisfies Partial<Page>;
 
-    const emit = async (event: "response" | "requestfailed", payload: any) => {
+    const emit = async (
+      event: "request" | "response" | "requestfailed",
+      payload: any
+    ) => {
       for (const handler of Array.from(listeners[event] ?? [])) {
         await handler(payload);
       }
@@ -130,6 +145,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
 
     return {
       page: page as Page,
+      emitRequest: (payload: any) => emit("request", payload),
       emitResponse: (payload: any) => emit("response", payload),
       emitFailure: (payload: any) => emit("requestfailed", payload),
       listeners,
@@ -146,6 +162,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
 
       const waitPromise = (chatPage as any).waitForChatApiResponse();
 
+      expect(harness.listeners.request.size).toBe(1);
       expect(harness.listeners.response.size).toBe(1);
       expect(harness.listeners.requestfailed.size).toBe(1);
 
@@ -155,6 +172,29 @@ describe("ChatPage.waitForChatApiResponse", () => {
           ok: true,
         })
       );
+
+      await expect(waitPromise).resolves.toBeUndefined();
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("resolves after observing a matching chat request even when the response is still streaming", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createEventHarness();
+      const chatPage = new ChatPage(harness.page);
+
+      const waitPromise = (chatPage as any).waitForChatApiResponse();
+
+      await harness.emitRequest(
+        createMockRequest({
+          url: "http://localhost:3000/api/chat?chatId=slow-stream",
+        })
+      );
+
+      await vi.advanceTimersByTimeAsync(5_000);
 
       await expect(waitPromise).resolves.toBeUndefined();
     } finally {
