@@ -9,11 +9,15 @@ export function isAutomationRuntime(): boolean {
   const toBool = (value?: string) =>
     typeof value === "string" && value.trim() !== "" && value.toLowerCase() !== "false";
 
-  if (
-    toBool(process.env.NEXT_PUBLIC_PLAYWRIGHT) ||
-    toBool(process.env.PLAYWRIGHT) ||
-    toBool(process.env.CI_PLAYWRIGHT)
-  ) {
+  // When rendering on the server we only have access to environment variables,
+  // so honour the canonical Playwright flags there. Client bundles, however,
+  // should ignore server-only variables such as `PLAYWRIGHT` because Next.js
+  // strips them during compilation and our unit tests exercise the jsdom path.
+  if (typeof window === "undefined") {
+    if (toBool(process.env.NEXT_PUBLIC_PLAYWRIGHT) || toBool(process.env.PLAYWRIGHT) || toBool(process.env.CI_PLAYWRIGHT)) {
+      return true;
+    }
+  } else if (toBool(process.env.NEXT_PUBLIC_PLAYWRIGHT)) {
     return true;
   }
 
