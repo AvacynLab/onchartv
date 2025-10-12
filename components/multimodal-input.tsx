@@ -48,6 +48,7 @@ import { PreviewAttachment } from "./preview-attachment";
 import { SuggestedActions } from "./suggested-actions";
 import { Button } from "./ui/button";
 import type { VisibilityType } from "./visibility-selector";
+import { isAutomationRuntime } from "./utils/automation";
 
 const ACTIVE_CHAT_STATUSES: ReadonlySet<UseChatHelpers<ChatMessage>["status"]> =
   new Set(["submitted", "streaming"]);
@@ -280,10 +281,7 @@ function PureMultimodalInput({
       const hasAttachments = effectiveAttachments.length > 0;
 
       const emitPlaywrightSignal = (phase: string) => {
-        if (
-          typeof window === "undefined" ||
-          process.env.NEXT_PUBLIC_PLAYWRIGHT !== "true"
-        ) {
+        if (typeof window === "undefined" || !isAutomationRuntime()) {
           return;
         }
 

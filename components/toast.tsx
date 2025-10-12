@@ -4,6 +4,7 @@ import React, { type ReactNode, useEffect, useRef, useState } from "react";
 import { toast as sonnerToast } from "sonner";
 import { cn } from "@/lib/utils";
 import { CheckCircleFillIcon, WarningIcon } from "./icons";
+import { isAutomationRuntime } from "./utils/automation";
 
 const iconsByType: Record<"success" | "error", ReactNode> = {
   success: <CheckCircleFillIcon />,
@@ -87,34 +88,7 @@ function shouldRenderAutomationToast(): boolean {
     return false;
   }
 
-  /**
-   * Playwright toggles either the dedicated NEXT_PUBLIC flag (when we boot the
-   * dev server manually for the suite) or exposes the `navigator.webdriver`
-   * property when browsers run in automation mode. Check both signals so the
-   * fallback toast reliably renders across CI and local runs, while production
-   * browsers skip the synthetic overlay entirely.
-   */
-  const playwrightFlagEnabled =
-    process.env.NEXT_PUBLIC_PLAYWRIGHT === "true" ||
-    process.env.PLAYWRIGHT === "true" ||
-    process.env.CI_PLAYWRIGHT === "true";
-  const webdriverEnabled =
-    typeof navigator !== "undefined" &&
-    typeof (navigator as Navigator & { webdriver?: boolean }).webdriver ===
-      "boolean" &&
-    (navigator as Navigator & { webdriver?: boolean }).webdriver === true;
-  /**
-   * Chromium-based automation (e.g. Playwright's bundled browsers) may not
-   * expose the `navigator.webdriver` flag reliably in preview builds. Falling
-   * back to the user agent keeps the bridge active for headless runs without
-   * leaking the synthetic toast into regular production sessions.
-   */
-  const headlessBrowserDetected =
-    typeof navigator !== "undefined" &&
-    typeof navigator.userAgent === "string" &&
-    navigator.userAgent.toLowerCase().includes("headless");
-
-  return playwrightFlagEnabled || webdriverEnabled || headlessBrowserDetected;
+  return isAutomationRuntime();
 }
 
 function renderAutomationToast(props: Omit<ToastProps, "id">) {
