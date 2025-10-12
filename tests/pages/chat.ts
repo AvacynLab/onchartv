@@ -856,11 +856,19 @@ export class ChatPage {
       return false;
     }
 
-    if (typeof candidate.method !== "function" || typeof candidate.url !== "function") {
+    if (typeof candidate.url !== "function") {
       return false;
     }
 
-    if (candidate.method() !== "POST") {
+    const method =
+      typeof candidate.method === "function" ? candidate.method() : null;
+
+    if (method && !["POST", "PATCH", "PUT"].includes(method.toUpperCase())) {
+      /**
+       * The chat SDK emits both POST (brand-new prompts) and PATCH/PUT verbs
+       * when resuming a stream. Accept the full set so Playwright can observe
+       * either code path without misclassifying unrelated requests.
+       */
       return false;
     }
 

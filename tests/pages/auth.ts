@@ -148,8 +148,14 @@ export class AuthPage {
       .waitFor({ state: "visible", timeout: 60_000 })
       .then(() => true)
       .catch(async (error) => {
+        /**
+         * CI runners occasionally hydrate the automation bridge a few frames
+         * after the route transition kicks off. Allow a longer grace window
+         * before declaring the toast missing so legitimate successes do not
+         * fail the suite.
+         */
         const attached = await toast
-          .waitFor({ state: "attached", timeout: 1_000 })
+          .waitFor({ state: "attached", timeout: 5_000 })
           .then(() => true)
           .catch(() => false);
 

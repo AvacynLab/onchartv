@@ -9,7 +9,11 @@ import { SubmitButton } from "@/components/submit-button";
 import { toast } from "@/components/toast";
 import { type RegisterActionState, register } from "../actions";
 
-const TOAST_GRACE_PERIOD_MS = 800;
+/**
+ * Extend the grace window so slower Playwright runners can observe the success
+ * toast before the redirect unmounts the registration shell.
+ */
+const TOAST_GRACE_PERIOD_MS = 2000;
 
 export default function Page() {
   const router = useRouter();

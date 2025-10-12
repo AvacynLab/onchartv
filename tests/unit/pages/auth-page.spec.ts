@@ -77,7 +77,7 @@ describe("AuthPage.expectToastToContain", () => {
 
     await authPage.expectToastToContain("Account created successfully!");
 
-    expect(waitFor).toHaveBeenCalledWith({ state: "attached", timeout: 1_000 });
+    expect(waitFor).toHaveBeenCalledWith({ state: "attached", timeout: 5_000 });
     expect(page.waitForTimeout).toHaveBeenCalledWith(100);
     expect(expectMock).toHaveBeenCalledWith(toastHandle);
     expect(toContainText).toHaveBeenCalledWith("Account created successfully!");
@@ -102,7 +102,7 @@ describe("AuthPage.expectToastToContain", () => {
       'Timed out waiting for toast containing: "Account created successfully!"'
     );
 
-    expect(waitFor).toHaveBeenCalledWith({ state: "attached", timeout: 1_000 });
+    expect(waitFor).toHaveBeenCalledWith({ state: "attached", timeout: 5_000 });
     expect(expectMock).not.toHaveBeenCalled();
   });
 });
