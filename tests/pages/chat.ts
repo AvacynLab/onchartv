@@ -82,6 +82,15 @@ export class ChatPage {
    */
   private pendingSendButtonWasVisible = false;
 
+  /**
+   * Preserve the send button enabled state before dispatching a prompt. Certain
+   * automation flows (for example suggested quick actions) keep the control
+   * visible yet disable it instead of swapping in the stop button. Capturing the
+   * baseline enabled flag allows the polling fallback to treat that transition
+   * as proof that streaming started even when visibility stays unchanged.
+   */
+  private pendingSendButtonWasEnabled = false;
+
   constructor(page: Page) {
     this.page = page;
   }
@@ -714,6 +723,9 @@ export class ChatPage {
     this.pendingSendButtonWasVisible = await this.sendButton
       .isVisible()
       .catch(() => false);
+    this.pendingSendButtonWasEnabled = await this.sendButton
+      .isEnabled()
+      .catch(() => false);
   }
 
   private async waitForComposerReady(
@@ -1059,6 +1071,7 @@ export class ChatPage {
       baseline: baselineSnapshot,
       baselineStopButtonVisible: this.pendingStopButtonWasVisible,
       baselineSendButtonVisible: this.pendingSendButtonWasVisible,
+      baselineSendButtonEnabled: this.pendingSendButtonWasEnabled,
       timeoutMs: uiFallbackTimeoutMs,
     });
   }
@@ -1067,11 +1080,13 @@ export class ChatPage {
     baseline,
     baselineStopButtonVisible,
     baselineSendButtonVisible,
+    baselineSendButtonEnabled,
     timeoutMs,
   }: {
     baseline: AssistantSnapshot;
     baselineStopButtonVisible: boolean;
     baselineSendButtonVisible: boolean;
+    baselineSendButtonEnabled: boolean;
     timeoutMs: number;
   }): Promise<void> {
     const toast = this.page.locator(TOAST_LOCATOR).first();
@@ -1095,6 +1110,7 @@ export class ChatPage {
       baseline,
       baselineStopButtonVisible,
       baselineSendButtonVisible,
+      baselineSendButtonEnabled,
       timeoutMs,
     });
 
@@ -1154,11 +1170,13 @@ export class ChatPage {
     baseline,
     baselineStopButtonVisible,
     baselineSendButtonVisible,
+    baselineSendButtonEnabled,
     timeoutMs,
   }: {
     baseline: AssistantSnapshot;
     baselineStopButtonVisible: boolean;
     baselineSendButtonVisible: boolean;
+    baselineSendButtonEnabled: boolean;
     timeoutMs: number;
   }): Promise<void> {
     const deadline = Date.now() + timeoutMs;
@@ -1168,6 +1186,7 @@ export class ChatPage {
     const sendButtonLocator = this.sendButton;
     let hasObservedStopButtonHidden = !baselineStopButtonVisible;
     let hasObservedSendButtonVisible = baselineSendButtonVisible;
+    let hasObservedSendButtonEnabled = baselineSendButtonEnabled;
 
     while (Date.now() < deadline) {
       const [
@@ -1175,11 +1194,13 @@ export class ChatPage {
         spinnerCount,
         stopVisible,
         sendVisible,
+        sendEnabled,
       ] = await Promise.all([
         assistantLocator.count().catch(() => 0),
         spinnerLocator.count().catch(() => 0),
         stopButtonLocator.isVisible().catch(() => false),
         sendButtonLocator.isVisible().catch(() => false),
+        sendButtonLocator.isEnabled().catch(() => false),
       ]);
 
       if (spinnerCount > 0) {
@@ -1190,8 +1211,18 @@ export class ChatPage {
         if (hasObservedSendButtonVisible) {
           return;
         }
-      } else if (!hasObservedSendButtonVisible) {
-        hasObservedSendButtonVisible = true;
+      } else {
+        if (!hasObservedSendButtonVisible) {
+          hasObservedSendButtonVisible = true;
+        }
+
+        if (!sendEnabled && hasObservedSendButtonEnabled) {
+          return;
+        }
+
+        if (sendEnabled && !hasObservedSendButtonEnabled) {
+          hasObservedSendButtonEnabled = true;
+        }
       }
 
       if (stopVisible) {

@@ -257,16 +257,51 @@ export async function createAuthenticatedContext({
    * endpoint so we can jump straight to the login form regardless of how long
    * the registration UI takes to hydrate under cold starts.
    */
-  const ensureUserResponse = await context.request.post(
-    `${baseURL}/api/tests/auth/register`,
-    {
-      data: { email, password: resolvedPassword },
-    }
-  );
+  /**
+   * Registering via the testing endpoint occasionally races with the server's
+   * warmup work and can yield transient socket resets. Retry a few times with a
+   * short backoff so hermetic suites no longer fail on the very first ECONNRESET
+   * observed during cold starts.
+   */
+  const maxRegisterAttempts = 3;
+  let ensureUserResponse: Awaited<ReturnType<typeof context.request.post>> | null = null;
+  let lastRegisterError: unknown = null;
 
-  if (!ensureUserResponse.ok()) {
+  for (let attempt = 1; attempt <= maxRegisterAttempts; attempt += 1) {
+    try {
+      ensureUserResponse = await context.request.post(
+        `${baseURL}/api/tests/auth/register`,
+        {
+          data: { email, password: resolvedPassword },
+        }
+      );
+
+      if (ensureUserResponse.ok()) {
+        break;
+      }
+
+      lastRegisterError = new Error(
+        `status ${ensureUserResponse.status()}: ${await ensureUserResponse.text()}`
+      );
+    } catch (error) {
+      lastRegisterError = error;
+      ensureUserResponse = null;
+    }
+
+    if (attempt < maxRegisterAttempts) {
+      const backoffMs = attempt * 250;
+      await new Promise((resolve) => setTimeout(resolve, backoffMs));
+    }
+  }
+
+  if (!ensureUserResponse || !ensureUserResponse.ok()) {
+    const diagnostic =
+      lastRegisterError instanceof Error
+        ? lastRegisterError.message
+        : String(lastRegisterError ?? "Unknown error");
+
     throw new Error(
-      `Failed to provision Playwright test user: ${await ensureUserResponse.text()}`
+      `Failed to provision Playwright test user after ${maxRegisterAttempts} attempts: ${diagnostic}`
     );
   }
 

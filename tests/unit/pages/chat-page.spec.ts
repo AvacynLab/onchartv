@@ -94,6 +94,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
     };
     const sendButtonLocator = {
       isVisible: vi.fn().mockResolvedValue(true),
+      isEnabled: vi.fn().mockResolvedValue(true),
     };
 
     const page = {
@@ -242,103 +243,11 @@ describe("ChatPage.waitForChatApiResponse", () => {
         () => new Promise(() => {})
       );
       const toastInnerText = vi.fn().mockResolvedValue("");
-      const waitForFunction = vi.fn().mockResolvedValue(undefined);
-      const toastLocatorHandle = {
-        waitFor: toastWaitFor,
-        innerText: toastInnerText,
-      } as const;
-
-      const harness = createEventHarness();
-      (harness.page.getByTestId as ReturnType<typeof vi.fn>).mockImplementation(
-        (testId: string) => {
-          if (testId === "toast") {
-            return toastLocatorHandle as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
-          if (testId === "stop-button") {
-            return {
-              isVisible: vi.fn().mockResolvedValue(false),
-            } as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
-          throw new Error(`Unexpected test id ${testId}`);
-        }
-      );
-      (harness.page.locator as ReturnType<typeof vi.fn>).mockImplementation(
-        (selector: string) => {
-          if (selector === '[data-testid="toast"], #automation-toast-bridge') {
-            return {
-              first: () => toastLocatorHandle,
-            } as unknown as ReturnType<Page["locator"]>;
-          }
-
-          throw new Error(`Unexpected locator access: ${selector}`);
-        }
-      );
-
-      const chatPage = new ChatPage(harness.page);
-      (chatPage as any).pendingAssistantSnapshot = {
-        count: 0,
-        latestArtifactCount: 0,
-        latestMessageId: null,
-        latestMessageText: "",
-      };
-
-      (harness.page.waitForFunction as ReturnType<typeof vi.fn>).mockImplementation(
-        (...args: Parameters<Page["waitForFunction"]>) =>
-          waitForFunction(...args)
-      );
-
-      const waitPromise = (chatPage as any).waitForChatApiResponse();
-
-      await harness.emitFailure({
-        method: () => "POST",
-        url: () => "http://localhost:3000/api/chat",
-        failure: () => ({ errorText: "net::ENETUNREACH" }),
-      });
-
-      await expect(waitPromise).resolves.toBeUndefined();
-
-      expect(warnSpy).toHaveBeenCalledWith(
-        "Chat API network request failed in offline mode; falling back to UI polling.",
-        expect.objectContaining({
-          failure: "net::ENETUNREACH",
-          url: "http://localhost:3000/api/chat",
-        })
-      );
-      expect(toastWaitFor).toHaveBeenCalledWith({
-        state: "visible",
-        timeout: 45_000,
-      });
-      expect(waitForFunction).toHaveBeenCalledWith(
-        expect.any(Function),
-        {
-          baselineCount: 0,
-          baselineLatestId: null,
-          baselineLatestText: "",
-          baselineArtifactCount: 0,
-        },
-        { timeout: 45_000 }
-      );
-    } finally {
-      warnSpy.mockRestore();
-      vi.runOnlyPendingTimers();
-      vi.useRealTimers();
-    }
-  });
-
-  it("falls back to UI guards when no network events fire", async () => {
-    vi.useFakeTimers();
-    try {
-      const toastWaitFor = vi.fn().mockImplementation(
-        () => new Promise(() => {})
-      );
-      const toastInnerText = vi.fn().mockResolvedValue("");
       const assistantCount = vi.fn().mockResolvedValue(0);
-      let spinnerCalls = 0;
       const spinnerCount = vi
         .fn()
-        .mockImplementation(async () => (spinnerCalls++ === 0 ? 1 : 0));
+        .mockResolvedValueOnce(1)
+        .mockResolvedValue(0);
       const toastLocatorHandle = {
         waitFor: toastWaitFor,
         innerText: toastInnerText,
@@ -373,8 +282,112 @@ describe("ChatPage.waitForChatApiResponse", () => {
           if (testId === "send-button") {
             return {
               isVisible: vi.fn().mockResolvedValue(true),
+              isEnabled: vi.fn().mockResolvedValue(true),
             } as unknown as ReturnType<Page["getByTestId"]>;
           }
+
+          throw new Error(`Unexpected test id ${testId}`);
+        }
+      );
+      (harness.page.locator as ReturnType<typeof vi.fn>).mockImplementation(
+        (selector: string) => {
+          if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+            return {
+              first: () => toastLocatorHandle,
+            } as unknown as ReturnType<Page["locator"]>;
+          }
+
+          throw new Error(`Unexpected locator access: ${selector}`);
+        }
+      );
+
+      const chatPage = new ChatPage(harness.page);
+      (chatPage as any).pendingAssistantSnapshot = {
+        count: 0,
+        latestArtifactCount: 0,
+        latestMessageId: null,
+        latestMessageText: "",
+      };
+
+      const waitPromise = (chatPage as any).waitForChatApiResponse();
+
+      await harness.emitFailure({
+        method: () => "POST",
+        url: () => "http://localhost:3000/api/chat",
+        failure: () => ({ errorText: "net::ENETUNREACH" }),
+      });
+
+      await expect(waitPromise).resolves.toBeUndefined();
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        "Chat API network request failed in offline mode; falling back to UI polling.",
+        expect.objectContaining({
+          failure: "net::ENETUNREACH",
+          url: "http://localhost:3000/api/chat",
+        })
+      );
+      expect(toastWaitFor).toHaveBeenCalledWith({
+        state: "visible",
+        timeout: 45_000,
+      });
+      expect(assistantCount).toHaveBeenCalled();
+      expect(spinnerCount).toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back to UI guards when no network events fire", async () => {
+    vi.useFakeTimers();
+    try {
+      const toastWaitFor = vi.fn().mockImplementation(
+        () => new Promise(() => {})
+      );
+      const toastInnerText = vi.fn().mockResolvedValue("");
+      const assistantCount = vi.fn().mockResolvedValue(0);
+      let spinnerCalls = 0;
+      const spinnerCount = vi
+        .fn()
+        .mockImplementation(async () => (spinnerCalls++ === 0 ? 1 : 0));
+      const toastLocatorHandle = {
+        waitFor: toastWaitFor,
+        innerText: toastInnerText,
+      } as const;
+
+      const harness = createEventHarness();
+      (harness.page.getByTestId as ReturnType<typeof vi.fn>).mockImplementation(
+        (testId: string) => {
+          if (testId === "toast") {
+            return toastLocatorHandle as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
+        if (testId === "message-assistant") {
+          return {
+            count: assistantCount,
+            nth: vi.fn(),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant-loading") {
+          return {
+            count: spinnerCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "stop-button") {
+          return {
+            isVisible: vi.fn().mockResolvedValue(false),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "send-button") {
+          return {
+            isVisible: vi.fn().mockResolvedValue(true),
+            isEnabled: vi.fn().mockResolvedValue(true),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
 
           throw new Error(`Unexpected test id ${testId}`);
         }
@@ -423,115 +436,109 @@ describe("ChatPage.waitForChatApiResponse", () => {
   });
 
   it("throws a descriptive timeout error when the UI never indicates streaming", async () => {
-    vi.useFakeTimers();
-    try {
-      const toastWaitFor = vi.fn().mockImplementation(
-        () => new Promise(() => {})
-      );
-      const toastInnerText = vi.fn().mockResolvedValue("");
+    const toastWaitFor = vi.fn().mockImplementation(
+      () => new Promise(() => {})
+    );
+    const toastInnerText = vi.fn().mockResolvedValue("");
+    const assistantCount = vi.fn().mockResolvedValue(1);
+    const latestAssistant = {
+      getAttribute: vi.fn().mockResolvedValue("assistant-1"),
+      getByTestId: vi.fn().mockReturnValue({
+        innerText: vi.fn().mockResolvedValue("Thinking..."),
+      }),
+      locator: vi.fn().mockReturnValue({
+        count: vi.fn().mockResolvedValue(0),
+      }),
+    };
+    const spinnerCount = vi.fn().mockResolvedValue(0);
+    const toastLocatorHandle = {
+      waitFor: toastWaitFor,
+      innerText: toastInnerText,
+    } as const;
 
-      const assistantCount = vi.fn().mockResolvedValue(1);
-      const latestAssistant = {
-        getAttribute: vi.fn().mockResolvedValue("assistant-1"),
-        getByTestId: vi.fn().mockReturnValue({
-          innerText: vi.fn().mockResolvedValue("Thinking..."),
-        }),
-        locator: vi.fn().mockReturnValue({
-          count: vi.fn().mockResolvedValue(0),
-        }),
-      };
-      const spinnerCount = vi.fn().mockResolvedValue(0);
-      const toastLocatorHandle = {
-        waitFor: toastWaitFor,
-        innerText: toastInnerText,
-      } as const;
-
-      const harness = createEventHarness();
-      (harness.page.getByTestId as ReturnType<typeof vi.fn>).mockImplementation(
-        (testId: string) => {
-          if (testId === "toast") {
-            return toastLocatorHandle as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
-          if (testId === "message-assistant") {
-            return {
-              count: assistantCount,
-              nth: vi.fn().mockReturnValue(latestAssistant),
-            } as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
-          if (testId === "message-assistant-loading") {
-            return {
-              count: spinnerCount,
-            } as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
-          if (testId === "stop-button") {
-            return {
-              isVisible: vi.fn().mockResolvedValue(false),
-            } as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
-          if (testId === "send-button") {
-            return {
-              isVisible: vi.fn().mockResolvedValue(true),
-            } as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
-          throw new Error(`Unexpected test id ${testId}`);
+    const harness = createEventHarness();
+    (harness.page.getByTestId as ReturnType<typeof vi.fn>).mockImplementation(
+      (testId: string) => {
+        if (testId === "toast") {
+          return toastLocatorHandle as unknown as ReturnType<Page["getByTestId"]>;
         }
-      );
-      (harness.page.locator as ReturnType<typeof vi.fn>).mockImplementation(
-        (selector: string) => {
-          if (selector === '[data-testid="toast"], #automation-toast-bridge') {
-            return {
-              first: () => toastLocatorHandle,
-            } as unknown as ReturnType<Page["locator"]>;
-          }
 
-          throw new Error(`Unexpected locator access: ${selector}`);
+        if (testId === "message-assistant") {
+          return {
+            count: assistantCount,
+            nth: vi.fn().mockReturnValue(latestAssistant),
+          } as unknown as ReturnType<Page["getByTestId"]>;
         }
-      );
 
-      const chatPage = new ChatPage(harness.page);
-      const baselineSnapshot = {
-        count: 1,
-        latestArtifactCount: 0,
-        latestMessageId: "assistant-1",
-        latestMessageText: "Thinking...",
-      } as const;
+        if (testId === "message-assistant-loading") {
+          return {
+            count: spinnerCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
 
-      let caughtError: unknown;
-      try {
-        const waitPromise = (chatPage as any).waitForUiStreamingFallback({
-          baseline: baselineSnapshot,
-          baselineStopButtonVisible: false,
-          baselineSendButtonVisible: true,
-          timeoutMs: 45_000,
-        });
+        if (testId === "stop-button") {
+          return {
+            isVisible: vi.fn().mockResolvedValue(false),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
 
-        await vi.advanceTimersByTimeAsync(45_000);
+        if (testId === "send-button") {
+          return {
+            isVisible: vi.fn().mockResolvedValue(true),
+            isEnabled: vi.fn().mockResolvedValue(true),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
 
-        await waitPromise;
-      } catch (error) {
-        caughtError = error;
+        throw new Error(`Unexpected test id ${testId}`);
       }
+    );
+    (harness.page.locator as ReturnType<typeof vi.fn>).mockImplementation(
+      (selector: string) => {
+        if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+          return {
+            first: () => toastLocatorHandle,
+          } as unknown as ReturnType<Page["locator"]>;
+        }
 
-      expect(caughtError).toBeInstanceOf(Error);
-      expect((caughtError as Error).message).toBe(
-        "Timed out waiting for chat UI to start streaming"
-      );
-      expect(toastWaitFor).toHaveBeenCalledWith({
-        state: "visible",
-        timeout: 45_000,
-      });
-      expect(assistantCount).toHaveBeenCalled();
-      expect(latestAssistant.getAttribute).toHaveBeenCalled();
-      expect(spinnerCount).toHaveBeenCalled();
-    } finally {
-      vi.runOnlyPendingTimers();
-      vi.useRealTimers();
-    }
+        throw new Error(`Unexpected locator access: ${selector}`);
+      }
+    );
+
+    const chatPage = new ChatPage(harness.page);
+    const pollSpy = vi
+      .spyOn(chatPage as any, "pollForStreamingChange")
+      .mockRejectedValue(new Error("Timed out waiting for chat UI to start streaming"));
+
+    const baselineSnapshot = {
+      count: 1,
+      latestArtifactCount: 0,
+      latestMessageId: "assistant-1",
+      latestMessageText: "Thinking...",
+    } as const;
+
+    await expect(
+      (chatPage as any).waitForUiStreamingFallback({
+        baseline: baselineSnapshot,
+        baselineStopButtonVisible: false,
+        baselineSendButtonVisible: true,
+        baselineSendButtonEnabled: true,
+        timeoutMs: 45_000,
+      })
+    ).rejects.toThrow("Timed out waiting for chat UI to start streaming");
+
+    expect(pollSpy).toHaveBeenCalledWith({
+      baseline: baselineSnapshot,
+      baselineStopButtonVisible: false,
+      baselineSendButtonVisible: true,
+      baselineSendButtonEnabled: true,
+      timeoutMs: 45_000,
+    });
+    expect(toastWaitFor).toHaveBeenCalledWith({
+      state: "visible",
+      timeout: 45_000,
+    });
+    expect(assistantCount).not.toHaveBeenCalled();
+    expect(spinnerCount).not.toHaveBeenCalled();
   });
 
   it("treats a fresh stop button toggle as evidence of streaming", async () => {
@@ -578,6 +585,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
         if (testId === "send-button") {
           return {
             isVisible: vi.fn().mockResolvedValue(true),
+            isEnabled: vi.fn().mockResolvedValue(true),
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
 
@@ -610,6 +618,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
       baseline: baselineSnapshot,
       baselineStopButtonVisible: false,
       baselineSendButtonVisible: true,
+      baselineSendButtonEnabled: true,
       timeoutMs: 5_000,
     });
 
@@ -661,6 +670,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
         if (testId === "send-button") {
           return {
             isVisible: sendVisible,
+            isEnabled: vi.fn().mockResolvedValue(true),
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
 
@@ -693,10 +703,98 @@ describe("ChatPage.waitForChatApiResponse", () => {
       baseline: baselineSnapshot,
       baselineStopButtonVisible: false,
       baselineSendButtonVisible: true,
+      baselineSendButtonEnabled: true,
       timeoutMs: 5_000,
     });
 
     expect(sendVisible).toHaveBeenCalledTimes(2);
+    expect(waitForTimeout).toHaveBeenCalled();
+  });
+
+  it("treats a disabled send button as evidence of streaming", async () => {
+    const toastWaitFor = vi.fn().mockImplementation(
+      () => new Promise(() => {})
+    );
+    const toastInnerText = vi.fn().mockResolvedValue("");
+    const assistantCount = vi.fn().mockResolvedValue(0);
+    const spinnerCount = vi.fn().mockResolvedValue(0);
+    const sendVisible = vi.fn().mockResolvedValue(true);
+    const sendEnabled = vi
+      .fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    const waitForTimeout = vi.fn().mockResolvedValue(undefined);
+
+    const page = {
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "toast") {
+          return {
+            waitFor: toastWaitFor,
+            innerText: toastInnerText,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant") {
+          return {
+            count: assistantCount,
+            nth: vi.fn(),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant-loading") {
+          return {
+            count: spinnerCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "stop-button") {
+          return {
+            isVisible: vi.fn().mockResolvedValue(false),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "send-button") {
+          return {
+            isVisible: sendVisible,
+            isEnabled: sendEnabled,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        throw new Error(`Unexpected test id: ${testId}`);
+      }),
+      locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+          return {
+            first: () => ({
+              waitFor: toastWaitFor,
+              innerText: toastInnerText,
+            }),
+          } as unknown as ReturnType<Page["locator"]>;
+        }
+
+        throw new Error(`Unexpected locator access: ${selector}`);
+      }),
+      waitForTimeout: waitForTimeout as unknown as Page["waitForTimeout"],
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+    const baselineSnapshot = {
+      count: 0,
+      latestArtifactCount: 0,
+      latestMessageId: null,
+      latestMessageText: "",
+    } as const;
+
+    await (chatPage as any).waitForUiStreamingFallback({
+      baseline: baselineSnapshot,
+      baselineStopButtonVisible: false,
+      baselineSendButtonVisible: true,
+      baselineSendButtonEnabled: true,
+      timeoutMs: 5_000,
+    });
+
+    expect(sendVisible).toHaveBeenCalledTimes(2);
+    expect(sendEnabled).toHaveBeenCalledTimes(2);
     expect(waitForTimeout).toHaveBeenCalled();
   });
 });
@@ -1071,13 +1169,10 @@ describe("ChatPage generation helpers", () => {
         order.push("send-click");
       }),
       isVisible: vi.fn().mockResolvedValue(true),
+      isEnabled: vi.fn().mockResolvedValue(true),
     };
     const page = {
       getByTestId: vi.fn((testId: string) => {
-        if (testId === "send-button") {
-          return sendButtonLocator;
-        }
-
         if (testId === "message-assistant") {
           order.push("assistant-snapshot");
           return assistantLocator;
@@ -1090,9 +1185,7 @@ describe("ChatPage generation helpers", () => {
         }
 
         if (testId === "send-button") {
-          return {
-            isVisible: vi.fn().mockResolvedValue(true),
-          };
+          return sendButtonLocator;
         }
 
         throw new Error(`Unexpected test id: ${testId}`);
@@ -1169,13 +1262,6 @@ describe("ChatPage generation helpers", () => {
           };
         }
 
-        if (testId === "send-button") {
-          return {
-            click: vi.fn(),
-            isVisible: vi.fn().mockResolvedValue(true),
-          };
-        }
-
         if (testId === "stop-button") {
           return {
             isVisible: vi.fn().mockResolvedValue(false),
@@ -1184,7 +1270,9 @@ describe("ChatPage generation helpers", () => {
 
         if (testId === "send-button") {
           return {
+            click: vi.fn(),
             isVisible: vi.fn().mockResolvedValue(true),
+            isEnabled: vi.fn().mockResolvedValue(true),
           };
         }
 
@@ -1315,6 +1403,7 @@ describe("ChatPage generation helpers", () => {
         if (testId === "send-button") {
           return {
             isVisible: vi.fn().mockResolvedValue(true),
+            isEnabled: vi.fn().mockResolvedValue(true),
           };
         }
 

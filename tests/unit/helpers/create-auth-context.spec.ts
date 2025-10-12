@@ -603,4 +603,148 @@ describe("createAuthenticatedContext", () => {
     expect(result.page).toBe(secondPage);
 
   });
+
+  it("retries registration when the test endpoint resets the socket", async () => {
+    existsSyncMock.mockReturnValue(false);
+
+    const expectedEmail = "test-retry@playwright.com";
+
+    const requestGet = vi.fn().mockImplementation((url: string) => {
+      if (url.endsWith("/api/auth/csrf")) {
+        return Promise.resolve({
+          ok: () => true,
+          json: async () => ({ csrfToken: "token" }),
+        });
+      }
+
+      if (url.endsWith("/api/auth/session")) {
+        return Promise.resolve({
+          ok: () => true,
+          json: async () => ({ user: { email: expectedEmail } }),
+        });
+      }
+
+      return Promise.resolve({
+        ok: () => false,
+        json: async () => ({}),
+      });
+    });
+
+    let registerAttempts = 0;
+    const requestPost = vi.fn().mockImplementation((url: string) => {
+      if (url.includes("/api/tests/auth/register")) {
+        registerAttempts += 1;
+
+        if (registerAttempts === 1) {
+          return Promise.reject(new Error("ECONNRESET"));
+        }
+
+        return Promise.resolve({
+          ok: () => true,
+          status: () => 201,
+          text: async () => "",
+        });
+      }
+
+      return Promise.resolve({
+        ok: () => true,
+        status: () => 200,
+        text: async () => "",
+      });
+    });
+
+    const firstPage = {
+      getByPlaceholder: vi.fn().mockReturnValue({}),
+      waitForTimeout: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const storageState = vi.fn().mockResolvedValue(undefined);
+    const close = vi.fn().mockResolvedValue(undefined);
+
+    const firstContext = {
+      request: { get: requestGet, post: requestPost },
+      newPage: vi.fn().mockResolvedValue(firstPage),
+      storageState,
+      close,
+    };
+
+    const secondPage = {};
+    const secondContext = {
+      newPage: vi.fn().mockResolvedValue(secondPage),
+      request: {},
+    };
+
+    const browser = {
+      newContext: vi
+        .fn()
+        .mockResolvedValueOnce(firstContext)
+        .mockResolvedValueOnce(secondContext),
+    } as unknown as Browser;
+
+    chatPageStubs.createNewChat.mockResolvedValue(undefined);
+    chatPageStubs.getSelectedModel.mockResolvedValue("GPT-4o mini");
+    chatPageStubs.chooseModelFromSelector.mockResolvedValue(undefined);
+
+    const result = await createAuthenticatedContext({
+      browser,
+      name: "retry",
+    });
+
+    expect(registerAttempts).toBe(2);
+    expect(result.context).toBe(secondContext);
+    expect(result.page).toBe(secondPage);
+  });
+
+  it("throws after exhausting registration retries", async () => {
+    existsSyncMock.mockReturnValue(false);
+
+    const requestGet = vi.fn().mockImplementation((url: string) => {
+      if (url.endsWith("/api/auth/csrf")) {
+        return Promise.resolve({
+          ok: () => true,
+          json: async () => ({ csrfToken: "token" }),
+        });
+      }
+
+      return Promise.resolve({
+        ok: () => false,
+        json: async () => ({}),
+      });
+    });
+
+    let registerAttempts = 0;
+    const requestPost = vi.fn().mockImplementation((url: string) => {
+      if (url.includes("/api/tests/auth/register")) {
+        registerAttempts += 1;
+        return Promise.reject(new Error("ECONNRESET"));
+      }
+
+      return Promise.resolve({
+        ok: () => true,
+        status: () => 200,
+        text: async () => "",
+      });
+    });
+
+    const firstContext = {
+      request: { get: requestGet, post: requestPost },
+      newPage: vi.fn(),
+      storageState: vi.fn(),
+      close: vi.fn(),
+    };
+
+    const browser = {
+      newContext: vi.fn().mockResolvedValue(firstContext),
+    } as unknown as Browser;
+
+    await expect(
+      createAuthenticatedContext({
+        browser,
+        name: "retry-failure",
+      })
+    ).rejects.toThrow(/after 3 attempts: ECONNRESET/);
+
+    expect(requestPost).toHaveBeenCalledTimes(3);
+  });
 });
