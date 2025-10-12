@@ -4,7 +4,12 @@ import { shouldDisableRemoteAvatars } from "@/components/utils/automation";
 
 type AutomationNavigator = { webdriver?: boolean };
 
-const originalEnv = { ...process.env };
+const originalEnv = { ...process.env } as NodeJS.ProcessEnv;
+// Normalise the baseline environment so automation-specific flags set by other
+// suites (notably PLAYWRIGHT/CI_PLAYWRIGHT) do not leak into these assertions.
+delete originalEnv.PLAYWRIGHT;
+delete originalEnv.CI_PLAYWRIGHT;
+delete originalEnv.NEXT_PUBLIC_PLAYWRIGHT;
 
 describe("shouldDisableRemoteAvatars", () => {
   beforeEach(() => {
