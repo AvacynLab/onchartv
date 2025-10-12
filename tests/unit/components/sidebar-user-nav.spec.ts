@@ -15,11 +15,25 @@ describe("shouldDisableRemoteAvatars", () => {
   beforeEach(() => {
     process.env = { ...originalEnv };
     vi.unstubAllGlobals();
+    if (typeof window !== "undefined") {
+      /**
+       * Ensure prior specs that toggled the Playwright bridge do not leak the
+       * window flag into these assertions. The runtime detector treats the
+       * marker as a definitive automation signal, so clearing it keeps this
+       * suite anchored to its explicit test cases.
+       */
+      delete (window as typeof window & { __PLAYWRIGHT_AUTOMATION__?: boolean })
+        .__PLAYWRIGHT_AUTOMATION__;
+    }
   });
 
   afterEach(() => {
     process.env = { ...originalEnv };
     vi.unstubAllGlobals();
+    if (typeof window !== "undefined") {
+      delete (window as typeof window & { __PLAYWRIGHT_AUTOMATION__?: boolean })
+        .__PLAYWRIGHT_AUTOMATION__;
+    }
   });
 
   it("returns true when NEXT_PUBLIC_PLAYWRIGHT is true", () => {

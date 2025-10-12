@@ -968,19 +968,21 @@ export class ChatPage {
      * full network timeout before observing the UI transition we already
      * expect.
      */
+    const baselineSignalCount = this.pendingChatSignalCount ?? 0;
+
     const fallbackPromise = this.waitForUiStreamingFallback({
       baseline: baselineSnapshot,
       baselineUserMessageCount: this.pendingUserMessageCount,
       baselineStopButtonVisible: this.pendingStopButtonWasVisible,
       baselineSendButtonVisible: this.pendingSendButtonWasVisible,
       baselineSendButtonEnabled: this.pendingSendButtonWasEnabled,
+      baselineChatSignalCount: baselineSignalCount,
       timeoutMs: uiFallbackTimeoutMs,
     });
 
     const page = this.page;
     const browserContext =
       typeof page.context === "function" ? page.context() : null;
-    const baselineSignalCount = this.pendingChatSignalCount;
 
     type NetworkEvent =
       | { kind: "request"; request: unknown }
@@ -1264,6 +1266,7 @@ export class ChatPage {
     baselineStopButtonVisible,
     baselineSendButtonVisible,
     baselineSendButtonEnabled,
+    baselineChatSignalCount,
     timeoutMs,
   }: {
     baseline: AssistantSnapshot;
@@ -1271,6 +1274,7 @@ export class ChatPage {
     baselineStopButtonVisible: boolean;
     baselineSendButtonVisible: boolean;
     baselineSendButtonEnabled: boolean;
+    baselineChatSignalCount: number;
     timeoutMs: number;
   }): Promise<void> {
     const toast = this.page.locator(TOAST_LOCATOR).first();
@@ -1296,6 +1300,7 @@ export class ChatPage {
       baselineStopButtonVisible,
       baselineSendButtonVisible,
       baselineSendButtonEnabled,
+      baselineChatSignalCount,
       timeoutMs,
     });
 
@@ -1357,6 +1362,7 @@ export class ChatPage {
     baselineStopButtonVisible,
     baselineSendButtonVisible,
     baselineSendButtonEnabled,
+    baselineChatSignalCount,
     timeoutMs,
   }: {
     baseline: AssistantSnapshot;
@@ -1364,6 +1370,7 @@ export class ChatPage {
     baselineStopButtonVisible: boolean;
     baselineSendButtonVisible: boolean;
     baselineSendButtonEnabled: boolean;
+    baselineChatSignalCount: number;
     timeoutMs: number;
   }): Promise<void> {
     const deadline = Date.now() + timeoutMs;
@@ -1384,6 +1391,7 @@ export class ChatPage {
         sendVisible,
         sendEnabled,
         userCount,
+        signalCount,
       ] = await Promise.all([
         assistantLocator.count().catch(() => 0),
         spinnerLocator.count().catch(() => 0),
@@ -1391,7 +1399,22 @@ export class ChatPage {
         sendButtonLocator.isVisible().catch(() => false),
         sendButtonLocator.isEnabled().catch(() => false),
         userLocator.count().catch(() => 0),
+        this.page
+          .evaluate(() => {
+            const globalWindow = window as typeof window & {
+              __PLAYWRIGHT_CHAT_SIGNALS__?: Array<unknown>;
+            };
+
+            return Array.isArray(globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__)
+              ? globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__.length
+              : 0;
+          })
+          .catch(() => 0),
       ]);
+
+      if (signalCount > baselineChatSignalCount) {
+        return;
+      }
 
       if (spinnerCount > 0) {
         return;

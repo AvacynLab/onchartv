@@ -909,6 +909,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
         baselineStopButtonVisible: false,
         baselineSendButtonVisible: true,
         baselineSendButtonEnabled: true,
+        baselineChatSignalCount: 0,
         timeoutMs: 45_000,
       })
     ).rejects.toThrow("Timed out waiting for chat UI to start streaming");
@@ -919,6 +920,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
       baselineStopButtonVisible: false,
       baselineSendButtonVisible: true,
       baselineSendButtonEnabled: true,
+      baselineChatSignalCount: 0,
       timeoutMs: 45_000,
     });
     expect(toastWaitFor).toHaveBeenCalledWith({
@@ -1017,6 +1019,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
       baselineStopButtonVisible: false,
       baselineSendButtonVisible: true,
       baselineSendButtonEnabled: true,
+      baselineChatSignalCount: 0,
       timeoutMs: 5_000,
     });
 
@@ -1112,6 +1115,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
       baselineStopButtonVisible: false,
       baselineSendButtonVisible: true,
       baselineSendButtonEnabled: true,
+      baselineChatSignalCount: 0,
       timeoutMs: 5_000,
     });
 
@@ -1208,6 +1212,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
       baselineStopButtonVisible: false,
       baselineSendButtonVisible: true,
       baselineSendButtonEnabled: true,
+      baselineChatSignalCount: 0,
       timeoutMs: 5_000,
     });
 
@@ -1304,6 +1309,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
       baselineStopButtonVisible: false,
       baselineSendButtonVisible: true,
       baselineSendButtonEnabled: true,
+      baselineChatSignalCount: 0,
       timeoutMs: 5_000,
     });
 
