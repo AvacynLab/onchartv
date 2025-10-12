@@ -279,16 +279,22 @@ describe("ChatPage.waitForChatApiResponse", () => {
             } as unknown as ReturnType<Page["getByTestId"]>;
           }
 
-          if (testId === "send-button") {
-            return {
-              isVisible: vi.fn().mockResolvedValue(true),
-              isEnabled: vi.fn().mockResolvedValue(true),
-            } as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
-          throw new Error(`Unexpected test id ${testId}`);
+        if (testId === "send-button") {
+          return {
+            isVisible: vi.fn().mockResolvedValue(true),
+            isEnabled: vi.fn().mockResolvedValue(true),
+          } as unknown as ReturnType<Page["getByTestId"]>;
         }
-      );
+
+        if (testId === "message-user") {
+          return {
+            count: vi.fn().mockResolvedValue(0),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        throw new Error(`Unexpected test id ${testId}`);
+      }
+    );
       (harness.page.locator as ReturnType<typeof vi.fn>).mockImplementation(
         (selector: string) => {
           if (selector === '[data-testid="toast"], #automation-toast-bridge') {
@@ -389,9 +395,15 @@ describe("ChatPage.waitForChatApiResponse", () => {
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
 
-          throw new Error(`Unexpected test id ${testId}`);
+        if (testId === "message-user") {
+          return {
+            count: vi.fn().mockResolvedValue(0),
+          } as unknown as ReturnType<Page["getByTestId"]>;
         }
-      );
+
+        throw new Error(`Unexpected test id ${testId}`);
+      }
+    );
       (harness.page.locator as ReturnType<typeof vi.fn>).mockImplementation(
         (selector: string) => {
           if (selector === '[data-testid="toast"], #automation-toast-bridge') {
@@ -489,6 +501,12 @@ describe("ChatPage.waitForChatApiResponse", () => {
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
 
+        if (testId === "message-user") {
+          return {
+            count: vi.fn().mockResolvedValue(0),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
         throw new Error(`Unexpected test id ${testId}`);
       }
     );
@@ -519,6 +537,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
     await expect(
       (chatPage as any).waitForUiStreamingFallback({
         baseline: baselineSnapshot,
+        baselineUserMessageCount: 0,
         baselineStopButtonVisible: false,
         baselineSendButtonVisible: true,
         baselineSendButtonEnabled: true,
@@ -528,6 +547,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
 
     expect(pollSpy).toHaveBeenCalledWith({
       baseline: baselineSnapshot,
+      baselineUserMessageCount: 0,
       baselineStopButtonVisible: false,
       baselineSendButtonVisible: true,
       baselineSendButtonEnabled: true,
@@ -589,6 +609,12 @@ describe("ChatPage.waitForChatApiResponse", () => {
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
 
+        if (testId === "message-user") {
+          return {
+            count: vi.fn().mockResolvedValue(0),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
         throw new Error(`Unexpected test id: ${testId}`);
       }),
       locator: vi.fn((selector: string) => {
@@ -616,6 +642,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
 
     await (chatPage as any).waitForUiStreamingFallback({
       baseline: baselineSnapshot,
+      baselineUserMessageCount: 0,
       baselineStopButtonVisible: false,
       baselineSendButtonVisible: true,
       baselineSendButtonEnabled: true,
@@ -674,6 +701,12 @@ describe("ChatPage.waitForChatApiResponse", () => {
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
 
+        if (testId === "message-user") {
+          return {
+            count: vi.fn().mockResolvedValue(0),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
         throw new Error(`Unexpected test id: ${testId}`);
       }),
       locator: vi.fn((selector: string) => {
@@ -701,6 +734,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
 
     await (chatPage as any).waitForUiStreamingFallback({
       baseline: baselineSnapshot,
+      baselineUserMessageCount: 0,
       baselineStopButtonVisible: false,
       baselineSendButtonVisible: true,
       baselineSendButtonEnabled: true,
@@ -760,6 +794,12 @@ describe("ChatPage.waitForChatApiResponse", () => {
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
 
+        if (testId === "message-user") {
+          return {
+            count: vi.fn().mockResolvedValue(0),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
         throw new Error(`Unexpected test id: ${testId}`);
       }),
       locator: vi.fn((selector: string) => {
@@ -787,6 +827,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
 
     await (chatPage as any).waitForUiStreamingFallback({
       baseline: baselineSnapshot,
+      baselineUserMessageCount: 0,
       baselineStopButtonVisible: false,
       baselineSendButtonVisible: true,
       baselineSendButtonEnabled: true,
@@ -795,6 +836,101 @@ describe("ChatPage.waitForChatApiResponse", () => {
 
     expect(sendVisible).toHaveBeenCalledTimes(2);
     expect(sendEnabled).toHaveBeenCalledTimes(2);
+    expect(waitForTimeout).toHaveBeenCalled();
+  });
+
+  it("treats a new user message as evidence of streaming when other guards stay idle", async () => {
+    const toastWaitFor = vi.fn().mockImplementation(
+      () => new Promise(() => {})
+    );
+    const toastInnerText = vi.fn().mockResolvedValue("");
+    const assistantCount = vi.fn().mockResolvedValue(0);
+    const spinnerCount = vi.fn().mockResolvedValue(0);
+    const stopVisible = vi.fn().mockResolvedValue(false);
+    const sendVisible = vi.fn().mockResolvedValue(true);
+    const sendEnabled = vi.fn().mockResolvedValue(true);
+    const userCount = vi
+      .fn()
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(1);
+    const waitForTimeout = vi.fn().mockResolvedValue(undefined);
+
+    const page = {
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "toast") {
+          return {
+            waitFor: toastWaitFor,
+            innerText: toastInnerText,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant") {
+          return {
+            count: assistantCount,
+            nth: vi.fn(),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant-loading") {
+          return {
+            count: spinnerCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "stop-button") {
+          return {
+            isVisible: stopVisible,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "send-button") {
+          return {
+            isVisible: sendVisible,
+            isEnabled: sendEnabled,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-user") {
+          return {
+            count: userCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        throw new Error(`Unexpected test id: ${testId}`);
+      }),
+      locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+          return {
+            first: () => ({
+              waitFor: toastWaitFor,
+              innerText: toastInnerText,
+            }),
+          } as unknown as ReturnType<Page["locator"]>;
+        }
+
+        throw new Error(`Unexpected locator access: ${selector}`);
+      }),
+      waitForTimeout: waitForTimeout as unknown as Page["waitForTimeout"],
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+    const baselineSnapshot = {
+      count: 0,
+      latestArtifactCount: 0,
+      latestMessageId: null,
+      latestMessageText: "",
+    } as const;
+
+    await (chatPage as any).waitForUiStreamingFallback({
+      baseline: baselineSnapshot,
+      baselineUserMessageCount: 0,
+      baselineStopButtonVisible: false,
+      baselineSendButtonVisible: true,
+      baselineSendButtonEnabled: true,
+      timeoutMs: 5_000,
+    });
+
+    expect(userCount).toHaveBeenCalledTimes(2);
     expect(waitForTimeout).toHaveBeenCalled();
   });
 });
@@ -1188,6 +1324,12 @@ describe("ChatPage generation helpers", () => {
           return sendButtonLocator;
         }
 
+        if (testId === "message-user") {
+          return {
+            count: vi.fn().mockResolvedValue(0),
+          };
+        }
+
         throw new Error(`Unexpected test id: ${testId}`);
       }),
     } satisfies Partial<Page>;
@@ -1224,6 +1366,7 @@ describe("ChatPage generation helpers", () => {
     expect(waitSpy).toHaveBeenCalledOnce();
     expect(order.indexOf("capture-call")).toBeLessThan(order.indexOf("send-click"));
     expect((chatPage as any).pendingAssistantSnapshot).toEqual(baseline);
+    expect((chatPage as any).pendingUserMessageCount).toBe(0);
   });
 
   it("records a snapshot before sending a suggestion message", async () => {
@@ -1325,6 +1468,7 @@ describe("ChatPage generation helpers", () => {
         order.indexOf("suggestion-click")
       );
       expect((chatPage as any).pendingAssistantSnapshot).toEqual(baseline);
+      expect((chatPage as any).pendingUserMessageCount).toBe(0);
     } finally {
       ChatPage.expect = originalExpect;
     }
@@ -1368,6 +1512,7 @@ describe("ChatPage generation helpers", () => {
         if (testId === "message-user") {
           return {
             all: vi.fn().mockResolvedValue([userMessageLocator]),
+            count: vi.fn().mockResolvedValue(1),
           };
         }
 
@@ -1448,6 +1593,7 @@ describe("ChatPage generation helpers", () => {
     expect(messageEditorSendButton.waitFor).toHaveBeenNthCalledWith(2, {
       state: "detached",
     });
+    expect((chatPage as any).pendingUserMessageCount).toBe(1);
   });
 
   describe("waitForComposerReady", () => {

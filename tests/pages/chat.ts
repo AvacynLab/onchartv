@@ -69,6 +69,15 @@ export class ChatPage {
   private pendingVoteRequest: Promise<void> | null = null;
 
   /**
+   * Record how many user messages were present before dispatching the current
+   * action. Suggested quick actions append the bubble immediately while the UI
+   * may still be hydrating its streaming indicators. Falling back to this
+   * counter lets the polling guard unblock as soon as the DOM reflects the
+   * optimistic user echo, even if the stop button or spinner never toggles.
+   */
+  private pendingUserMessageCount = 0;
+
+  /**
    * Record whether the stop button was visible when the next generation cycle
    * started so polling can differentiate between the residual cooldown from the
    * previous run and a fresh streaming toggle.
@@ -717,6 +726,10 @@ export class ChatPage {
    */
   private async prepareForGeneration(): Promise<void> {
     this.pendingAssistantSnapshot = await this.captureAssistantSnapshot();
+    this.pendingUserMessageCount = await this.page
+      .getByTestId("message-user")
+      .count()
+      .catch(() => 0);
     this.pendingStopButtonWasVisible = await this.stopButton
       .isVisible()
       .catch(() => false);
@@ -1069,6 +1082,7 @@ export class ChatPage {
 
     await this.waitForUiStreamingFallback({
       baseline: baselineSnapshot,
+      baselineUserMessageCount: this.pendingUserMessageCount,
       baselineStopButtonVisible: this.pendingStopButtonWasVisible,
       baselineSendButtonVisible: this.pendingSendButtonWasVisible,
       baselineSendButtonEnabled: this.pendingSendButtonWasEnabled,
@@ -1078,12 +1092,14 @@ export class ChatPage {
 
   private async waitForUiStreamingFallback({
     baseline,
+    baselineUserMessageCount,
     baselineStopButtonVisible,
     baselineSendButtonVisible,
     baselineSendButtonEnabled,
     timeoutMs,
   }: {
     baseline: AssistantSnapshot;
+    baselineUserMessageCount: number;
     baselineStopButtonVisible: boolean;
     baselineSendButtonVisible: boolean;
     baselineSendButtonEnabled: boolean;
@@ -1108,6 +1124,7 @@ export class ChatPage {
 
     const streamingPromise = this.pollForStreamingChange({
       baseline,
+      baselineUserMessageCount,
       baselineStopButtonVisible,
       baselineSendButtonVisible,
       baselineSendButtonEnabled,
@@ -1168,12 +1185,14 @@ export class ChatPage {
 
   private async pollForStreamingChange({
     baseline,
+    baselineUserMessageCount,
     baselineStopButtonVisible,
     baselineSendButtonVisible,
     baselineSendButtonEnabled,
     timeoutMs,
   }: {
     baseline: AssistantSnapshot;
+    baselineUserMessageCount: number;
     baselineStopButtonVisible: boolean;
     baselineSendButtonVisible: boolean;
     baselineSendButtonEnabled: boolean;
@@ -1181,6 +1200,7 @@ export class ChatPage {
   }): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     const assistantLocator = this.page.getByTestId("message-assistant");
+    const userLocator = this.page.getByTestId("message-user");
     const spinnerLocator = this.page.getByTestId("message-assistant-loading");
     const stopButtonLocator = this.stopButton;
     const sendButtonLocator = this.sendButton;
@@ -1195,12 +1215,14 @@ export class ChatPage {
         stopVisible,
         sendVisible,
         sendEnabled,
+        userCount,
       ] = await Promise.all([
         assistantLocator.count().catch(() => 0),
         spinnerLocator.count().catch(() => 0),
         stopButtonLocator.isVisible().catch(() => false),
         sendButtonLocator.isVisible().catch(() => false),
         sendButtonLocator.isEnabled().catch(() => false),
+        userLocator.count().catch(() => 0),
       ]);
 
       if (spinnerCount > 0) {
@@ -1235,6 +1257,10 @@ export class ChatPage {
         }
       } else if (baselineStopButtonVisible && !hasObservedStopButtonHidden) {
         hasObservedStopButtonHidden = true;
+      }
+
+      if (userCount > baselineUserMessageCount) {
+        return;
       }
 
       if (assistantCount > baseline.count) {

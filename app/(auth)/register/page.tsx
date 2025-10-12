@@ -9,6 +9,8 @@ import { SubmitButton } from "@/components/submit-button";
 import { toast } from "@/components/toast";
 import { type RegisterActionState, register } from "../actions";
 
+const TOAST_GRACE_PERIOD_MS = 800;
+
 export default function Page() {
   const router = useRouter();
 
@@ -54,9 +56,13 @@ export default function Page() {
 
         /**
          * Give the success toast a brief window to render before navigating away
-         * so hermetic Playwright runs can reliably observe the notification.
+         * so hermetic Playwright runs can reliably observe the notification. A
+         * slightly longer pause keeps the automation bridge mounted even when
+         * slower CI runners are still hydrating the Sonner portal.
          */
-        await new Promise((resolve) => setTimeout(resolve, 300));
+        await new Promise((resolve) =>
+          setTimeout(resolve, TOAST_GRACE_PERIOD_MS)
+        );
 
         router.replace(destination);
       })();
