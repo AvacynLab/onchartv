@@ -17,6 +17,9 @@ export function isAutomationRuntime(): boolean {
     return true;
   }
 
+  // Avoid brittle userAgent heuristics. JSDOM advertises "HeadlessChrome" even
+  // in regular unit tests, which previously tricked the detector into thinking
+  // automation was active when a human-driven browser would behave normally.
   if (
     typeof navigator !== "undefined" &&
     typeof (navigator as Navigator & { webdriver?: boolean }).webdriver === "boolean" &&
@@ -25,15 +28,10 @@ export function isAutomationRuntime(): boolean {
     return true;
   }
 
-  if (
-    typeof navigator !== "undefined" &&
-    typeof navigator.userAgent === "string" &&
-    navigator.userAgent.toLowerCase().includes("headless")
-  ) {
-    return true;
-  }
-
   if (typeof window !== "undefined") {
+    // Some Playwright harnesses toggle an explicit window flag when
+    // bootstrapping helpers. Respect the opt-in so downstream utilities can
+    // stay deterministic even when env hints are unavailable.
     const globalWindow = window as typeof window & {
       __PLAYWRIGHT_AUTOMATION__?: boolean;
     };
