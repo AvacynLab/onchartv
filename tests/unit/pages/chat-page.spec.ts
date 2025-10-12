@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { BrowserContext, Page } from "@playwright/test";
 import { describe, expect, it, vi } from "vitest";
 
 import { chatModels } from "@/lib/ai/models";
@@ -95,11 +95,29 @@ describe("ChatPage navigation", () => {
 
 describe("ChatPage.waitForChatApiResponse", () => {
   const createEventHarness = () => {
-    const listeners: Record<string, Set<(...args: any[]) => unknown>> = {
-      request: new Set(),
-      response: new Set(),
-      requestfailed: new Set(),
-    };
+    const createListenerRegistry = () => ({
+      request: new Set<(...args: any[]) => unknown>(),
+      response: new Set<(...args: any[]) => unknown>(),
+      requestfailed: new Set<(...args: any[]) => unknown>(),
+    });
+
+    const pageListeners = createListenerRegistry();
+    const contextListeners = createListenerRegistry();
+
+    const createEmitter = (
+      registry: ReturnType<typeof createListenerRegistry>
+    ) => ({
+      on: vi.fn((event: string, handler: (...args: any[]) => unknown) => {
+        registry[event as keyof typeof registry]?.add(handler);
+      }),
+      off: vi.fn((event: string, handler: (...args: any[]) => unknown) => {
+        registry[event as keyof typeof registry]?.delete(handler);
+      }),
+    });
+
+    const browserContext = {
+      ...createEmitter(contextListeners),
+    } satisfies Partial<BrowserContext>;
 
     const stopButtonLocator = {
       isVisible: vi.fn().mockResolvedValue(false),
@@ -110,12 +128,8 @@ describe("ChatPage.waitForChatApiResponse", () => {
     };
 
     const page = {
-      on: vi.fn((event: string, handler: (...args: any[]) => unknown) => {
-        listeners[event]?.add(handler);
-      }),
-      off: vi.fn((event: string, handler: (...args: any[]) => unknown) => {
-        listeners[event]?.delete(handler);
-      }),
+      ...createEmitter(pageListeners),
+      context: vi.fn(() => browserContext as BrowserContext),
       locator: vi.fn((selector: string) => {
         throw new Error(`Unexpected locator access: ${selector}`);
       }),
@@ -134,21 +148,29 @@ describe("ChatPage.waitForChatApiResponse", () => {
       waitForTimeout: vi.fn().mockResolvedValue(undefined),
     } satisfies Partial<Page>;
 
-    const emit = async (
+    const emitFrom = async (
+      registry: ReturnType<typeof createListenerRegistry>,
       event: "request" | "response" | "requestfailed",
       payload: any
     ) => {
-      for (const handler of Array.from(listeners[event] ?? [])) {
+      for (const handler of Array.from(registry[event] ?? [])) {
         await handler(payload);
       }
     };
 
     return {
       page: page as Page,
-      emitRequest: (payload: any) => emit("request", payload),
-      emitResponse: (payload: any) => emit("response", payload),
-      emitFailure: (payload: any) => emit("requestfailed", payload),
-      listeners,
+      emitRequest: (payload: any) => emitFrom(pageListeners, "request", payload),
+      emitContextRequest: (payload: any) =>
+        emitFrom(contextListeners, "request", payload),
+      emitResponse: (payload: any) => emitFrom(pageListeners, "response", payload),
+      emitContextResponse: (payload: any) =>
+        emitFrom(contextListeners, "response", payload),
+      emitFailure: (payload: any) =>
+        emitFrom(pageListeners, "requestfailed", payload),
+      emitContextFailure: (payload: any) =>
+        emitFrom(contextListeners, "requestfailed", payload),
+      listeners: { page: pageListeners, context: contextListeners },
       sendButtonLocator,
       stopButtonLocator,
     };
@@ -162,13 +184,38 @@ describe("ChatPage.waitForChatApiResponse", () => {
 
       const waitPromise = (chatPage as any).waitForChatApiResponse();
 
-      expect(harness.listeners.request.size).toBe(1);
-      expect(harness.listeners.response.size).toBe(1);
-      expect(harness.listeners.requestfailed.size).toBe(1);
+      expect(harness.listeners.page.request.size).toBe(1);
+      expect(harness.listeners.page.response.size).toBe(1);
+      expect(harness.listeners.page.requestfailed.size).toBe(1);
+      expect(harness.listeners.context.request.size).toBe(1);
+      expect(harness.listeners.context.response.size).toBe(1);
+      expect(harness.listeners.context.requestfailed.size).toBe(1);
 
       await harness.emitResponse(
         createMockResponse({
           url: "http://localhost:3000/api/chat?chatId=abc",
+          ok: true,
+        })
+      );
+
+      await expect(waitPromise).resolves.toBeUndefined();
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("observes chat transports emitted directly by the browser context", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createEventHarness();
+      const chatPage = new ChatPage(harness.page);
+
+      const waitPromise = (chatPage as any).waitForChatApiResponse();
+
+      await harness.emitContextResponse(
+        createMockResponse({
+          url: "http://localhost:3000/api/chat",
           ok: true,
         })
       );
@@ -194,7 +241,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
         })
       );
 
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(15_000);
 
       await expect(waitPromise).resolves.toBeUndefined();
     } finally {
@@ -492,7 +539,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
 
       const waitPromise = (chatPage as any).waitForChatApiResponse();
 
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(15_000);
 
       await expect(waitPromise).resolves.toBeUndefined();
       expect(toastWaitFor).toHaveBeenCalledWith({

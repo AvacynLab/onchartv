@@ -933,21 +933,44 @@ export class ChatPage {
      * stop button appears.
      */
     const networkTimeoutMarker = Symbol("chat-network-timeout");
-    const networkTimeoutMs = 5_000;
+    const networkTimeoutMs = 15_000;
     const uiFallbackTimeoutMs = 45_000;
 
     try {
       await new Promise<void>((resolve, reject) => {
         const page = this.page;
+        const browserContext = page.context?.();
+        /**
+         * Network activity triggered by Playwright fixtures can originate from
+         * either the page itself (UI-driven fetches) or the enclosing browser
+         * context (APIRequestContext helpers). Observing both emitters ensures
+         * the guard reacts to transports initiated during hermetic setup,
+         * including the quick-action flows exercised by the CI suite.
+         */
+        const eventTargets: Array<{
+          on: (event: string, listener: (...args: unknown[]) => void) => void;
+          off: (event: string, listener: (...args: unknown[]) => void) => void;
+        }> = [page as any];
+
+        if (
+          browserContext &&
+          typeof (browserContext as { on?: unknown }).on === "function" &&
+          typeof (browserContext as { off?: unknown }).off === "function"
+        ) {
+          eventTargets.push(browserContext as any);
+        }
+
         let settled = false;
         let timer: ReturnType<typeof setTimeout>;
         let sawMatchingRequest = false;
 
         const cleanup = () => {
           clearTimeout(timer);
-          page.off("request", handleRequest);
-          page.off("response", handleResponse);
-          page.off("requestfailed", handleFailure);
+          for (const target of eventTargets) {
+            target.off("request", handleRequest);
+            target.off("response", handleResponse);
+            target.off("requestfailed", handleFailure);
+          }
         };
 
         const settle = (result: "resolve" | "reject", reason?: unknown) => {
@@ -1117,9 +1140,11 @@ export class ChatPage {
           settle("reject", networkTimeoutMarker);
         }, networkTimeoutMs);
 
-        page.on("request", handleRequest);
-        page.on("response", handleResponse);
-        page.on("requestfailed", handleFailure);
+        for (const target of eventTargets) {
+          target.on("request", handleRequest);
+          target.on("response", handleResponse);
+          target.on("requestfailed", handleFailure);
+        }
       });
 
       return;

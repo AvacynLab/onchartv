@@ -135,23 +135,54 @@ export async function signInPlaywrightUser({
     throw new Error("Playwright auth helper received an empty CSRF token");
   }
 
-  const signInResponse = await context.request.post(
-    `${baseURL}/api/auth/callback/credentials`,
-    {
-      form: {
-        csrfToken,
-        email,
-        password,
-        callbackUrl: `${baseURL}/`,
-      },
+  const maxSignInAttempts = 3;
+  let signInResponse: Awaited<ReturnType<typeof context.request.post>> | null =
+    null;
+  let lastSignInError: unknown = null;
+
+  for (let attempt = 1; attempt <= maxSignInAttempts; attempt += 1) {
+    try {
+      const response = await context.request.post(
+        `${baseURL}/api/auth/callback/credentials`,
+        {
+          form: {
+            csrfToken,
+            email,
+            password,
+            callbackUrl: `${baseURL}/`,
+          },
+        }
+      );
+
+      const status = response.status();
+
+      if (status >= 400) {
+        lastSignInError = new Error(
+          `status ${status}: ${await response.text()}`
+        );
+      } else {
+        signInResponse = response;
+        break;
+      }
+    } catch (error) {
+      lastSignInError = error;
+      signInResponse = null;
     }
-  );
 
-  const status = signInResponse.status();
+    if (attempt < maxSignInAttempts) {
+      const backoffMs = attempt * 250;
+      await new Promise((resolve) => setTimeout(resolve, backoffMs));
+    }
+  }
 
-  if (status >= 400) {
+  if (!signInResponse) {
+    const diagnostic =
+      lastSignInError instanceof Error
+        ? lastSignInError.message
+        : String(lastSignInError ?? "Unknown error");
+
     throw new Error(
-      `Playwright credentials sign-in failed with status ${status}: ${await signInResponse.text()}`
+      `Playwright credentials sign-in failed after ${maxSignInAttempts} attempts: ${diagnostic}`
     );
   }
 

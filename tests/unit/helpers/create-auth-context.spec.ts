@@ -287,6 +287,100 @@ describe("signInPlaywrightUser", () => {
       })
     ).rejects.toThrow(/Timed out waiting/);
   });
+
+  it("retries transient sign-in transport failures before succeeding", async () => {
+    const setTimeoutSpy = vi
+      .spyOn(global, "setTimeout")
+      .mockImplementation(((handler: (...args: any[]) => void) => {
+        handler();
+        return 0 as unknown as NodeJS.Timeout;
+      }) as unknown as typeof setTimeout);
+
+    try {
+      const post = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("read ECONNRESET"))
+        .mockResolvedValue({
+          status: () => 302,
+          text: async () => "",
+        });
+
+      const get = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: () => true,
+          json: async () => ({ csrfToken: "token" }),
+        })
+        .mockResolvedValueOnce({
+          ok: () => true,
+          json: async () => ({ user: { email } }),
+        });
+
+      const context = {
+        request: { get, post },
+      } as unknown as BrowserContext;
+
+      const waitPromise = signInPlaywrightUser({
+        baseURL,
+        context,
+        email,
+        password,
+        sessionPollIntervalMs: 1,
+        sessionPollTimeoutMs: 25,
+      });
+
+      await expect(waitPromise).resolves.toBeUndefined();
+
+      expect(post).toHaveBeenCalledTimes(2);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("throws a descriptive error after exhausting sign-in retries", async () => {
+    const setTimeoutSpy = vi
+      .spyOn(global, "setTimeout")
+      .mockImplementation(((handler: (...args: any[]) => void) => {
+        handler();
+        return 0 as unknown as NodeJS.Timeout;
+      }) as unknown as typeof setTimeout);
+
+    try {
+      const post = vi.fn().mockRejectedValue(new Error("ECONNRESET"));
+
+      const get = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: () => true,
+          json: async () => ({ csrfToken: "token" }),
+        });
+
+      const context = {
+        request: { get, post },
+      } as unknown as BrowserContext;
+
+      const waitPromise = signInPlaywrightUser({
+        baseURL,
+        context,
+        email,
+        password,
+        sessionPollIntervalMs: 1,
+        sessionPollTimeoutMs: 5,
+      });
+
+      const guardedPromise = waitPromise.catch((error) => {
+        throw error;
+      });
+
+      await expect(guardedPromise).rejects.toThrow(
+        /Playwright credentials sign-in failed after 3 attempts/
+      );
+
+      expect(post).toHaveBeenCalledTimes(3);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
 });
 
 describe("createAuthenticatedContext", () => {
