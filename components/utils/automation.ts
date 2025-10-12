@@ -21,15 +21,36 @@ export function isAutomationRuntime(): boolean {
     return true;
   }
 
-  // Avoid brittle userAgent heuristics. JSDOM advertises "HeadlessChrome" even
-  // in regular unit tests, which previously tricked the detector into thinking
-  // automation was active when a human-driven browser would behave normally.
-  if (
-    typeof navigator !== "undefined" &&
-    typeof (navigator as Navigator & { webdriver?: boolean }).webdriver === "boolean" &&
-    (navigator as Navigator & { webdriver?: boolean }).webdriver
-  ) {
-    return true;
+  /**
+   * When a browser runtime is available, favour explicit automation signals
+   * such as the `navigator.webdriver` flag or the headless markers that
+   * Playwright injects into the user agent string. Constrain the heuristics to
+   * well-known substrings so regular developer browsers (including jsdom's
+   * default agent) are unaffected.
+   */
+  if (typeof navigator !== "undefined") {
+    const automationNavigator = navigator as Navigator & {
+      webdriver?: boolean;
+      userAgent?: string;
+    };
+
+    if (typeof automationNavigator.webdriver === "boolean" && automationNavigator.webdriver) {
+      return true;
+    }
+
+    /**
+     * Playwright-driven browsers advertise explicit headless hints inside the
+     * user agent string (for example, "HeadlessChrome" or "Playwright").
+     * Rely on those markers when traditional webdriver flags are unavailable so
+     * hermetic automation still activates the required fallbacks without
+     * impacting regular developer browsers.
+     */
+    const automationUserAgentHints = [/HeadlessChrome/i, /Playwright/i];
+    const userAgent = automationNavigator.userAgent ?? "";
+
+    if (userAgent && automationUserAgentHints.some((pattern) => pattern.test(userAgent))) {
+      return true;
+    }
   }
 
   if (typeof window !== "undefined") {
