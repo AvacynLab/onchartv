@@ -105,6 +105,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
       request: new Set<(...args: any[]) => unknown>(),
       response: new Set<(...args: any[]) => unknown>(),
       requestfailed: new Set<(...args: any[]) => unknown>(),
+      signal: new Set<(...args: any[]) => unknown>(),
     });
 
     const createWaiterRegistry = () => ({
@@ -120,12 +121,23 @@ describe("ChatPage.waitForChatApiResponse", () => {
         predicate: (payload: unknown) => boolean;
         resolve: (payload: unknown) => void;
       }>(),
+      signal: new Set<{
+        predicate: (payload: unknown) => boolean;
+        resolve: (payload: unknown) => void;
+      }>(),
     });
 
     const pageListeners = createListenerRegistry();
     const contextListeners = createListenerRegistry();
     const pageWaiters = createWaiterRegistry();
     const contextWaiters = createWaiterRegistry();
+    /**
+     * The chat composer emits Playwright-facing “signals” in the browser
+     * context. The harness mirrors that counter so unit tests can simulate the
+     * race between network responses and UI instrumentation without reaching
+     * for real pages.
+     */
+    let chatSignalCount = 0;
 
     const registerWaiter = (
       registry: ReturnType<typeof createWaiterRegistry>,
@@ -306,10 +318,43 @@ describe("ChatPage.waitForChatApiResponse", () => {
 
         throw new Error(`Unexpected test id access: ${testId}`);
       }),
-      waitForFunction: vi.fn(),
+      waitForFunction: vi.fn(
+        (
+          _predicate: (...args: unknown[]) => unknown,
+          baseline: unknown,
+          _options?: { timeout?: number }
+        ) => {
+          const numericBaseline =
+            typeof baseline === "number" ? baseline : 0;
+
+          if (chatSignalCount > numericBaseline) {
+            return Promise.resolve(undefined);
+          }
+
+          /**
+           * The real implementation waits for `window.__PLAYWRIGHT_CHAT_SIGNALS__`
+           * to gain new entries. Replicate that by registering a waiter that
+           * resolves once the in-memory counter surpasses the captured
+           * baseline.
+           */
+          return registerWaiter(
+            pageWaiters,
+            "signal",
+            (payload: unknown) =>
+              typeof payload === "object" &&
+              payload !== null &&
+              "count" in (payload as { count?: unknown }) &&
+              typeof (payload as { count?: unknown }).count === "number" &&
+              ((payload as { count: number }).count > numericBaseline)
+          ).then(() => undefined);
+        }
+      ),
       waitForTimeout: vi
         .fn(() => Promise.resolve())
         .mockName("page.waitForTimeout"),
+      evaluate: vi
+        .fn(() => Promise.resolve(chatSignalCount))
+        .mockName("page.evaluate"),
     } satisfies Partial<Page>;
 
     return {
@@ -326,6 +371,20 @@ describe("ChatPage.waitForChatApiResponse", () => {
         emitFrom(pageListeners, pageWaiters, "requestfailed", payload),
       emitContextFailure: (payload: any) =>
         emitFrom(contextListeners, contextWaiters, "requestfailed", payload),
+      emitSignal: (increment = 1) => {
+        /**
+         * Increment the synthetic signal buffer so the `waitForFunction`
+         * promise resolves exactly as it would when the browser pushes a new
+         * entry into `window.__PLAYWRIGHT_CHAT_SIGNALS__`.
+         */
+        chatSignalCount += increment;
+        return emitFrom(pageListeners, pageWaiters, "signal", {
+          count: chatSignalCount,
+        });
+      },
+      setSignalCount: (nextCount: number) => {
+        chatSignalCount = nextCount;
+      },
       listeners: { page: pageListeners, context: contextListeners },
       sendButtonLocator,
       stopButtonLocator,
@@ -348,6 +407,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
     (chatPage as any).pendingStopButtonWasVisible = false;
     (chatPage as any).pendingSendButtonWasVisible = true;
     (chatPage as any).pendingSendButtonWasEnabled = true;
+    (chatPage as any).pendingChatSignalCount = 0;
   };
 
   it("resolves once POST /api/chat responds, including query parameters", async () => {
@@ -368,6 +428,30 @@ describe("ChatPage.waitForChatApiResponse", () => {
       );
 
       await expect(waitPromise).resolves.toBeUndefined();
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("resolves as soon as a Playwright chat signal is emitted", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createEventHarness();
+      const chatPage = new ChatPage(harness.page);
+      stubFallback(chatPage);
+      seedPendingSnapshot(chatPage);
+
+      const waitPromise = (chatPage as any).waitForChatApiResponse();
+
+      await harness.emitSignal();
+
+      await expect(waitPromise).resolves.toBeUndefined();
+      expect(harness.page.waitForFunction).toHaveBeenCalledWith(
+        expect.any(Function),
+        0,
+        expect.objectContaining({ timeout: expect.any(Number) })
+      );
     } finally {
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
@@ -914,6 +998,9 @@ describe("ChatPage.waitForChatApiResponse", () => {
         throw new Error(`Unexpected locator access: ${selector}`);
       }),
       waitForTimeout: waitForTimeout as unknown as Page["waitForTimeout"],
+      evaluate: vi
+        .fn(() => Promise.resolve(0))
+        .mockName("page.evaluate"),
     } satisfies Partial<Page>;
 
     const chatPage = new ChatPage(page as Page);
@@ -1006,6 +1093,9 @@ describe("ChatPage.waitForChatApiResponse", () => {
         throw new Error(`Unexpected locator access: ${selector}`);
       }),
       waitForTimeout: waitForTimeout as unknown as Page["waitForTimeout"],
+      evaluate: vi
+        .fn(() => Promise.resolve(0))
+        .mockName("page.evaluate"),
     } satisfies Partial<Page>;
 
     const chatPage = new ChatPage(page as Page);
@@ -1099,6 +1189,9 @@ describe("ChatPage.waitForChatApiResponse", () => {
         throw new Error(`Unexpected locator access: ${selector}`);
       }),
       waitForTimeout: waitForTimeout as unknown as Page["waitForTimeout"],
+      evaluate: vi
+        .fn(() => Promise.resolve(0))
+        .mockName("page.evaluate"),
     } satisfies Partial<Page>;
 
     const chatPage = new ChatPage(page as Page);
@@ -1349,6 +1442,9 @@ describe("ChatPage vote helpers", () => {
         throw new Error(`Unexpected locator access: ${selector}`);
       }),
       waitForTimeout,
+      evaluate: vi
+        .fn(() => Promise.resolve(0))
+        .mockName("page.evaluate"),
     } satisfies Partial<Page>;
 
     const originalExpect = ChatPage.expect;
@@ -1421,6 +1517,9 @@ describe("ChatPage vote helpers", () => {
         throw new Error(`Unexpected locator access: ${selector}`);
       }),
       waitForTimeout,
+      evaluate: vi
+        .fn(() => Promise.resolve(0))
+        .mockName("page.evaluate"),
     } satisfies Partial<Page>;
 
     const chatPage = new ChatPage(page as Page);
@@ -1480,6 +1579,9 @@ describe("ChatPage vote helpers", () => {
         throw new Error(`Unexpected locator access: ${selector}`);
       }),
       waitForTimeout,
+      evaluate: vi
+        .fn(() => Promise.resolve(0))
+        .mockName("page.evaluate"),
     } satisfies Partial<Page>;
 
     const chatPage = new ChatPage(page as Page);
@@ -1616,6 +1718,9 @@ describe("ChatPage generation helpers", () => {
 
         throw new Error(`Unexpected test id: ${testId}`);
       }),
+      evaluate: vi
+        .fn(() => Promise.resolve(0))
+        .mockName("page.evaluate"),
     } satisfies Partial<Page>;
 
     const chatPage = new ChatPage(page as Page);

@@ -100,6 +100,14 @@ export class ChatPage {
    */
   private pendingSendButtonWasEnabled = false;
 
+  /**
+   * Mirror the automation bridge's chat signal counter so the network guard can
+   * observe synthetic events emitted by the client bundle whenever a submission
+   * is dispatched. The signals complement Playwright's network events and keep
+   * the helpers resilient when fetch hooks miss the streaming transport.
+   */
+  private pendingChatSignalCount = 0;
+
   constructor(page: Page) {
     this.page = page;
   }
@@ -739,6 +747,17 @@ export class ChatPage {
     this.pendingSendButtonWasEnabled = await this.sendButton
       .isEnabled()
       .catch(() => false);
+    this.pendingChatSignalCount = await this.page
+      .evaluate(() => {
+        const globalWindow = window as typeof window & {
+          __PLAYWRIGHT_CHAT_SIGNALS__?: Array<unknown>;
+        };
+
+        return Array.isArray(globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__)
+          ? globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__.length
+          : 0;
+      })
+      .catch(() => 0);
   }
 
   private async waitForComposerReady(
@@ -961,11 +980,13 @@ export class ChatPage {
     const page = this.page;
     const browserContext =
       typeof page.context === "function" ? page.context() : null;
+    const baselineSignalCount = this.pendingChatSignalCount;
 
     type NetworkEvent =
       | { kind: "request"; request: unknown }
       | { kind: "response"; response: unknown }
-      | { kind: "failure"; request: unknown };
+      | { kind: "failure"; request: unknown }
+      | { kind: "signal" };
 
     const requestMatcher = (candidate: unknown) =>
       this.matchesChatApiRequest(candidate as any);
@@ -982,6 +1003,22 @@ export class ChatPage {
         })
       );
     };
+
+    pushWatcher(
+      page
+        .waitForFunction(
+          (baseline) => {
+            const globalWindow = window as typeof window & {
+              __PLAYWRIGHT_CHAT_SIGNALS__?: Array<unknown>;
+            };
+            const signals = globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__;
+            return Array.isArray(signals) && signals.length > baseline;
+          },
+          baselineSignalCount,
+          { timeout: networkTimeoutMs }
+        )
+        .then(() => ({ kind: "signal" }))
+    );
 
     pushWatcher(
       page
@@ -1148,6 +1185,10 @@ export class ChatPage {
         throw new Error(
           `Chat API request failed before receiving a response${diagnostic}`
         );
+      }
+
+      if (networkResult.kind === "signal") {
+        return;
       }
 
       if (networkResult.kind === "request") {

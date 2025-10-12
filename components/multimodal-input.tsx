@@ -279,6 +279,31 @@ function PureMultimodalInput({
       const hasText = trimmedInput.length > 0;
       const hasAttachments = effectiveAttachments.length > 0;
 
+      const emitPlaywrightSignal = (phase: string) => {
+        if (
+          typeof window === "undefined" ||
+          process.env.NEXT_PUBLIC_PLAYWRIGHT !== "true"
+        ) {
+          return;
+        }
+
+        const globalWindow = window as Window & {
+          __PLAYWRIGHT_CHAT_SIGNALS__?: Array<{
+            phase: string;
+            timestamp: number;
+          }>;
+        };
+
+        if (!Array.isArray(globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__)) {
+          globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__ = [];
+        }
+
+        globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__?.push({
+          phase,
+          timestamp: performance.now(),
+        });
+      };
+
       if (uploadQueue.length > 0) {
         toast.error(
           "Please wait for the files to finish uploading before sending!"
@@ -325,12 +350,16 @@ function PureMultimodalInput({
         });
       }
 
+      emitPlaywrightSignal("submit");
+
       try {
         await sendMessage({
           role: "user",
           parts: payloadParts,
         });
+        emitPlaywrightSignal("sent");
       } catch (error) {
+        emitPlaywrightSignal("error");
         console.error("Failed to dispatch chat prompt", error);
         toast.error("We couldn't send your message. Please try again.");
         return false;
