@@ -2,6 +2,7 @@
 
 import { motion } from "framer-motion";
 import React, { memo } from "react";
+import { DEFAULT_ONBOARDING_SUGGESTION } from "@/lib/constants";
 import { isFinanceFeatureEnabledClient } from "@/lib/feature-flags";
 import { Suggestion } from "./elements/suggestion";
 import type { VisibilityType } from "./visibility-selector";
@@ -27,7 +28,7 @@ function PureSuggestedActions({
    * regression suite continues to assert the deterministic Next.js welcome
    * response.
    */
-  const baselineSuggestions = ["What are the advantages of using Next.js?"];
+  const baselineSuggestions = [DEFAULT_ONBOARDING_SUGGESTION];
   const financeSuggestions = [
     "/chart BTCUSD 1D",
     "/backtest AAPL 2018-01-01 2020-12-31 50 200",

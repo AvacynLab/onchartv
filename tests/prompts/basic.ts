@@ -1,5 +1,7 @@
 import type { ModelMessage } from "ai";
 
+import { DEFAULT_ONBOARDING_SUGGESTION } from "@/lib/constants";
+
 export const TEST_PROMPTS: Record<string, ModelMessage> = {
   USER_SKY: {
     role: "user",
@@ -16,7 +18,7 @@ export const TEST_PROMPTS: Record<string, ModelMessage> = {
   USER_NEXTJS: {
     role: "user",
     content: [
-      { type: "text", text: "What are the advantages of using Next.js?" },
+      { type: "text", text: DEFAULT_ONBOARDING_SUGGESTION },
     ],
   },
   USER_IMAGE_ATTACHMENT: {

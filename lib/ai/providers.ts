@@ -16,6 +16,7 @@ type NodeModule = typeof import("module");
 import type { ModelMessage } from "ai";
 
 import { isPlaywrightLikeEnvironment } from "./playwright-env";
+import { DEFAULT_ONBOARDING_SUGGESTION } from "../constants";
 
 type CreateOpenAI = typeof import("@ai-sdk/openai").createOpenAI;
 
@@ -409,9 +410,7 @@ function resolveStandardPrompt(
     ];
   }
 
-  if (
-    matchesSingleTextMessage(message, "What are the advantages of using Next.js?")
-  ) {
+  if (matchesSingleTextMessage(message, DEFAULT_ONBOARDING_SUGGESTION)) {
     return [
       ...buildTextDeltas("With Next.js, you can ship fast!"),
       buildFinishChunk({ inputTokens: 3, outputTokens: 10, totalTokens: 13 }),

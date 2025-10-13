@@ -2,6 +2,7 @@ import type { BrowserContext, Page } from "@playwright/test";
 import { describe, expect, it, vi } from "vitest";
 
 import { chatModels } from "@/lib/ai/models";
+import { DEFAULT_ONBOARDING_SUGGESTION } from "@/lib/constants";
 
 import { ChatPage } from "../../pages/chat";
 
@@ -1445,6 +1446,132 @@ describe("ChatPage.waitForChatApiResponse", () => {
     expect(waitForTimeout).not.toHaveBeenCalled();
   });
 
+  it("waits until the suggestion prefill appears before treating composer clearing as progress", async () => {
+    const toastWaitFor = vi.fn().mockImplementation(
+      () => new Promise(() => {})
+    );
+    const toastInnerText = vi.fn().mockResolvedValue("");
+    const assistantCount = vi.fn().mockResolvedValue(0);
+    const spinnerCount = vi.fn().mockResolvedValue(0);
+    const stopVisible = vi.fn().mockResolvedValue(false);
+    const sendVisible = vi.fn().mockResolvedValue(true);
+    const sendEnabled = vi.fn().mockResolvedValue(true);
+    const userCount = vi.fn().mockResolvedValue(0);
+    const suggestedActionsVisible = vi.fn().mockResolvedValue(true);
+    const composerValues = [
+      "",
+      "Run the quarterly planning session",
+      "",
+    ];
+    const composerInputValue = vi
+      .fn<() => Promise<string>>()
+      .mockImplementation(() =>
+        Promise.resolve(
+          composerValues.length > 0 ? composerValues.shift() ?? "" : ""
+        )
+      );
+    const waitForTimeout = vi.fn().mockResolvedValue(undefined);
+
+    const page = {
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "toast") {
+          return {
+            waitFor: toastWaitFor,
+            innerText: toastInnerText,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant") {
+          return {
+            count: assistantCount,
+            nth: vi.fn(),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant-loading") {
+          return {
+            count: spinnerCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "stop-button") {
+          return {
+            isVisible: stopVisible,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "send-button") {
+          return {
+            isVisible: sendVisible,
+            isEnabled: sendEnabled,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-user") {
+          return {
+            count: userCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "suggested-actions") {
+          return {
+            isVisible: suggestedActionsVisible,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: composerInputValue,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        throw new Error(`Unexpected test id: ${testId}`);
+      }),
+      locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+          return {
+            first: () => ({
+              waitFor: toastWaitFor,
+              innerText: toastInnerText,
+            }),
+          } as unknown as ReturnType<Page["locator"]>;
+        }
+
+        throw new Error(`Unexpected locator access: ${selector}`);
+      }),
+      waitForTimeout: waitForTimeout as unknown as Page["waitForTimeout"],
+      evaluate: vi.fn(() => Promise.resolve(0)),
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+    (chatPage as any).pendingComposerPrefill =
+      "Run the quarterly planning session";
+
+    const baselineSnapshot = {
+      count: 0,
+      latestArtifactCount: 0,
+      latestMessageId: null,
+      latestMessageText: "",
+    } as const;
+
+    await expect(
+      (chatPage as any).pollForStreamingChange({
+        baseline: baselineSnapshot,
+        baselineUserMessageCount: 0,
+        baselineStopButtonVisible: false,
+        baselineSendButtonVisible: true,
+        baselineSendButtonEnabled: true,
+        baselineChatSignalCount: 0,
+        baselineComposerValue: "Run the quarterly planning session",
+        baselineSuggestedActionsVisible: true,
+        timeoutMs: 5_000,
+      })
+    ).resolves.toBeUndefined();
+
+    expect(waitForTimeout).toHaveBeenCalledWith(50);
+    expect(composerInputValue).toHaveBeenCalledTimes(3);
+  });
+
   it("treats hidden suggested actions as evidence of streaming", async () => {
     const toastWaitFor = vi.fn().mockImplementation(
       () => new Promise(() => {})
@@ -2145,6 +2272,10 @@ describe("ChatPage generation helpers", () => {
       click: vi.fn(async () => {
         order.push("suggestion-click");
       }),
+      innerText: vi.fn().mockResolvedValue(DEFAULT_ONBOARDING_SUGGESTION),
+      textContent: vi.fn().mockResolvedValue(DEFAULT_ONBOARDING_SUGGESTION),
+      getAttribute: vi.fn().mockResolvedValue(null),
+      evaluate: vi.fn().mockResolvedValue(""),
     };
     const userMessagesLocator = {
       count: vi.fn().mockResolvedValue(0),
@@ -2178,6 +2309,10 @@ describe("ChatPage generation helpers", () => {
           };
         }
 
+        if (testId === "suggested-actions") {
+          return { isVisible: vi.fn().mockResolvedValue(true) };
+        }
+
         if (testId === "send-button") {
           return {
             click: vi.fn(),
@@ -2194,6 +2329,7 @@ describe("ChatPage generation helpers", () => {
 
         throw new Error(`Unexpected test id: ${testId}`);
       }),
+      evaluate: vi.fn().mockResolvedValue(0),
     } satisfies Partial<Page>;
 
     const chatPage = new ChatPage(page as Page);
@@ -2236,12 +2372,154 @@ describe("ChatPage generation helpers", () => {
       expect(captureSpy).toHaveBeenCalledOnce();
       expect(waitSpy).toHaveBeenCalledOnce();
       expect(toBeVisible).toHaveBeenCalledWith({ timeout: 15_000 });
-      expect(toHaveCount).toHaveBeenCalledWith(1, { timeout: 5_000 });
+      expect(toHaveCount).toHaveBeenCalledWith(1, { timeout: 7_500 });
       expect(order.indexOf("capture-call")).toBeLessThan(
         order.indexOf("suggestion-click")
       );
       expect((chatPage as any).pendingAssistantSnapshot).toEqual(baseline);
       expect((chatPage as any).pendingUserMessageCount).toBe(0);
+    } finally {
+      ChatPage.expect = originalExpect;
+    }
+  });
+
+  it("retries a suggestion when the initial user bubble never appears", async () => {
+    const order: string[] = [];
+    const suggestionText = DEFAULT_ONBOARDING_SUGGESTION;
+    const suggestionLocator = {
+      click: vi.fn(async () => {
+        order.push("suggestion-click");
+      }),
+      innerText: vi.fn().mockResolvedValue(suggestionText),
+      textContent: vi.fn().mockResolvedValue(suggestionText),
+      getAttribute: vi.fn().mockResolvedValue(null),
+      evaluate: vi.fn().mockResolvedValue(""),
+    };
+    const userMessagesLocator = {
+      count: vi.fn().mockResolvedValue(0),
+    };
+    const sendButtonLocator = {
+      click: vi.fn(async () => {
+        order.push("send-click");
+      }),
+      isEnabled: vi.fn().mockResolvedValue(true),
+      isVisible: vi.fn().mockResolvedValue(true),
+    };
+    const multimodalLocator = {
+      inputValue: vi
+        .fn()
+        .mockResolvedValueOnce("")
+        .mockResolvedValue(suggestionText),
+      click: vi.fn(),
+      fill: vi.fn(),
+      type: vi.fn(),
+    };
+    const stopButtonLocator = {
+      isVisible: vi.fn().mockResolvedValue(false),
+    };
+    const page = {
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "suggested-action-0") {
+          return suggestionLocator;
+        }
+
+        if (testId === "message-user") {
+          return userMessagesLocator;
+        }
+
+        if (testId === "multimodal-input") {
+          return multimodalLocator;
+        }
+
+        if (testId === "send-button") {
+          return sendButtonLocator;
+        }
+
+        if (testId === "stop-button") {
+          return stopButtonLocator;
+        }
+
+        if (testId === "suggested-actions") {
+          return { isVisible: vi.fn().mockResolvedValue(true) };
+        }
+
+        throw new Error(`Unexpected test id: ${testId}`);
+      }),
+      evaluate: vi.fn().mockResolvedValue(0),
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+
+    const prepareSpy = vi
+      .spyOn(chatPage as any, "prepareForGeneration")
+      .mockImplementation(async (options?: { composerValueOverride?: string }) => {
+        if (options?.composerValueOverride) {
+          order.push(`prepare-override:${options.composerValueOverride}`);
+        } else {
+          order.push("prepare");
+        }
+
+        await (chatPage as any).captureAssistantSnapshot();
+      });
+    const waitSpy = vi
+      .spyOn(chatPage as any, "waitForChatApiResponse")
+      .mockImplementation(async () => {
+        order.push("wait");
+      });
+    const composerReadySpy = vi
+      .spyOn(chatPage as any, "waitForComposerReady")
+      .mockImplementation(async (message: string) => {
+        order.push(`composer-ready:${message}`);
+      });
+    const captureSpy = vi
+      .spyOn(chatPage as any, "captureAssistantSnapshot")
+      .mockResolvedValue({
+        count: 0,
+        latestArtifactCount: 0,
+        latestMessageId: null,
+        latestMessageText: "",
+      });
+
+    const originalExpect = ChatPage.expect;
+    const toBeVisible = vi.fn().mockResolvedValue(undefined);
+    const toHaveCount = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("no user message"))
+      .mockResolvedValueOnce(undefined);
+
+    ChatPage.expect = vi
+      .fn((locator: unknown) => {
+        if (locator === suggestionLocator) {
+          return { toBeVisible } as any;
+        }
+
+        if (locator === userMessagesLocator) {
+          return { toHaveCount } as any;
+        }
+
+        throw new Error("Unexpected locator passed to ChatPage.expect");
+      }) as any;
+
+    try {
+      await expect(chatPage.sendUserMessageFromSuggestion()).resolves.toBeUndefined();
+
+      expect(captureSpy).toHaveBeenCalledTimes(2);
+      expect(prepareSpy).toHaveBeenCalledTimes(2);
+      expect(prepareSpy).toHaveBeenNthCalledWith(1, {
+        composerValueOverride: suggestionText,
+      });
+      const secondCallArgs = prepareSpy.mock.calls[1] ?? [];
+      expect(secondCallArgs).toHaveLength(0);
+      expect(waitSpy).toHaveBeenCalledTimes(2);
+      expect(composerReadySpy).toHaveBeenCalledWith(suggestionText);
+      expect(sendButtonLocator.click).toHaveBeenCalledTimes(1);
+      expect(toBeVisible).toHaveBeenCalledWith({ timeout: 15_000 });
+      expect(toHaveCount).toHaveBeenNthCalledWith(1, 1, { timeout: 7_500 });
+      expect(toHaveCount).toHaveBeenNthCalledWith(2, 1, { timeout: 10_000 });
+      expect(order).toContain("suggestion-click");
+      expect(order).toContain(`prepare-override:${suggestionText}`);
+      expect(order).toContain("prepare");
+      expect(order.filter((label) => label === "wait").length).toBe(2);
     } finally {
       ChatPage.expect = originalExpect;
     }

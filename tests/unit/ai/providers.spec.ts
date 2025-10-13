@@ -3,6 +3,8 @@ import { createRequire } from "node:module";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelMessage } from "ai";
 
+import { DEFAULT_ONBOARDING_SUGGESTION } from "@/lib/constants";
+
 const createOpenAIMock = vi.fn(() => ({
   languageModel: vi.fn((modelId: string) => ({
     specificationVersion: "v2",
@@ -400,7 +402,7 @@ describe("loadMockLanguageModels", () => {
         {
           role: "user",
           content: [
-            { type: "text", text: "What are the advantages of using Next.js?" },
+            { type: "text", text: DEFAULT_ONBOARDING_SUGGESTION },
           ],
         },
       ],

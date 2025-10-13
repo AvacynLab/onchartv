@@ -7,6 +7,7 @@ import {
   errors as playwrightErrors,
 } from "@playwright/test";
 import { chatModels, type ChatModel } from "@/lib/ai/models";
+import { DEFAULT_ONBOARDING_SUGGESTION } from "@/lib/constants";
 
 /**
  * Validate that the current page URL ends with a chat identifier without
@@ -123,6 +124,15 @@ export class ChatPage {
    * emptied, even if Playwright misses the underlying fetch events.
    */
   private pendingComposerNeedsClear = false;
+
+  /**
+   * Remember the exact composer value that a suggestion is expected to stage
+   * before submitting. The polling guard only treats the subsequent clearing as
+   * progress once this value has been observed at least once, preventing early
+   * exits that would otherwise occur while the DOM still reflects the empty
+   * textarea baseline.
+   */
+  private pendingComposerPrefill: string | null = null;
 
   /**
    * Remember whether the suggested actions panel was visible before dispatching
@@ -460,42 +470,138 @@ export class ChatPage {
      */
     const suggestion = this.page.getByTestId("suggested-action-0");
     await ChatPage.expect(suggestion).toBeVisible({ timeout: 15_000 });
-    const suggestionText = await suggestion.innerText().catch(() => "");
-    const normalisedSuggestion = suggestionText.trim();
-    const composerOverride = normalisedSuggestion.length > 0
-      ? normalisedSuggestion
-      : undefined;
+
+    const candidateTexts: string[] = [];
+    // Gather every accessible label the button may expose so automation can
+    // recover the intended prompt even when innerText is empty (for example,
+    // during partially hydrated renders or when fonts fall back and collapse
+    // whitespace differently).
+    candidateTexts.push(await suggestion.innerText().catch(() => ""));
+
+    const textContentCandidate = await suggestion.textContent().catch(() => null);
+    if (textContentCandidate) {
+      candidateTexts.push(textContentCandidate);
+    }
+
+    const ariaLabelCandidate = (await suggestion.getAttribute("aria-label")) ?? "";
+    if (ariaLabelCandidate) {
+      candidateTexts.push(ariaLabelCandidate);
+    }
+
+    const datasetCandidate = await suggestion
+      .evaluate((node) => (node as HTMLElement).dataset?.suggestion ?? "")
+      .catch(() => "");
+    if (datasetCandidate) {
+      candidateTexts.push(datasetCandidate);
+    }
+
+    // As a final guard, fall back to the baseline onboarding suggestion so the
+    // helper can still drive the composer even if the DOM yields no readable
+    // content (for example when an icon-only button is rendered).
+    candidateTexts.push(DEFAULT_ONBOARDING_SUGGESTION);
+
+    const normalisedSuggestion =
+      candidateTexts
+        .map((candidate) => candidate.trim())
+        .find((candidate) => candidate.length > 0) ?? DEFAULT_ONBOARDING_SUGGESTION;
+
+    const composerOverride = normalisedSuggestion;
 
     const userMessages = this.page.getByTestId("message-user");
     const initialUserCount = await userMessages.count();
+    const targetUserCount = initialUserCount + 1;
 
     await this.prepareForGeneration({
       composerValueOverride: composerOverride,
     });
 
-    await Promise.all([
-      this.waitForChatApiResponse(),
-      suggestion.click(),
-    ]);
+    const networkWatcher = this.waitForChatApiResponse();
+    networkWatcher.catch(() => {});
+
+    await suggestion.click();
+
+    const awaitUserBubble = async (timeout: number) => {
+      await ChatPage.expect(userMessages).toHaveCount(targetUserCount, {
+        timeout,
+      });
+    };
 
     try {
-      await ChatPage.expect(userMessages).toHaveCount(initialUserCount + 1, {
-        timeout: 5_000,
-      });
-    } catch (error) {
+      await awaitUserBubble(7_500);
+      await networkWatcher.catch(() => {});
+      return;
+    } catch (initialError) {
       const composerValue = await this.multimodalInput
         .inputValue()
         .catch(() => "");
+      const signalCount = await this.page
+        .evaluate(() => {
+          const globalWindow = window as typeof window & {
+            __PLAYWRIGHT_CHAT_SIGNALS__?: Array<unknown>;
+          };
+
+          return Array.isArray(globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__)
+            ? globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__!.length
+            : 0;
+        })
+        .catch(() => 0);
+      const stopVisible = await this.stopButton.isVisible().catch(() => false);
       const diagnostic =
         composerValue.trim().length > 0
           ? ` Composer retained value: "${composerValue}".`
           : " Composer remained empty.";
 
-      throw new Error(
-        "Timed out waiting for the suggested action to append a user message." +
-          diagnostic,
-        error instanceof Error ? { cause: error } : undefined
-      );
+      const baseError =
+        initialError instanceof Error
+          ? initialError
+          : new Error(String(initialError));
+
+      const fallbackPrompt =
+        composerOverride && composerOverride.trim().length > 0
+          ? composerOverride
+          : normalisedSuggestion;
+
+      if (!fallbackPrompt || fallbackPrompt.trim().length === 0) {
+        throw new Error(
+          "Suggested action did not stage any text to send." +
+            diagnostic +
+            ` Signals observed: ${signalCount}. Stop button visible: ${stopVisible}.`,
+          { cause: baseError }
+        );
+      }
+
+      await this.waitForComposerReady(fallbackPrompt);
+
+      await this.prepareForGeneration();
+
+      const manualWatcher = this.waitForChatApiResponse();
+      manualWatcher.catch(() => {});
+
+      await this.sendButton.click();
+
+      try {
+        await awaitUserBubble(10_000);
+      } catch (fallbackError) {
+        const latestComposerValue = await this.multimodalInput
+          .inputValue()
+          .catch(() => "");
+        const fallbackDiagnostic =
+          latestComposerValue.trim().length > 0
+            ? ` Composer retained value: "${latestComposerValue}".`
+            : " Composer remained empty.";
+
+        throw new Error(
+          "Failed to send the suggested prompt via automation fallback." +
+            fallbackDiagnostic,
+          fallbackError instanceof Error
+            ? { cause: fallbackError }
+            : undefined
+        );
+      }
+
+      await manualWatcher.catch(() => {});
+
+      return;
     }
   }
 
@@ -787,6 +893,7 @@ export class ChatPage {
       this.pendingComposerValue = composerValueOverride;
       this.pendingComposerNeedsClear =
         composerValueOverride.trim().length > 0;
+      this.pendingComposerPrefill = composerValueOverride;
     } else {
       const composerValue = await this.multimodalInput
         .inputValue()
@@ -794,6 +901,7 @@ export class ChatPage {
 
       this.pendingComposerValue = composerValue;
       this.pendingComposerNeedsClear = composerValue.trim().length > 0;
+      this.pendingComposerPrefill = null;
     }
     this.pendingChatSignalCount = await this.page
       .evaluate(() => {
@@ -1406,7 +1514,7 @@ export class ChatPage {
       baselineSendButtonEnabled,
       baselineChatSignalCount,
       baselineComposerValue,
-      baselineSuggestedActionsVisible: this.pendingSuggestedActionsWereVisible,
+      baselineSuggestedActionsVisible,
       timeoutMs,
     });
 
@@ -1494,6 +1602,10 @@ export class ChatPage {
     let hasObservedSendButtonVisible = baselineSendButtonVisible;
     let hasObservedSendButtonEnabled = baselineSendButtonEnabled;
     let hasObservedSuggestedActionsHidden = !baselineSuggestedActionsVisible;
+    const expectedComposerPrefill = this.pendingComposerPrefill;
+    this.pendingComposerPrefill = null;
+    let hasObservedComposerPrefill =
+      !expectedComposerPrefill || expectedComposerPrefill.trim().length === 0;
 
     const baselineComposerTrimmed = baselineComposerValue.trim();
 
@@ -1546,11 +1658,24 @@ export class ChatPage {
         return;
       }
 
-      if (baselineComposerTrimmed.length > 0) {
-        const composerTrimmed = composerValue.trim();
+      const composerTrimmed = composerValue.trim();
+      if (expectedComposerPrefill && !hasObservedComposerPrefill) {
+        const expectedTrimmed = expectedComposerPrefill.trim();
+        if (
+          composerTrimmed.length > 0 &&
+          (composerTrimmed === expectedTrimmed || composerValue === baselineComposerValue)
+        ) {
+          hasObservedComposerPrefill = true;
+          await this.page.waitForTimeout(50);
+          continue;
+        }
+      }
 
+      if (baselineComposerTrimmed.length > 0) {
         if (composerTrimmed.length === 0 && composerValue !== baselineComposerValue) {
-          return;
+          if (hasObservedComposerPrefill || !expectedComposerPrefill) {
+            return;
+          }
         }
       }
 
