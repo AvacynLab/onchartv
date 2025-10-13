@@ -108,6 +108,31 @@ export class ChatPage {
    */
   private pendingChatSignalCount = 0;
 
+  /**
+   * Snapshot the composer value prior to dispatching a prompt. Suggested
+   * actions pre-fill the textarea before immediately submitting, so the DOM
+   * clearing that follows is a reliable indication that the UI kicked off the
+   * new generation even when other streaming toggles are slow to appear.
+   */
+  private pendingComposerValue = "";
+
+  /**
+   * Flag whether the upcoming submission should clear a pre-seeded composer
+   * value. When true, the network guard races a dedicated waiter against the
+   * transport so suggestion-driven flows resolve as soon as the textarea is
+   * emptied, even if Playwright misses the underlying fetch events.
+   */
+  private pendingComposerNeedsClear = false;
+
+  /**
+   * Remember whether the suggested actions panel was visible before dispatching
+   * the next submission. Suggested quick actions hide the grid immediately
+   * after a selection, so tracking the baseline visibility gives the polling
+   * guard another deterministic signal to recognise streaming progress without
+   * depending solely on spinners or network hooks.
+   */
+  private pendingSuggestedActionsWereVisible = false;
+
   constructor(page: Page) {
     this.page = page;
   }
@@ -435,11 +460,18 @@ export class ChatPage {
      */
     const suggestion = this.page.getByTestId("suggested-action-0");
     await ChatPage.expect(suggestion).toBeVisible({ timeout: 15_000 });
+    const suggestionText = await suggestion.innerText().catch(() => "");
+    const normalisedSuggestion = suggestionText.trim();
+    const composerOverride = normalisedSuggestion.length > 0
+      ? normalisedSuggestion
+      : undefined;
 
     const userMessages = this.page.getByTestId("message-user");
     const initialUserCount = await userMessages.count();
 
-    await this.prepareForGeneration();
+    await this.prepareForGeneration({
+      composerValueOverride: composerOverride,
+    });
 
     await Promise.all([
       this.waitForChatApiResponse(),
@@ -732,7 +764,11 @@ export class ChatPage {
    * This keeps the polling logic deterministic across synchronous mocks and
    * long-running finance tool chains.
    */
-  private async prepareForGeneration(): Promise<void> {
+  private async prepareForGeneration({
+    composerValueOverride,
+  }: {
+    composerValueOverride?: string;
+  } = {}): Promise<void> {
     this.pendingAssistantSnapshot = await this.captureAssistantSnapshot();
     this.pendingUserMessageCount = await this.page
       .getByTestId("message-user")
@@ -747,6 +783,18 @@ export class ChatPage {
     this.pendingSendButtonWasEnabled = await this.sendButton
       .isEnabled()
       .catch(() => false);
+    if (typeof composerValueOverride === "string") {
+      this.pendingComposerValue = composerValueOverride;
+      this.pendingComposerNeedsClear =
+        composerValueOverride.trim().length > 0;
+    } else {
+      const composerValue = await this.multimodalInput
+        .inputValue()
+        .catch(() => "");
+
+      this.pendingComposerValue = composerValue;
+      this.pendingComposerNeedsClear = composerValue.trim().length > 0;
+    }
     this.pendingChatSignalCount = await this.page
       .evaluate(() => {
         const globalWindow = window as typeof window & {
@@ -758,6 +806,11 @@ export class ChatPage {
           : 0;
       })
       .catch(() => 0);
+
+    this.pendingSuggestedActionsWereVisible = await this.page
+      .getByTestId("suggested-actions")
+      .isVisible()
+      .catch(() => false);
   }
 
   private async waitForComposerReady(
@@ -970,6 +1023,11 @@ export class ChatPage {
      */
     const baselineSignalCount = this.pendingChatSignalCount ?? 0;
 
+    const baselineComposerValue = this.pendingComposerValue ?? "";
+    const shouldWatchComposerClear =
+      this.pendingComposerNeedsClear &&
+      baselineComposerValue.trim().length > 0;
+
     const fallbackPromise = this.waitForUiStreamingFallback({
       baseline: baselineSnapshot,
       baselineUserMessageCount: this.pendingUserMessageCount,
@@ -977,6 +1035,8 @@ export class ChatPage {
       baselineSendButtonVisible: this.pendingSendButtonWasVisible,
       baselineSendButtonEnabled: this.pendingSendButtonWasEnabled,
       baselineChatSignalCount: baselineSignalCount,
+      baselineComposerValue,
+      baselineSuggestedActionsVisible: this.pendingSuggestedActionsWereVisible,
       timeoutMs: uiFallbackTimeoutMs,
     });
 
@@ -1021,6 +1081,29 @@ export class ChatPage {
         )
         .then(() => ({ kind: "signal" }))
     );
+
+    if (shouldWatchComposerClear) {
+      pushWatcher(
+        page
+          .waitForFunction(
+            (baseline: string) => {
+              const textarea = document.querySelector<
+                HTMLTextAreaElement
+              >('textarea[data-testid="multimodal-input"]');
+
+              if (!textarea) {
+                return false;
+              }
+
+              const value = textarea.value;
+              return value.trim().length === 0 && value !== baseline;
+            },
+            baselineComposerValue,
+            { timeout: networkTimeoutMs }
+          )
+          .then(() => ({ kind: "signal" }))
+      );
+    }
 
     pushWatcher(
       page
@@ -1080,12 +1163,16 @@ export class ChatPage {
     }
 
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let shouldAwaitFallback = false;
 
     try {
       const networkResult = await Promise.race<NetworkEvent | never>([
         ...watchers,
         new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(networkTimeoutMarker), networkTimeoutMs);
+          timer = setTimeout(
+            () => reject(networkTimeoutMarker),
+            networkTimeoutMs
+          );
         }),
       ]);
 
@@ -1116,6 +1203,7 @@ export class ChatPage {
             : new Error("Chat API response handling failed");
         }
 
+        this.pendingComposerNeedsClear = false;
         return;
       }
 
@@ -1184,12 +1272,15 @@ export class ChatPage {
           throw networkTimeoutMarker;
         }
 
+        this.pendingComposerNeedsClear = false;
+
         throw new Error(
           `Chat API request failed before receiving a response${diagnostic}`
         );
       }
 
       if (networkResult.kind === "signal") {
+        this.pendingComposerNeedsClear = false;
         return;
       }
 
@@ -1233,6 +1324,7 @@ export class ChatPage {
           }
         }
 
+        this.pendingComposerNeedsClear = false;
         return;
       }
 
@@ -1240,10 +1332,13 @@ export class ChatPage {
     } catch (error) {
       if (error !== networkTimeoutMarker) {
         fallbackPromise.catch(() => {});
+        this.pendingComposerNeedsClear = false;
         throw error instanceof Error
           ? error
           : new Error("Chat API request failed");
       }
+
+      shouldAwaitFallback = true;
     } finally {
       if (timer) {
         clearTimeout(timer);
@@ -1253,10 +1348,15 @@ export class ChatPage {
       }
     }
 
+    if (!shouldAwaitFallback) {
+      return;
+    }
+
     try {
       await fallbackPromise;
     } finally {
       fallbackPromise.catch(() => {});
+      this.pendingComposerNeedsClear = false;
     }
   }
 
@@ -1267,6 +1367,8 @@ export class ChatPage {
     baselineSendButtonVisible,
     baselineSendButtonEnabled,
     baselineChatSignalCount,
+    baselineComposerValue,
+    baselineSuggestedActionsVisible,
     timeoutMs,
   }: {
     baseline: AssistantSnapshot;
@@ -1275,6 +1377,8 @@ export class ChatPage {
     baselineSendButtonVisible: boolean;
     baselineSendButtonEnabled: boolean;
     baselineChatSignalCount: number;
+    baselineComposerValue: string;
+    baselineSuggestedActionsVisible: boolean;
     timeoutMs: number;
   }): Promise<void> {
     const toast = this.page.locator(TOAST_LOCATOR).first();
@@ -1301,6 +1405,8 @@ export class ChatPage {
       baselineSendButtonVisible,
       baselineSendButtonEnabled,
       baselineChatSignalCount,
+      baselineComposerValue,
+      baselineSuggestedActionsVisible: this.pendingSuggestedActionsWereVisible,
       timeoutMs,
     });
 
@@ -1363,6 +1469,8 @@ export class ChatPage {
     baselineSendButtonVisible,
     baselineSendButtonEnabled,
     baselineChatSignalCount,
+    baselineComposerValue,
+    baselineSuggestedActionsVisible,
     timeoutMs,
   }: {
     baseline: AssistantSnapshot;
@@ -1371,6 +1479,8 @@ export class ChatPage {
     baselineSendButtonVisible: boolean;
     baselineSendButtonEnabled: boolean;
     baselineChatSignalCount: number;
+    baselineComposerValue: string;
+    baselineSuggestedActionsVisible: boolean;
     timeoutMs: number;
   }): Promise<void> {
     const deadline = Date.now() + timeoutMs;
@@ -1379,9 +1489,13 @@ export class ChatPage {
     const spinnerLocator = this.page.getByTestId("message-assistant-loading");
     const stopButtonLocator = this.stopButton;
     const sendButtonLocator = this.sendButton;
+    const suggestedActionsLocator = this.page.getByTestId("suggested-actions");
     let hasObservedStopButtonHidden = !baselineStopButtonVisible;
     let hasObservedSendButtonVisible = baselineSendButtonVisible;
     let hasObservedSendButtonEnabled = baselineSendButtonEnabled;
+    let hasObservedSuggestedActionsHidden = !baselineSuggestedActionsVisible;
+
+    const baselineComposerTrimmed = baselineComposerValue.trim();
 
     while (Date.now() < deadline) {
       const [
@@ -1392,6 +1506,8 @@ export class ChatPage {
         sendEnabled,
         userCount,
         signalCount,
+        composerValue,
+        suggestedActionsVisible,
       ] = await Promise.all([
         assistantLocator.count().catch(() => 0),
         spinnerLocator.count().catch(() => 0),
@@ -1410,7 +1526,17 @@ export class ChatPage {
               : 0;
           })
           .catch(() => 0),
+        this.multimodalInput.inputValue().catch(() => ""),
+        suggestedActionsLocator.isVisible().catch(() => false),
       ]);
+
+      if (baselineSuggestedActionsVisible && !suggestedActionsVisible) {
+        return;
+      }
+
+      if (!baselineSuggestedActionsVisible && suggestedActionsVisible && !hasObservedSuggestedActionsHidden) {
+        hasObservedSuggestedActionsHidden = true;
+      }
 
       if (signalCount > baselineChatSignalCount) {
         return;
@@ -1418,6 +1544,14 @@ export class ChatPage {
 
       if (spinnerCount > 0) {
         return;
+      }
+
+      if (baselineComposerTrimmed.length > 0) {
+        const composerTrimmed = composerValue.trim();
+
+        if (composerTrimmed.length === 0 && composerValue !== baselineComposerValue) {
+          return;
+        }
       }
 
       if (!sendVisible) {

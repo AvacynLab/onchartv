@@ -106,6 +106,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
       response: new Set<(...args: any[]) => unknown>(),
       requestfailed: new Set<(...args: any[]) => unknown>(),
       signal: new Set<(...args: any[]) => unknown>(),
+      composer: new Set<(...args: any[]) => unknown>(),
     });
 
     const createWaiterRegistry = () => ({
@@ -122,6 +123,10 @@ describe("ChatPage.waitForChatApiResponse", () => {
         resolve: (payload: unknown) => void;
       }>(),
       signal: new Set<{
+        predicate: (payload: unknown) => boolean;
+        resolve: (payload: unknown) => void;
+      }>(),
+      composer: new Set<{
         predicate: (payload: unknown) => boolean;
         resolve: (payload: unknown) => void;
       }>(),
@@ -244,6 +249,12 @@ describe("ChatPage.waitForChatApiResponse", () => {
     const userLocator = {
       count: vi.fn().mockResolvedValue(0),
     };
+    const composerLocator = {
+      inputValue: vi.fn().mockResolvedValue(""),
+    };
+    const suggestedActionsLocator = {
+      isVisible: vi.fn().mockResolvedValue(true),
+    };
     const toastLocator = {
       first: vi
         .fn(() => toastLocator as unknown as ReturnType<Locator["first"]>)
@@ -316,6 +327,14 @@ describe("ChatPage.waitForChatApiResponse", () => {
           return userLocator as unknown as ReturnType<Page["getByTestId"]>;
         }
 
+        if (testId === "multimodal-input") {
+          return composerLocator as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "suggested-actions") {
+          return suggestedActionsLocator as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
         throw new Error(`Unexpected test id access: ${testId}`);
       }),
       waitForFunction: vi.fn(
@@ -324,29 +343,43 @@ describe("ChatPage.waitForChatApiResponse", () => {
           baseline: unknown,
           _options?: { timeout?: number }
         ) => {
-          const numericBaseline =
-            typeof baseline === "number" ? baseline : 0;
+          if (typeof baseline === "number") {
+            const numericBaseline = baseline;
 
-          if (chatSignalCount > numericBaseline) {
-            return Promise.resolve(undefined);
+            if (chatSignalCount > numericBaseline) {
+              return Promise.resolve(undefined);
+            }
+
+            /**
+             * The real implementation waits for `window.__PLAYWRIGHT_CHAT_SIGNALS__`
+             * to gain new entries. Replicate that by registering a waiter that
+             * resolves once the in-memory counter surpasses the captured
+             * baseline.
+             */
+            return registerWaiter(
+              pageWaiters,
+              "signal",
+              (payload: unknown) =>
+                typeof payload === "object" &&
+                payload !== null &&
+                "count" in (payload as { count?: unknown }) &&
+                typeof (payload as { count?: unknown }).count === "number" &&
+                ((payload as { count: number }).count > numericBaseline)
+            ).then(() => undefined);
           }
 
-          /**
-           * The real implementation waits for `window.__PLAYWRIGHT_CHAT_SIGNALS__`
-           * to gain new entries. Replicate that by registering a waiter that
-           * resolves once the in-memory counter surpasses the captured
-           * baseline.
-           */
-          return registerWaiter(
-            pageWaiters,
-            "signal",
-            (payload: unknown) =>
-              typeof payload === "object" &&
-              payload !== null &&
-              "count" in (payload as { count?: unknown }) &&
-              typeof (payload as { count?: unknown }).count === "number" &&
-              ((payload as { count: number }).count > numericBaseline)
-          ).then(() => undefined);
+          if (typeof baseline === "string") {
+            return registerWaiter(
+              pageWaiters,
+              "composer",
+              (payload: unknown) =>
+                typeof payload === "string" &&
+                payload.trim().length === 0 &&
+                payload !== baseline
+            ).then(() => undefined);
+          }
+
+          return Promise.resolve(undefined);
         }
       ),
       waitForTimeout: vi
@@ -382,12 +415,15 @@ describe("ChatPage.waitForChatApiResponse", () => {
           count: chatSignalCount,
         });
       },
+      emitComposerClear: (nextValue = "") =>
+        emitFrom(pageListeners, pageWaiters, "composer", nextValue),
       setSignalCount: (nextCount: number) => {
         chatSignalCount = nextCount;
       },
       listeners: { page: pageListeners, context: contextListeners },
       sendButtonLocator,
       stopButtonLocator,
+      suggestedActionsLocator,
     };
   };
 
@@ -408,6 +444,9 @@ describe("ChatPage.waitForChatApiResponse", () => {
     (chatPage as any).pendingSendButtonWasVisible = true;
     (chatPage as any).pendingSendButtonWasEnabled = true;
     (chatPage as any).pendingChatSignalCount = 0;
+    (chatPage as any).pendingComposerValue = "";
+    (chatPage as any).pendingComposerNeedsClear = false;
+    (chatPage as any).pendingSuggestedActionsWereVisible = false;
   };
 
   it("resolves once POST /api/chat responds, including query parameters", async () => {
@@ -452,6 +491,29 @@ describe("ChatPage.waitForChatApiResponse", () => {
         0,
         expect.objectContaining({ timeout: expect.any(Number) })
       );
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("resolves when the composer clears after seeding a pending value", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createEventHarness();
+      const chatPage = new ChatPage(harness.page);
+      stubFallback(chatPage);
+      seedPendingSnapshot(chatPage);
+
+      (chatPage as any).pendingComposerValue = "Bonjour";
+      (chatPage as any).pendingComposerNeedsClear = true;
+
+      const waitPromise = (chatPage as any).waitForChatApiResponse();
+
+      await harness.emitComposerClear("");
+
+      await expect(waitPromise).resolves.toBeUndefined();
+      expect((chatPage as any).pendingComposerNeedsClear).toBe(false);
     } finally {
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
@@ -633,6 +695,12 @@ describe("ChatPage.waitForChatApiResponse", () => {
             return toastLocatorHandle as unknown as ReturnType<Page["getByTestId"]>;
           }
 
+          if (testId === "multimodal-input") {
+            return {
+              inputValue: vi.fn().mockResolvedValue(""),
+            } as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
           if (testId === "message-assistant") {
             return {
               count: assistantCount,
@@ -662,6 +730,12 @@ describe("ChatPage.waitForChatApiResponse", () => {
         if (testId === "message-user") {
           return {
             count: vi.fn().mockResolvedValue(0),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: vi.fn().mockResolvedValue(""),
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
 
@@ -766,6 +840,12 @@ describe("ChatPage.waitForChatApiResponse", () => {
         if (testId === "message-user") {
           return {
             count: vi.fn().mockResolvedValue(0),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: vi.fn().mockResolvedValue(""),
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
 
@@ -875,6 +955,12 @@ describe("ChatPage.waitForChatApiResponse", () => {
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
 
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: vi.fn().mockResolvedValue(""),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
         throw new Error(`Unexpected test id ${testId}`);
       }
     );
@@ -910,6 +996,8 @@ describe("ChatPage.waitForChatApiResponse", () => {
         baselineSendButtonVisible: true,
         baselineSendButtonEnabled: true,
         baselineChatSignalCount: 0,
+        baselineComposerValue: "",
+        baselineSuggestedActionsVisible: false,
         timeoutMs: 45_000,
       })
     ).rejects.toThrow("Timed out waiting for chat UI to start streaming");
@@ -921,6 +1009,8 @@ describe("ChatPage.waitForChatApiResponse", () => {
       baselineSendButtonVisible: true,
       baselineSendButtonEnabled: true,
       baselineChatSignalCount: 0,
+      baselineComposerValue: "",
+      baselineSuggestedActionsVisible: false,
       timeoutMs: 45_000,
     });
     expect(toastWaitFor).toHaveBeenCalledWith({
@@ -985,6 +1075,12 @@ describe("ChatPage.waitForChatApiResponse", () => {
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
 
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: vi.fn().mockResolvedValue(""),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
         throw new Error(`Unexpected test id: ${testId}`);
       }),
       locator: vi.fn((selector: string) => {
@@ -1013,15 +1109,17 @@ describe("ChatPage.waitForChatApiResponse", () => {
       latestMessageText: "",
     } as const;
 
-    await (chatPage as any).waitForUiStreamingFallback({
-      baseline: baselineSnapshot,
-      baselineUserMessageCount: 0,
-      baselineStopButtonVisible: false,
-      baselineSendButtonVisible: true,
-      baselineSendButtonEnabled: true,
-      baselineChatSignalCount: 0,
-      timeoutMs: 5_000,
-    });
+  await (chatPage as any).waitForUiStreamingFallback({
+    baseline: baselineSnapshot,
+    baselineUserMessageCount: 0,
+    baselineStopButtonVisible: false,
+    baselineSendButtonVisible: true,
+    baselineSendButtonEnabled: true,
+    baselineChatSignalCount: 0,
+    baselineComposerValue: "",
+    baselineSuggestedActionsVisible: false,
+    timeoutMs: 5_000,
+  });
 
     expect(stopVisible).toHaveBeenCalledTimes(2);
     expect(waitForTimeout).toHaveBeenCalled();
@@ -1081,6 +1179,12 @@ describe("ChatPage.waitForChatApiResponse", () => {
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
 
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: vi.fn().mockResolvedValue(""),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
         throw new Error(`Unexpected test id: ${testId}`);
       }),
       locator: vi.fn((selector: string) => {
@@ -1109,15 +1213,17 @@ describe("ChatPage.waitForChatApiResponse", () => {
       latestMessageText: "",
     } as const;
 
-    await (chatPage as any).waitForUiStreamingFallback({
-      baseline: baselineSnapshot,
-      baselineUserMessageCount: 0,
-      baselineStopButtonVisible: false,
-      baselineSendButtonVisible: true,
-      baselineSendButtonEnabled: true,
-      baselineChatSignalCount: 0,
-      timeoutMs: 5_000,
-    });
+  await (chatPage as any).waitForUiStreamingFallback({
+    baseline: baselineSnapshot,
+    baselineUserMessageCount: 0,
+    baselineStopButtonVisible: false,
+    baselineSendButtonVisible: true,
+    baselineSendButtonEnabled: true,
+    baselineChatSignalCount: 0,
+    baselineComposerValue: "",
+    baselineSuggestedActionsVisible: false,
+    timeoutMs: 5_000,
+  });
 
     expect(sendVisible).toHaveBeenCalledTimes(2);
     expect(waitForTimeout).toHaveBeenCalled();
@@ -1178,6 +1284,12 @@ describe("ChatPage.waitForChatApiResponse", () => {
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
 
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: vi.fn().mockResolvedValue(""),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
         throw new Error(`Unexpected test id: ${testId}`);
       }),
       locator: vi.fn((selector: string) => {
@@ -1206,19 +1318,247 @@ describe("ChatPage.waitForChatApiResponse", () => {
       latestMessageText: "",
     } as const;
 
-    await (chatPage as any).waitForUiStreamingFallback({
-      baseline: baselineSnapshot,
-      baselineUserMessageCount: 0,
-      baselineStopButtonVisible: false,
-      baselineSendButtonVisible: true,
-      baselineSendButtonEnabled: true,
-      baselineChatSignalCount: 0,
-      timeoutMs: 5_000,
-    });
+  await (chatPage as any).waitForUiStreamingFallback({
+    baseline: baselineSnapshot,
+    baselineUserMessageCount: 0,
+    baselineStopButtonVisible: false,
+    baselineSendButtonVisible: true,
+    baselineSendButtonEnabled: true,
+    baselineChatSignalCount: 0,
+    baselineComposerValue: "",
+    baselineSuggestedActionsVisible: false,
+    timeoutMs: 5_000,
+  });
 
     expect(sendVisible).toHaveBeenCalledTimes(2);
     expect(sendEnabled).toHaveBeenCalledTimes(2);
     expect(waitForTimeout).toHaveBeenCalled();
+  });
+
+  it("treats a cleared composer as evidence of streaming", async () => {
+    const toastWaitFor = vi.fn().mockImplementation(
+      () => new Promise(() => {})
+    );
+    const toastInnerText = vi.fn().mockResolvedValue("");
+    const assistantCount = vi.fn().mockResolvedValue(0);
+    const spinnerCount = vi.fn().mockResolvedValue(0);
+    const stopVisible = vi.fn().mockResolvedValue(false);
+    const sendVisible = vi.fn().mockResolvedValue(true);
+    const sendEnabled = vi.fn().mockResolvedValue(true);
+    const userCount = vi.fn().mockResolvedValue(0);
+    const waitForTimeout = vi.fn().mockResolvedValue(undefined);
+    const composerInputValue = vi
+      .fn<() => Promise<string>>()
+      .mockResolvedValueOnce("")
+      .mockResolvedValue("");
+
+    const page = {
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "toast") {
+          return {
+            waitFor: toastWaitFor,
+            innerText: toastInnerText,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant") {
+          return {
+            count: assistantCount,
+            nth: vi.fn(),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant-loading") {
+          return {
+            count: spinnerCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "stop-button") {
+          return {
+            isVisible: stopVisible,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "send-button") {
+          return {
+            isVisible: sendVisible,
+            isEnabled: sendEnabled,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-user") {
+          return {
+            count: userCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: composerInputValue,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        throw new Error(`Unexpected test id: ${testId}`);
+      }),
+      locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+          return {
+            first: () => ({
+              waitFor: toastWaitFor,
+              innerText: toastInnerText,
+            }),
+          } as unknown as ReturnType<Page["locator"]>;
+        }
+
+        throw new Error(`Unexpected locator access: ${selector}`);
+      }),
+      waitForTimeout: waitForTimeout as unknown as Page["waitForTimeout"],
+      evaluate: vi
+        .fn(() => Promise.resolve(0))
+        .mockName("page.evaluate"),
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+    const baselineSnapshot = {
+      count: 0,
+      latestArtifactCount: 0,
+      latestMessageId: null,
+      latestMessageText: "",
+    } as const;
+
+    await expect(
+      (chatPage as any).pollForStreamingChange({
+        baseline: baselineSnapshot,
+        baselineUserMessageCount: 0,
+        baselineStopButtonVisible: false,
+        baselineSendButtonVisible: true,
+        baselineSendButtonEnabled: true,
+        baselineChatSignalCount: 0,
+        baselineComposerValue: "Run the quarterly planning session",
+        baselineSuggestedActionsVisible: false,
+        timeoutMs: 5_000,
+      })
+    ).resolves.toBeUndefined();
+
+    expect(composerInputValue).toHaveBeenCalled();
+    expect(waitForTimeout).not.toHaveBeenCalled();
+  });
+
+  it("treats hidden suggested actions as evidence of streaming", async () => {
+    const toastWaitFor = vi.fn().mockImplementation(
+      () => new Promise(() => {})
+    );
+    const toastInnerText = vi.fn().mockResolvedValue("");
+    const assistantCount = vi.fn().mockResolvedValue(0);
+    const spinnerCount = vi.fn().mockResolvedValue(0);
+    const stopVisible = vi.fn().mockResolvedValue(false);
+    const sendVisible = vi.fn().mockResolvedValue(true);
+    const sendEnabled = vi.fn().mockResolvedValue(true);
+    const userCount = vi.fn().mockResolvedValue(0);
+    const suggestedActionsVisible = vi
+      .fn<() => Promise<boolean>>()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValue(false);
+    const waitForTimeout = vi.fn().mockResolvedValue(undefined);
+
+    const page = {
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "toast") {
+          return {
+            waitFor: toastWaitFor,
+            innerText: toastInnerText,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant") {
+          return {
+            count: assistantCount,
+            nth: vi.fn(),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant-loading") {
+          return {
+            count: spinnerCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "stop-button") {
+          return {
+            isVisible: stopVisible,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "send-button") {
+          return {
+            isVisible: sendVisible,
+            isEnabled: sendEnabled,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-user") {
+          return {
+            count: userCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: vi.fn().mockResolvedValue(""),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "suggested-actions") {
+          return {
+            isVisible: suggestedActionsVisible,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        throw new Error(`Unexpected test id: ${testId}`);
+      }),
+      locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+          return {
+            first: () => ({
+              waitFor: toastWaitFor,
+              innerText: toastInnerText,
+            }),
+          } as unknown as ReturnType<Page["locator"]>;
+        }
+
+        throw new Error(`Unexpected locator access: ${selector}`);
+      }),
+      waitForTimeout: waitForTimeout as unknown as Page["waitForTimeout"],
+      evaluate: vi
+        .fn(() => Promise.resolve(0))
+        .mockName("page.evaluate"),
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+    const baselineSnapshot = {
+      count: 0,
+      latestArtifactCount: 0,
+      latestMessageId: null,
+      latestMessageText: "",
+    } as const;
+
+    await expect(
+      (chatPage as any).pollForStreamingChange({
+        baseline: baselineSnapshot,
+        baselineUserMessageCount: 0,
+        baselineStopButtonVisible: false,
+        baselineSendButtonVisible: true,
+        baselineSendButtonEnabled: true,
+        baselineChatSignalCount: 0,
+        baselineComposerValue: "",
+        baselineSuggestedActionsVisible: true,
+        timeoutMs: 5_000,
+      })
+    ).resolves.toBeUndefined();
+
+    expect(suggestedActionsVisible).toHaveBeenCalledTimes(2);
+    expect(waitForTimeout).toHaveBeenCalledTimes(1);
   });
 
   it("treats a new user message as evidence of streaming when other guards stay idle", async () => {
@@ -1278,6 +1618,12 @@ describe("ChatPage.waitForChatApiResponse", () => {
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
 
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: vi.fn().mockResolvedValue(""),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
         throw new Error(`Unexpected test id: ${testId}`);
       }),
       locator: vi.fn((selector: string) => {
@@ -1303,15 +1649,17 @@ describe("ChatPage.waitForChatApiResponse", () => {
       latestMessageText: "",
     } as const;
 
-    await (chatPage as any).waitForUiStreamingFallback({
-      baseline: baselineSnapshot,
-      baselineUserMessageCount: 0,
-      baselineStopButtonVisible: false,
-      baselineSendButtonVisible: true,
-      baselineSendButtonEnabled: true,
-      baselineChatSignalCount: 0,
-      timeoutMs: 5_000,
-    });
+  await (chatPage as any).waitForUiStreamingFallback({
+    baseline: baselineSnapshot,
+    baselineUserMessageCount: 0,
+    baselineStopButtonVisible: false,
+    baselineSendButtonVisible: true,
+    baselineSendButtonEnabled: true,
+    baselineChatSignalCount: 0,
+    baselineComposerValue: "",
+    baselineSuggestedActionsVisible: false,
+    timeoutMs: 5_000,
+  });
 
     expect(userCount).toHaveBeenCalledTimes(2);
     expect(waitForTimeout).toHaveBeenCalled();
@@ -1436,6 +1784,12 @@ describe("ChatPage vote helpers", () => {
           return toastLocatorHandle as unknown as ReturnType<Page["getByTestId"]>;
         }
 
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: vi.fn().mockResolvedValue(""),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
         throw new Error(`Unexpected test id: ${testId}`);
       }),
       locator: vi.fn((selector: string) => {
@@ -1511,6 +1865,12 @@ describe("ChatPage vote helpers", () => {
         if (testId === "toast") {
           return toastLocatorHandle as unknown as ReturnType<Page["getByTestId"]>;
         }
+
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: vi.fn().mockResolvedValue(""),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
         throw new Error(`Unexpected test id: ${testId}`);
       }),
       locator: vi.fn((selector: string) => {
@@ -1572,6 +1932,12 @@ describe("ChatPage vote helpers", () => {
         }
         if (testId === "toast") {
           return toastLocatorHandle as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: vi.fn().mockResolvedValue(""),
+          } as unknown as ReturnType<Page["getByTestId"]>;
         }
         throw new Error(`Unexpected test id: ${testId}`);
       }),
@@ -1722,6 +2088,12 @@ describe("ChatPage generation helpers", () => {
           };
         }
 
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: vi.fn().mockResolvedValue(""),
+          };
+        }
+
         throw new Error(`Unexpected test id: ${testId}`);
       }),
       evaluate: vi
@@ -1811,6 +2183,12 @@ describe("ChatPage generation helpers", () => {
             click: vi.fn(),
             isVisible: vi.fn().mockResolvedValue(true),
             isEnabled: vi.fn().mockResolvedValue(true),
+          };
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: vi.fn().mockResolvedValue(""),
           };
         }
 
@@ -1944,6 +2322,12 @@ describe("ChatPage generation helpers", () => {
           return {
             isVisible: vi.fn().mockResolvedValue(true),
             isEnabled: vi.fn().mockResolvedValue(true),
+          };
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: vi.fn().mockResolvedValue(""),
           };
         }
 
