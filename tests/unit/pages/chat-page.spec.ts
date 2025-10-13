@@ -252,6 +252,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
     };
     const composerLocator = {
       inputValue: vi.fn().mockResolvedValue(""),
+      press: vi.fn().mockResolvedValue(undefined),
     };
     const suggestedActionsLocator = {
       isVisible: vi.fn().mockResolvedValue(true),
@@ -724,6 +725,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
           if (testId === "multimodal-input") {
             return {
               inputValue: vi.fn().mockResolvedValue(""),
+              press: vi.fn().mockResolvedValue(undefined),
             } as unknown as ReturnType<Page["getByTestId"]>;
           }
 
@@ -762,6 +764,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
         if (testId === "multimodal-input") {
           return {
             inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
 
@@ -872,6 +875,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
         if (testId === "multimodal-input") {
           return {
             inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
 
@@ -984,6 +988,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
         if (testId === "multimodal-input") {
           return {
             inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
 
@@ -1104,6 +1109,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
         if (testId === "multimodal-input") {
           return {
             inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
 
@@ -1208,6 +1214,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
         if (testId === "multimodal-input") {
           return {
             inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
 
@@ -1313,6 +1320,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
         if (testId === "multimodal-input") {
           return {
             inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
 
@@ -1658,6 +1666,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
         if (testId === "multimodal-input") {
           return {
             inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
 
@@ -1773,6 +1782,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
         if (testId === "multimodal-input") {
           return {
             inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
 
@@ -1939,6 +1949,7 @@ describe("ChatPage vote helpers", () => {
         if (testId === "multimodal-input") {
           return {
             inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
 
@@ -2021,6 +2032,7 @@ describe("ChatPage vote helpers", () => {
         if (testId === "multimodal-input") {
           return {
             inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
         throw new Error(`Unexpected test id: ${testId}`);
@@ -2089,6 +2101,7 @@ describe("ChatPage vote helpers", () => {
         if (testId === "multimodal-input") {
           return {
             inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
         throw new Error(`Unexpected test id: ${testId}`);
@@ -2243,6 +2256,7 @@ describe("ChatPage generation helpers", () => {
         if (testId === "multimodal-input") {
           return {
             inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
           };
         }
 
@@ -2271,6 +2285,7 @@ describe("ChatPage generation helpers", () => {
       .spyOn(chatPage as any, "waitForComposerReady")
       .mockImplementation(async () => {
         order.push("composer-ready");
+        return { sendButtonEnabled: true };
       });
     const waitSpy = vi
       .spyOn(chatPage as any, "waitForChatApiResponse")
@@ -2286,6 +2301,101 @@ describe("ChatPage generation helpers", () => {
     expect(order.indexOf("capture-call")).toBeLessThan(order.indexOf("send-click"));
     expect((chatPage as any).pendingAssistantSnapshot).toEqual(baseline);
     expect((chatPage as any).pendingUserMessageCount).toBe(0);
+  });
+
+  it("submits via Enter when the send button remains disabled", async () => {
+    const assistantLocator = {
+      count: vi.fn().mockResolvedValue(0),
+      nth: vi.fn(),
+    };
+    const userLocator = {
+      count: vi.fn().mockResolvedValue(0),
+    };
+    const stopButtonLocator = {
+      isVisible: vi.fn().mockResolvedValue(false),
+    };
+    const sendClick = vi.fn().mockResolvedValue(undefined);
+    const sendButtonLocator = {
+      click: sendClick,
+      isVisible: vi.fn().mockResolvedValue(true),
+      isEnabled: vi.fn().mockResolvedValue(true),
+    };
+    const pressMock = vi.fn().mockResolvedValue(undefined);
+    const inputValueMock = vi.fn().mockResolvedValue("");
+    const composerLocator = {
+      click: vi.fn(),
+      fill: vi.fn(),
+      type: vi.fn(),
+      inputValue: inputValueMock,
+      press: pressMock,
+    };
+    const suggestedActionsLocator = {
+      isVisible: vi.fn().mockResolvedValue(false),
+    };
+
+    const page = {
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "message-assistant") {
+          return assistantLocator as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-user") {
+          return userLocator as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "stop-button") {
+          return stopButtonLocator as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "send-button") {
+          return sendButtonLocator as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "multimodal-input") {
+          return composerLocator as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "suggested-actions") {
+          return suggestedActionsLocator as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        throw new Error(`Unexpected test id: ${testId}`);
+      }),
+      evaluate: vi.fn().mockResolvedValue(0),
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+    const captureSpy = vi
+      .spyOn(chatPage as any, "captureAssistantSnapshot")
+      .mockResolvedValue({
+        count: 0,
+        latestArtifactCount: 0,
+        latestMessageId: null,
+        latestMessageText: "",
+      });
+    const prepareSpy = vi.spyOn(chatPage as any, "prepareForGeneration");
+    const composerSpy = vi
+      .spyOn(chatPage as any, "waitForComposerReady")
+      .mockResolvedValue({
+        sendButtonEnabled: false,
+      });
+    const waitSpy = vi
+      .spyOn(chatPage as any, "waitForChatApiResponse")
+      .mockResolvedValue(undefined);
+
+    await chatPage.sendUserMessage("Hello");
+
+    expect(prepareSpy).toHaveBeenCalledWith({
+      composerValueOverride: "Hello",
+    });
+    expect(waitSpy).toHaveBeenCalledOnce();
+    expect(sendClick).not.toHaveBeenCalled();
+    expect(pressMock).toHaveBeenCalledWith("Enter");
+
+    captureSpy.mockRestore();
+    prepareSpy.mockRestore();
+    composerSpy.mockRestore();
+    waitSpy.mockRestore();
   });
 
   it("records a snapshot before sending a suggestion message", async () => {
@@ -2325,6 +2435,7 @@ describe("ChatPage generation helpers", () => {
             click: vi.fn(),
             fill: vi.fn(),
             inputValue: vi.fn().mockResolvedValue("fallback"),
+            press: vi.fn().mockResolvedValue(undefined),
           };
         }
 
@@ -2349,6 +2460,7 @@ describe("ChatPage generation helpers", () => {
         if (testId === "multimodal-input") {
           return {
             inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
           };
         }
 
@@ -2438,6 +2550,7 @@ describe("ChatPage generation helpers", () => {
       click: vi.fn(),
       fill: vi.fn(),
       type: vi.fn(),
+      press: vi.fn().mockResolvedValue(undefined),
     };
     const stopButtonLocator = {
       isVisible: vi.fn().mockResolvedValue(false),
@@ -2495,6 +2608,7 @@ describe("ChatPage generation helpers", () => {
       .spyOn(chatPage as any, "waitForComposerReady")
       .mockImplementation(async (message: string) => {
         order.push(`composer-ready:${message}`);
+        return { sendButtonEnabled: true };
       });
     const captureSpy = vi
       .spyOn(chatPage as any, "captureAssistantSnapshot")
@@ -2631,6 +2745,7 @@ describe("ChatPage generation helpers", () => {
         if (testId === "multimodal-input") {
           return {
             inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
           };
         }
 
@@ -2727,13 +2842,14 @@ describe("ChatPage generation helpers", () => {
 
       const chatPage = new ChatPage(page as Page);
 
-      await (chatPage as any).waitForComposerReady("Hello world", {
-        timeout: 1_000,
-        pollInterval: 50,
-      });
+    const result = await (chatPage as any).waitForComposerReady("Hello world", {
+      timeout: 1_000,
+      pollInterval: 50,
+    });
 
-      expect(fillMock).toHaveBeenNthCalledWith(1, "");
-      expect(typeMock).toHaveBeenNthCalledWith(1, "Hello world");
+    expect(result).toEqual({ sendButtonEnabled: true });
+    expect(fillMock).toHaveBeenNthCalledWith(1, "");
+    expect(typeMock).toHaveBeenNthCalledWith(1, "Hello world");
       expect(fillMock).toHaveBeenNthCalledWith(2, "");
       expect(typeMock).toHaveBeenNthCalledWith(2, "Hello world");
       expect(fillMock).toHaveBeenCalledTimes(2);
@@ -2742,8 +2858,69 @@ describe("ChatPage generation helpers", () => {
       expect(isEnabledMock).toHaveBeenCalledTimes(2);
       expect(waitForTimeoutMock).toHaveBeenCalledTimes(1);
       expect(stopVisibleMock).toHaveBeenCalled();
-      expect(order[0]).toBe("click");
-      expect(order).toContain("wait");
+    expect(order[0]).toBe("click");
+    expect(order).toContain("wait");
+  });
+
+    it("returns the disabled state when the composer stabilises but the send button never enables", async () => {
+      const fillMock = vi.fn().mockResolvedValue(undefined);
+      const typeMock = vi.fn().mockResolvedValue(undefined);
+      const inputValueMock = vi.fn().mockResolvedValue("Hello world");
+      const isEnabledMock = vi.fn().mockResolvedValue(false);
+      const stopVisibleMock = vi.fn().mockResolvedValue(false);
+      const waitForTimeoutMock = vi.fn().mockResolvedValue(undefined);
+
+      const page = {
+        getByTestId: vi.fn((testId: string) => {
+          if (testId === "multimodal-input") {
+            return {
+              click: vi.fn(),
+              fill: fillMock,
+              type: typeMock,
+              inputValue: inputValueMock,
+              press: vi.fn(),
+            } as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
+          if (testId === "send-button") {
+            return {
+              isEnabled: isEnabledMock,
+            } as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
+          if (testId === "stop-button") {
+            return {
+              isVisible: stopVisibleMock,
+            } as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
+          throw new Error(`Unexpected test id: ${testId}`);
+        }),
+        waitForTimeout: waitForTimeoutMock,
+      } satisfies Partial<Page>;
+
+      const chatPage = new ChatPage(page as Page);
+      const synchroniseSpy = vi
+        .spyOn(chatPage as any, "synchroniseComposerValue")
+        .mockResolvedValue(undefined);
+
+      const nowValues = [0, 0, 2_000];
+      let callIndex = 0;
+      const nowSpy = vi
+        .spyOn(Date, "now")
+        .mockImplementation(() => nowValues[Math.min(callIndex++, nowValues.length - 1)]);
+
+      const result = await (chatPage as any).waitForComposerReady("Hello world", {
+        timeout: 1_000,
+        pollInterval: 50,
+      });
+
+      expect(result).toEqual({ sendButtonEnabled: false });
+      expect(waitForTimeoutMock).toHaveBeenCalled();
+      expect(isEnabledMock).toHaveBeenCalled();
+      expect(stopVisibleMock).toHaveBeenCalled();
+      synchroniseSpy.mockRestore();
+      nowSpy.mockRestore();
     });
   });
 });

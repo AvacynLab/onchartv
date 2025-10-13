@@ -216,20 +216,24 @@ export class ChatPage {
   }
 
   async sendUserMessage(message: string) {
-    await this.waitForComposerReady(message);
+    const { sendButtonEnabled } = await this.waitForComposerReady(message);
 
-    await this.prepareForGeneration();
+    await this.prepareForGeneration({ composerValueOverride: message });
 
     /**
      * Trigger the send action and the API wait concurrently so we capture the
      * network response associated with this submission. Surfacing transport
      * failures immediately makes the suite easier to debug than waiting for the
-     * streaming assertions to eventually time out.
+     * streaming assertions to eventually time out. When the editor exposes a
+     * disabled submit control (an edge case observed during hydration races),
+     * fall back to the native "Enter" workflow to mimic how end users submit
+     * prompts through the textarea.
      */
-    await Promise.all([
-      this.waitForChatApiResponse(),
-      this.sendButton.click(),
-    ]);
+    const submission = sendButtonEnabled
+      ? this.sendButton.click()
+      : this.multimodalInput.press("Enter");
+
+    await Promise.all([this.waitForChatApiResponse(), submission]);
   }
 
   async isGenerationComplete() {
@@ -570,14 +574,22 @@ export class ChatPage {
         );
       }
 
-      await this.waitForComposerReady(fallbackPrompt);
+      const { sendButtonEnabled } = await this.waitForComposerReady(
+        fallbackPrompt
+      );
 
-      await this.prepareForGeneration();
+      await this.prepareForGeneration({
+        composerValueOverride: fallbackPrompt,
+      });
 
       const manualWatcher = this.waitForChatApiResponse();
       manualWatcher.catch(() => {});
 
-      await this.sendButton.click();
+      if (sendButtonEnabled) {
+        await this.sendButton.click();
+      } else {
+        await this.multimodalInput.press("Enter");
+      }
 
       try {
         await awaitUserBubble(10_000);
@@ -921,10 +933,17 @@ export class ChatPage {
       .catch(() => false);
   }
 
+  /**
+   * Seeds the controlled composer with the outbound prompt and waits for the
+   * UI to acknowledge that input.  The helper continually replays the text
+   * whenever hydration swaps out the textarea element and returns whether the
+   * send button ended up enabled.  Callers can fall back to submitting via the
+   * Enter key whenever the button stays disabled.
+   */
   private async waitForComposerReady(
     message: string,
     options?: { timeout?: number; pollInterval?: number }
-  ): Promise<void> {
+  ): Promise<{ sendButtonEnabled: boolean }> {
     const timeout = options?.timeout ?? 30_000;
     const pollInterval = options?.pollInterval ?? 100;
     const deadline = Date.now() + timeout;
@@ -954,7 +973,7 @@ export class ChatPage {
       ]);
 
       if (lastComposerValue === message && lastSendEnabled && !stopVisible) {
-        return;
+        return { sendButtonEnabled: true };
       }
 
       // Hydration occasionally replaces the textarea node, wiping the value in
@@ -979,6 +998,10 @@ export class ChatPage {
 
       const remaining = Math.max(0, deadline - Date.now());
       await this.page.waitForTimeout(Math.min(pollInterval, remaining));
+    }
+
+    if (lastComposerValue === message && !stopVisible) {
+      return { sendButtonEnabled: lastSendEnabled };
     }
 
     const composerDiagnostic =
