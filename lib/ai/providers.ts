@@ -407,12 +407,32 @@ function extractLatestTextFragment(message: ModelMessage): string | null {
   for (let index = message.content.length - 1; index >= 0; index -= 1) {
     const fragment = message.content[index];
 
-    if (fragment?.type === "text") {
-      const trimmed = fragment.text?.trim() ?? "";
+    if (fragment == null) {
+      continue;
+    }
 
-      if (trimmed.length > 0) {
-        return trimmed;
+    let candidate: string | null = null;
+
+    if (typeof fragment === "string") {
+      candidate = fragment;
+    } else if (typeof fragment === "object") {
+      if (
+        "text" in fragment &&
+        typeof (fragment as { text?: unknown }).text === "string"
+      ) {
+        candidate = (fragment as { text: string }).text;
+      } else if (
+        "input_text" in fragment &&
+        typeof (fragment as { input_text?: unknown }).input_text === "string"
+      ) {
+        candidate = (fragment as { input_text: string }).input_text;
       }
+    }
+
+    const trimmed = candidate?.trim() ?? "";
+
+    if (trimmed.length > 0) {
+      return trimmed;
     }
   }
 

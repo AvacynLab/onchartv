@@ -939,10 +939,12 @@ export class ChatPage {
     await composer.click();
     await composer.fill("");
     await composer.type(message);
+    await this.synchroniseComposerValue(message).catch(() => {});
 
     let lastComposerValue = "";
     let lastSendEnabled = false;
     let stopVisible = false;
+    let rescueAttempts = 0;
 
     while (Date.now() < deadline) {
       [lastComposerValue, lastSendEnabled, stopVisible] = await Promise.all([
@@ -962,6 +964,17 @@ export class ChatPage {
       if (lastComposerValue !== message) {
         await composer.fill("");
         await composer.type(message);
+        await this.synchroniseComposerValue(message).catch(() => {});
+      } else if (!lastSendEnabled && !stopVisible) {
+        // If the DOM already mirrors the outbound prompt but the submit button
+        // remains disabled, force a synthetic input event so React flushes the
+        // controlled state. Without this guard the Playwright driver can outpace
+        // state reconciliation, leaving the composer visually populated while
+        // the send button stays inert.
+        rescueAttempts += 1;
+        if (rescueAttempts <= 3) {
+          await this.synchroniseComposerValue(message).catch(() => {});
+        }
       }
 
       const remaining = Math.max(0, deadline - Date.now());
@@ -983,6 +996,27 @@ export class ChatPage {
         sendDiagnostic +
         stopDiagnostic
     );
+  }
+
+  private async synchroniseComposerValue(value: string): Promise<void> {
+    await this.multimodalInput
+      .evaluate((textarea, nextValue) => {
+        if (!(textarea instanceof HTMLTextAreaElement)) {
+          return;
+        }
+
+        const descriptor = Object.getOwnPropertyDescriptor(
+          HTMLTextAreaElement.prototype,
+          "value"
+        );
+
+        descriptor?.set?.call(textarea, nextValue);
+        textarea.dispatchEvent(new Event("input", { bubbles: true }));
+        textarea.dispatchEvent(new Event("change", { bubbles: true }));
+      }, value)
+      .catch(async () => {
+        await this.multimodalInput.fill(value);
+      });
   }
 
   private async captureAssistantSnapshot(): Promise<AssistantSnapshot> {
