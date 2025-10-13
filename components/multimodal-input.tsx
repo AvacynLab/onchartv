@@ -281,7 +281,7 @@ function PureMultimodalInput({
       const hasAttachments = effectiveAttachments.length > 0;
 
       const emitPlaywrightSignal = (phase: string) => {
-        if (typeof window === "undefined" || !isAutomationRuntime()) {
+        if (typeof window === "undefined") {
           return;
         }
 
@@ -296,10 +296,25 @@ function PureMultimodalInput({
           globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__ = [];
         }
 
-        globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__?.push({
+        globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__!.push({
           phase,
           timestamp: performance.now(),
         });
+
+        if (!isAutomationRuntime()) {
+          /**
+           * Trim the in-browser signal log during regular usage so this helper
+           * remains effectively a no-op outside automation runs. Retaining only
+           * a handful of entries avoids leaking unbounded arrays in production
+           * while still giving Playwright a deterministic hook when the suite
+           * is active.
+           */
+          const maxSignals = 5;
+          const signalBuffer = globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__!;
+          if (signalBuffer.length > maxSignals) {
+            signalBuffer.splice(0, signalBuffer.length - maxSignals);
+          }
+        }
       };
 
       if (uploadQueue.length > 0) {
