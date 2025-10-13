@@ -1050,9 +1050,14 @@ export class ChatPage {
       const { pathname } = new URL(rawUrl);
 
       const isStreamPath = CHAT_STREAM_PATH_REGEX.test(pathname);
-      const isChatRoot = pathname === "/api/chat";
+      // Accept nested chat endpoints (for example, edit or follow-up routes)
+      // that live under the /api/chat namespace so network hooks observe the
+      // transports powering inline message edits in addition to the root chat
+      // entry point.
+      const isChatNamespace =
+        pathname === "/api/chat" || pathname.startsWith("/api/chat/");
 
-      if (!isChatRoot && !isStreamPath) {
+      if (!isChatNamespace && !isStreamPath) {
         return false;
       }
 

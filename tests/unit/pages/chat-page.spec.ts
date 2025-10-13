@@ -596,6 +596,31 @@ describe("ChatPage.waitForChatApiResponse", () => {
     }
   });
 
+  it("accepts nested chat endpoints such as message edits", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createEventHarness();
+      const chatPage = new ChatPage(harness.page);
+      stubFallback(chatPage);
+      seedPendingSnapshot(chatPage);
+
+      const waitPromise = (chatPage as any).waitForChatApiResponse();
+
+      await harness.emitResponse(
+        createMockResponse({
+          url: "http://localhost:3000/api/chat/abc/messages/def",
+          ok: true,
+          method: "PATCH",
+        })
+      );
+
+      await expect(waitPromise).resolves.toBeUndefined();
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("throws with diagnostic details when the chat API rejects", async () => {
     vi.useFakeTimers();
     try {
