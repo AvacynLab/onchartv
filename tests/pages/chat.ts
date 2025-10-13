@@ -231,7 +231,27 @@ export class ChatPage {
      */
     const submission = sendButtonEnabled
       ? this.sendButton.click()
-      : this.multimodalInput.press("Enter");
+      : this.page.evaluate(() => {
+          const textarea = document.querySelector<
+            HTMLTextAreaElement
+          >("textarea[data-testid='multimodal-input']");
+
+          if (!textarea) {
+            throw new Error(
+              "Unable to submit chat message because the composer textarea was not present in the DOM."
+            );
+          }
+
+          const form = textarea.form;
+
+          if (!form) {
+            throw new Error(
+              "Unable to submit chat message because the composer form element could not be resolved."
+            );
+          }
+
+          form.requestSubmit();
+        });
 
     await Promise.all([this.waitForChatApiResponse(), submission]);
   }
@@ -1000,12 +1020,15 @@ export class ChatPage {
       await this.page.waitForTimeout(Math.min(pollInterval, remaining));
     }
 
-    if (lastComposerValue === message && !stopVisible) {
+    const normalizedComposerValue = lastComposerValue.trim();
+    const normalizedMessage = message.trim();
+
+    if (normalizedComposerValue === normalizedMessage && !stopVisible) {
       return { sendButtonEnabled: lastSendEnabled };
     }
 
     const composerDiagnostic =
-      lastComposerValue.trim().length > 0
+      normalizedComposerValue.length > 0
         ? ` Composer retained value: "${lastComposerValue}".`
         : " Composer remained empty.";
     const sendDiagnostic = lastSendEnabled ? "" : " Send button stayed disabled.";
