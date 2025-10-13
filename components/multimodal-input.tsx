@@ -48,6 +48,7 @@ import { PreviewAttachment } from "./preview-attachment";
 import { SuggestedActions } from "./suggested-actions";
 import { Button } from "./ui/button";
 import type { VisibilityType } from "./visibility-selector";
+import { isAutomationRuntime } from "./utils/automation";
 
 const ACTIVE_CHAT_STATUSES: ReadonlySet<UseChatHelpers<ChatMessage>["status"]> =
   new Set(["submitted", "streaming"]);
@@ -115,25 +116,48 @@ function PureMultimodalInput({
   usage?: AppUsage;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+  /**
+   * Resolve the textarea DOM node even if React replaces it mid-flight (for
+   * example during hydration). The forwarded ref is the primary handle, while
+   * the query keeps legacy environments such as Storybook stories resilient.
+   */
+  const resolveTextarea = useCallback((): HTMLTextAreaElement | null => {
+    if (textareaRef.current) {
+      return textareaRef.current;
+    }
+
+    if (!formRef.current) {
+      return null;
+    }
+
+    return formRef.current.querySelector<HTMLTextAreaElement>(
+      'textarea[data-testid="multimodal-input"]'
+    );
+  }, []);
   const { width } = useWindowSize();
 
   const adjustHeight = useCallback(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "44px";
+    const textarea = resolveTextarea();
+
+    if (textarea) {
+      textarea.style.height = "44px";
     }
-  }, []);
+  }, [resolveTextarea]);
 
   useEffect(() => {
-    if (textareaRef.current) {
+    if (resolveTextarea()) {
       adjustHeight();
     }
-  }, [adjustHeight]);
+  }, [adjustHeight, resolveTextarea]);
 
   const resetHeight = useCallback(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "44px";
+    const textarea = resolveTextarea();
+
+    if (textarea) {
+      textarea.style.height = "44px";
     }
-  }, []);
+  }, [resolveTextarea]);
 
   const [localStorageInput, setLocalStorageInput] = useLocalStorage(
     "input",
@@ -147,16 +171,18 @@ function PureMultimodalInput({
       return;
     }
 
-    if (!textareaRef.current) {
+    const textarea = resolveTextarea();
+
+    if (!textarea) {
       return;
     }
 
-    const domValue = textareaRef.current.value;
+    const domValue = textarea.value;
     const finalValue = domValue || localStorageInput || "";
     setInput(finalValue);
     adjustHeight();
     hasHydratedRef.current = true;
-  }, [adjustHeight, localStorageInput, setInput]);
+  }, [adjustHeight, localStorageInput, resolveTextarea, setInput]);
 
   useEffect(() => {
     setLocalStorageInput(input);
@@ -167,7 +193,7 @@ function PureMultimodalInput({
       return;
     }
 
-    const textarea = textareaRef.current;
+    const textarea = resolveTextarea();
 
     if (!textarea) {
       return;
@@ -254,6 +280,43 @@ function PureMultimodalInput({
       const hasText = trimmedInput.length > 0;
       const hasAttachments = effectiveAttachments.length > 0;
 
+      const emitPlaywrightSignal = (phase: string) => {
+        if (typeof window === "undefined") {
+          return;
+        }
+
+        const globalWindow = window as Window & {
+          __PLAYWRIGHT_CHAT_SIGNALS__?: Array<{
+            phase: string;
+            timestamp: number;
+          }>;
+        };
+
+        if (!Array.isArray(globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__)) {
+          globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__ = [];
+        }
+
+        globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__!.push({
+          phase,
+          timestamp: performance.now(),
+        });
+
+        if (!isAutomationRuntime()) {
+          /**
+           * Trim the in-browser signal log during regular usage so this helper
+           * remains effectively a no-op outside automation runs. Retaining only
+           * a handful of entries avoids leaking unbounded arrays in production
+           * while still giving Playwright a deterministic hook when the suite
+           * is active.
+           */
+          const maxSignals = 5;
+          const signalBuffer = globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__!;
+          if (signalBuffer.length > maxSignals) {
+            signalBuffer.splice(0, signalBuffer.length - maxSignals);
+          }
+        }
+      };
+
       if (uploadQueue.length > 0) {
         toast.error(
           "Please wait for the files to finish uploading before sending!"
@@ -300,12 +363,16 @@ function PureMultimodalInput({
         });
       }
 
+      emitPlaywrightSignal("submit");
+
       try {
         await sendMessage({
           role: "user",
           parts: payloadParts,
         });
+        emitPlaywrightSignal("sent");
       } catch (error) {
+        emitPlaywrightSignal("error");
         console.error("Failed to dispatch chat prompt", error);
         toast.error("We couldn't send your message. Please try again.");
         return false;
@@ -317,7 +384,7 @@ function PureMultimodalInput({
       setInput("");
 
       if (width && width > 768) {
-        textareaRef.current?.focus();
+        resolveTextarea()?.focus();
       }
 
       return true;
@@ -353,16 +420,14 @@ function PureMultimodalInput({
        * transmettre `overrideText` pour court-circuiter ce calcul et soumettre
        * directement le prompt normalisé.
        */
-      const domValue = textareaRef.current?.value ?? "";
+      const domValue = resolveTextarea()?.value ?? "";
       const fallbackText = input.trim().length > 0 ? input : domValue;
       const effectiveText = overrideText ?? fallbackText;
 
       return dispatchPrompt({ text: effectiveText });
     },
-    [dispatchPrompt, input, waitForIdle]
+    [dispatchPrompt, input, resolveTextarea, waitForIdle]
   );
-
-  const formRef = useRef<HTMLFormElement>(null);
 
   const handleSuggestionSelection = useCallback(
     async (rawSuggestion: string) => {
@@ -387,8 +452,10 @@ function PureMultimodalInput({
         setInput(trimmedSuggestion);
       });
 
-      if (textareaRef.current) {
-        textareaRef.current.value = trimmedSuggestion;
+      const textarea = resolveTextarea();
+
+      if (textarea) {
+        textarea.value = trimmedSuggestion;
         adjustHeight();
       }
 
@@ -401,17 +468,21 @@ function PureMultimodalInput({
        */
       const didDispatch = await submitForm(trimmedSuggestion);
 
-      if (!didDispatch && textareaRef.current) {
-        /**
-         * Lorsque l'envoi échoue (par exemple parce qu'un streaming est encore
-         * actif), la valeur reste visible dans le composer afin que
-         * l'utilisateur puisse réessayer sans perdre la suggestion.
-         */
-        textareaRef.current.value = trimmedSuggestion;
-        adjustHeight();
+      if (!didDispatch) {
+        const textarea = resolveTextarea();
+
+        if (textarea) {
+          /**
+           * Lorsque l'envoi échoue (par exemple parce qu'un streaming est encore
+           * actif), la valeur reste visible dans le composer afin que
+           * l'utilisateur puisse réessayer sans perdre la suggestion.
+           */
+          textarea.value = trimmedSuggestion;
+          adjustHeight();
+        }
       }
     },
-    [adjustHeight, setInput, submitForm]
+    [adjustHeight, resolveTextarea, setInput, submitForm]
   );
 
   const uploadFile = useCallback(async (file: File) => {
@@ -479,14 +550,18 @@ function PureMultimodalInput({
   );
 
   /**
-   * Les tests e2e remplissent parfois le textarea plus vite que React ne
-   * propage la nouvelle valeur au state contrôlé. En retombant sur la valeur du
-   * DOM lorsque le state est encore vide, on garantit que le bouton d'envoi se
-   * réactive dès que du texte est réellement présent.
+   * Les runs Playwright peuvent taper plus vite que React ne réconcilie la
+   * valeur contrôlée, d'où le recours à la valeur du DOM. On prend également en
+   * compte `input` pour couvrir le cas inverse (DOM réinitialisé mais state
+   * toujours peuplé) et conserver un bouton d'envoi activé dès qu'une des deux
+   * sources contient du texte.
    */
-  const canSubmit =
-    (textareaRef.current?.value?.trim().length ?? 0) > 0 ||
-    attachments.length > 0;
+  const composerDomValue = resolveTextarea()?.value ?? "";
+  const composerLength = Math.max(
+    input.trim().length,
+    composerDomValue.trim().length
+  );
+  const canSubmit = composerLength > 0 || attachments.length > 0;
   const isUploadInProgress = uploadQueue.length > 0;
 
   return (

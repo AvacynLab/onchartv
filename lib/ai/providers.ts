@@ -16,6 +16,7 @@ type NodeModule = typeof import("module");
 import type { ModelMessage } from "ai";
 
 import { isPlaywrightLikeEnvironment } from "./playwright-env";
+import { DEFAULT_ONBOARDING_SUGGESTION } from "../constants";
 
 type CreateOpenAI = typeof import("@ai-sdk/openai").createOpenAI;
 
@@ -337,10 +338,10 @@ function buildPlaywrightChunks({
   readonly includeReasoning: boolean;
   readonly fallbackText: string;
 }): LanguageModelV2StreamPart[] {
-  const recentMessage = prompt.at(-1);
+  const recentMessage = resolveLatestRelevantMessage(prompt);
 
   if (!recentMessage) {
-    throw new Error("No recent message found!");
+    throw new Error("No recent user message found!");
   }
 
   if (includeReasoning) {
@@ -359,6 +360,83 @@ function buildPlaywrightChunks({
     ...buildTextDeltas(fallbackText),
     buildFinishChunk({ inputTokens: 3, outputTokens: 10, totalTokens: 13 }),
   ];
+}
+
+function resolveLatestRelevantMessage(
+  prompt: ModelMessage[]
+): ModelMessage | null {
+  /**
+   * Tool responses arrive immediately before the assistant synthesises the
+   * final answer. Prioritise those payloads so the inline mocks can emit
+   * follow-up text without re-triggering the tool dispatch. When no tool
+   * result is present we fall back to the latest user-authored message so edit
+   * flows honour the freshly submitted prompt. The terminal entry remains the
+   * final fallback to keep the fixtures permissive for any future payload
+   * shapes.
+   */
+  for (let index = prompt.length - 1; index >= 0; index -= 1) {
+    const candidate = prompt[index];
+
+    if (candidate.role === "tool") {
+      return candidate;
+    }
+  }
+
+  for (let index = prompt.length - 1; index >= 0; index -= 1) {
+    const candidate = prompt[index];
+
+    if (candidate.role === "user") {
+      return candidate;
+    }
+  }
+
+  return prompt.at(-1) ?? null;
+}
+
+function extractLatestTextFragment(message: ModelMessage): string | null {
+  /**
+   * Inline edit flows occasionally send patched user messages that keep the
+   * prior assistant reply in the payload before appending the new question as
+   * an additional text part. Inspect the content array in reverse order so we
+   * always treat the freshest non-empty text as the authoritative prompt.
+   */
+  if (!Array.isArray(message.content)) {
+    return null;
+  }
+
+  for (let index = message.content.length - 1; index >= 0; index -= 1) {
+    const fragment = message.content[index];
+
+    if (fragment == null) {
+      continue;
+    }
+
+    let candidate: string | null = null;
+
+    if (typeof fragment === "string") {
+      candidate = fragment;
+    } else if (typeof fragment === "object") {
+      if (
+        "text" in fragment &&
+        typeof (fragment as { text?: unknown }).text === "string"
+      ) {
+        candidate = (fragment as { text: string }).text;
+      } else if (
+        "input_text" in fragment &&
+        typeof (fragment as { input_text?: unknown }).input_text === "string"
+      ) {
+        candidate = (fragment as { input_text: string }).input_text;
+      }
+    }
+
+    const trimmed = candidate?.trim() ?? "";
+
+    if (trimmed.length > 0) {
+      return trimmed;
+    }
+  }
+
+  return null;
 }
 
 function resolveReasoningPrompt(
@@ -409,9 +487,7 @@ function resolveStandardPrompt(
     ];
   }
 
-  if (
-    matchesSingleTextMessage(message, "What are the advantages of using Next.js?")
-  ) {
+  if (matchesSingleTextMessage(message, DEFAULT_ONBOARDING_SUGGESTION)) {
     return [
       ...buildTextDeltas("With Next.js, you can ship fast!"),
       buildFinishChunk({ inputTokens: 3, outputTokens: 10, totalTokens: 13 }),
@@ -679,13 +755,9 @@ function matchesSingleTextMessage(
     return false;
   }
 
-  if (!Array.isArray(message.content) || message.content.length !== 1) {
-    return false;
-  }
+  const latestFragment = extractLatestTextFragment(message);
 
-  const [part] = message.content;
-
-  return part.type === "text" && part.text === expectedText;
+  return latestFragment === expectedText;
 }
 
 function buildTextDeltas(text: string): LanguageModelV2StreamPart[] {

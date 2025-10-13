@@ -1,7 +1,11 @@
 import { createRequire } from "node:module";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { LanguageModelV2StreamPart } from "@ai-sdk/provider";
 import type { ModelMessage } from "ai";
+
+import { DEFAULT_ONBOARDING_SUGGESTION } from "@/lib/constants";
+import { TEST_PROMPTS } from "../../prompts/basic";
 
 const createOpenAIMock = vi.fn(() => ({
   languageModel: vi.fn((modelId: string) => ({
@@ -138,6 +142,86 @@ describe("ai provider configuration", () => {
 
     expect(chatModel.provider).toBe("mock-provider");
     expect(chatModel.specificationVersion).toBe("v2");
+  });
+
+  it("streams the most recent user prompt when previous assistant replies remain", async () => {
+    process.env.PLAYWRIGHT = "true";
+    process.env.NEXT_PHASE = "phase-production-build";
+
+    const { myProvider } = await import("@/lib/ai/providers");
+    const chatModel = myProvider.languageModel("chat-model");
+
+    const prompt: ModelMessage[] = [
+      {
+        role: "system",
+        content: [{ type: "text", text: "System primer" }],
+      },
+      TEST_PROMPTS.USER_GRASS,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "It's just green duh!" }],
+      },
+      TEST_PROMPTS.USER_SKY,
+    ];
+
+    const { stream } = await chatModel.doStream({ prompt } as any);
+    const reader = stream.getReader();
+    let aggregated = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      const chunk = value as LanguageModelV2StreamPart | null;
+      if (chunk?.type === "text-delta") {
+        aggregated += String(chunk.delta ?? "");
+      }
+    }
+
+    expect(aggregated).toContain("It's just blue duh!");
+  });
+
+  it("prefers the latest text fragment when edited prompts include multiple parts", async () => {
+    process.env.PLAYWRIGHT = "true";
+    process.env.NEXT_PHASE = "phase-production-build";
+
+    const { myProvider } = await import("@/lib/ai/providers");
+    const chatModel = myProvider.languageModel("chat-model");
+
+    const prompt: ModelMessage[] = [
+      TEST_PROMPTS.USER_GRASS,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "It's just green duh!" }],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Original: Why is grass green?" },
+          { type: "text", text: "Why is the sky blue?" },
+        ],
+      },
+    ];
+
+    const { stream } = await chatModel.doStream({ prompt } as any);
+    const reader = stream.getReader();
+    let aggregated = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      const chunk = value as LanguageModelV2StreamPart | null;
+      if (chunk?.type === "text-delta") {
+        aggregated += String(chunk.delta ?? "");
+      }
+    }
+
+    expect(aggregated).toContain("It's just blue duh!");
   });
 
   it("uses the OpenAI provider when credentials are present", async () => {
@@ -400,7 +484,7 @@ describe("loadMockLanguageModels", () => {
         {
           role: "user",
           content: [
-            { type: "text", text: "What are the advantages of using Next.js?" },
+            { type: "text", text: DEFAULT_ONBOARDING_SUGGESTION },
           ],
         },
       ],

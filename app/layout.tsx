@@ -77,6 +77,13 @@ const THEME_COLOR_SCRIPT = `\
   updateThemeColor();
 })();`;
 
+const PLAYWRIGHT_AUTOMATION_SCRIPT =
+  process.env.NEXT_PUBLIC_PLAYWRIGHT === "true" ||
+  process.env.PLAYWRIGHT === "true" ||
+  process.env.CI_PLAYWRIGHT === "true"
+    ? "(function(){try{window.__PLAYWRIGHT_AUTOMATION__=true;}catch(_){}})();"
+    : null;
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -100,6 +107,14 @@ export default function RootLayout({
             __html: THEME_COLOR_SCRIPT,
           }}
         />
+        {PLAYWRIGHT_AUTOMATION_SCRIPT ? (
+          <script
+            // biome-ignore lint/security/noDangerouslySetInnerHtml: "Required"
+            dangerouslySetInnerHTML={{
+              __html: PLAYWRIGHT_AUTOMATION_SCRIPT,
+            }}
+          />
+        ) : null}
       </head>
       <body className="antialiased">
         <ThemeProvider

@@ -1,5 +1,13 @@
 import { generateDummyPassword } from "./db/utils";
 
+/**
+ * Deterministic onboarding prompt surfaced across the application. The value
+ * underpins Playwright journeys that click the first suggested action, so it is
+ * centralised here to keep the UI and the test harness in sync.
+ */
+export const DEFAULT_ONBOARDING_SUGGESTION =
+  "What are the advantages of using Next.js?";
+
 export const isProductionEnvironment = process.env.NODE_ENV === "production";
 export const isDevelopmentEnvironment = process.env.NODE_ENV === "development";
 

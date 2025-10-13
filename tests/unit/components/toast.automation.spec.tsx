@@ -21,6 +21,9 @@ const AUTOMATION_TOAST_LIFETIME_MS = 4_000;
 describe("toast automation bridge", () => {
   let originalWebdriver: boolean | undefined;
   let originalUserAgent: string | undefined;
+  let originalNextPublicPlaywright: string | undefined;
+  let originalPlaywright: string | undefined;
+  let originalCiPlaywright: string | undefined;
 
   beforeEach(() => {
     if (typeof navigator !== "undefined") {
@@ -40,6 +43,9 @@ describe("toast automation bridge", () => {
     }
 
     document.body.innerHTML = "";
+    originalNextPublicPlaywright = process.env.NEXT_PUBLIC_PLAYWRIGHT;
+    originalPlaywright = process.env.PLAYWRIGHT;
+    originalCiPlaywright = process.env.CI_PLAYWRIGHT;
     vi.useFakeTimers();
   });
 
@@ -72,6 +78,23 @@ describe("toast automation bridge", () => {
     document.body.innerHTML = "";
     vi.useRealTimers();
     vi.clearAllMocks();
+    if (originalNextPublicPlaywright === undefined) {
+      delete process.env.NEXT_PUBLIC_PLAYWRIGHT;
+    } else {
+      process.env.NEXT_PUBLIC_PLAYWRIGHT = originalNextPublicPlaywright;
+    }
+
+    if (originalPlaywright === undefined) {
+      delete process.env.PLAYWRIGHT;
+    } else {
+      process.env.PLAYWRIGHT = originalPlaywright;
+    }
+
+    if (originalCiPlaywright === undefined) {
+      delete process.env.CI_PLAYWRIGHT;
+    } else {
+      process.env.CI_PLAYWRIGHT = originalCiPlaywright;
+    }
   });
 
   it("mirrors toast payloads into an automation-visible element", () => {
@@ -116,5 +139,31 @@ describe("toast automation bridge", () => {
     const bridge = document.getElementById(AUTOMATION_BRIDGE_ID);
     expect(bridge).not.toBeNull();
     expect(bridge).toHaveTextContent("Headless detection");
+  });
+
+  it("activates when the public Playwright flag is provided", () => {
+    if (typeof navigator === "undefined") {
+      throw new Error("Navigator should be defined in the test environment");
+    }
+
+    Object.defineProperty(navigator, "webdriver", {
+      configurable: true,
+      value: false,
+    });
+
+    Object.defineProperty(navigator, "userAgent", {
+      configurable: true,
+      value: "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+    });
+
+    process.env.NEXT_PUBLIC_PLAYWRIGHT = "true";
+    delete process.env.PLAYWRIGHT;
+    delete process.env.CI_PLAYWRIGHT;
+
+    toast({ type: "success", description: "Public flag detection" });
+
+    const bridge = document.getElementById(AUTOMATION_BRIDGE_ID);
+    expect(bridge).not.toBeNull();
+    expect(bridge).toHaveTextContent("Public flag detection");
   });
 });

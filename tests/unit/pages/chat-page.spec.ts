@@ -1,7 +1,8 @@
-import type { Page } from "@playwright/test";
+import type { BrowserContext, Page } from "@playwright/test";
 import { describe, expect, it, vi } from "vitest";
 
 import { chatModels } from "@/lib/ai/models";
+import { DEFAULT_ONBOARDING_SUGGESTION } from "@/lib/constants";
 
 import { ChatPage } from "../../pages/chat";
 
@@ -13,6 +14,21 @@ type MockResponseOptions = {
   body?: string;
   method?: string;
 };
+
+const createMockRequest = ({
+  url,
+  method = "POST",
+  response,
+}: {
+  url: string;
+  method?: string;
+  response?: () => unknown;
+}) => ({
+  url: () => url,
+  method: () => method,
+  response:
+    response ?? vi.fn().mockResolvedValue(null),
+});
 
 const createMockResponse = ({
   url,
@@ -34,6 +50,8 @@ const createMockResponse = ({
 });
 
 type MockResponse = ReturnType<typeof createMockResponse>;
+
+const TOAST_SELECTOR = '[data-testid="toast"], #automation-toast-bridge';
 
 describe("ChatPage navigation", () => {
   it("navigates directly to /chat and waits for the chat controls", async () => {
@@ -84,37 +102,353 @@ describe("ChatPage navigation", () => {
 
 describe("ChatPage.waitForChatApiResponse", () => {
   const createEventHarness = () => {
-    const listeners: Record<string, Set<(...args: any[]) => unknown>> = {
-      response: new Set(),
-      requestfailed: new Set(),
-    };
+    const createListenerRegistry = () => ({
+      request: new Set<(...args: any[]) => unknown>(),
+      response: new Set<(...args: any[]) => unknown>(),
+      requestfailed: new Set<(...args: any[]) => unknown>(),
+      signal: new Set<(...args: any[]) => unknown>(),
+      composer: new Set<(...args: any[]) => unknown>(),
+    });
 
-    const page = {
-      on: vi.fn((event: string, handler: (...args: any[]) => unknown) => {
-        listeners[event]?.add(handler);
-      }),
-      off: vi.fn((event: string, handler: (...args: any[]) => unknown) => {
-        listeners[event]?.delete(handler);
-      }),
-      getByTestId: vi.fn((testId: string) => {
-        throw new Error(`Unexpected test id access: ${testId}`);
-      }),
-      waitForFunction: vi.fn(),
-      waitForTimeout: vi.fn().mockResolvedValue(undefined),
-    } satisfies Partial<Page>;
+    const createWaiterRegistry = () => ({
+      request: new Set<{
+        predicate: (payload: unknown) => boolean;
+        resolve: (payload: unknown) => void;
+      }>(),
+      response: new Set<{
+        predicate: (payload: unknown) => boolean;
+        resolve: (payload: unknown) => void;
+      }>(),
+      requestfailed: new Set<{
+        predicate: (payload: unknown) => boolean;
+        resolve: (payload: unknown) => void;
+      }>(),
+      signal: new Set<{
+        predicate: (payload: unknown) => boolean;
+        resolve: (payload: unknown) => void;
+      }>(),
+      composer: new Set<{
+        predicate: (payload: unknown) => boolean;
+        resolve: (payload: unknown) => void;
+      }>(),
+    });
 
-    const emit = async (event: "response" | "requestfailed", payload: any) => {
+    const pageListeners = createListenerRegistry();
+    const contextListeners = createListenerRegistry();
+    const pageWaiters = createWaiterRegistry();
+    const contextWaiters = createWaiterRegistry();
+    /**
+     * The chat composer emits Playwright-facing “signals” in the browser
+     * context. The harness mirrors that counter so unit tests can simulate the
+     * race between network responses and UI instrumentation without reaching
+     * for real pages.
+     */
+    let chatSignalCount = 0;
+
+    const registerWaiter = (
+      registry: ReturnType<typeof createWaiterRegistry>,
+      event: keyof ReturnType<typeof createWaiterRegistry>,
+      predicate: (payload: unknown) => boolean
+    ) =>
+      new Promise<unknown>((resolve) => {
+        registry[event].add({ predicate, resolve });
+      });
+
+    const emitFrom = async (
+      listeners: ReturnType<typeof createListenerRegistry>,
+      waiters: ReturnType<typeof createWaiterRegistry>,
+      event: keyof ReturnType<typeof createListenerRegistry>,
+      payload: unknown
+    ) => {
+      for (const waiter of Array.from(waiters[event])) {
+        if (waiter.predicate(payload)) {
+          waiters[event].delete(waiter);
+          waiter.resolve(payload);
+        }
+      }
+
       for (const handler of Array.from(listeners[event] ?? [])) {
         await handler(payload);
       }
     };
 
+    const createEmitter = (
+      registry: ReturnType<typeof createListenerRegistry>
+    ) => ({
+      on: vi.fn((event: string, handler: (...args: any[]) => unknown) => {
+        registry[event as keyof typeof registry]?.add(handler);
+      }),
+      off: vi.fn((event: string, handler: (...args: any[]) => unknown) => {
+        registry[event as keyof typeof registry]?.delete(handler);
+      }),
+    });
+
+    const browserContext = {
+      ...createEmitter(contextListeners),
+      waitForEvent: vi.fn(
+        (
+          event: string,
+          options?: { predicate?: (payload: unknown) => boolean }
+        ) => {
+          if (
+            event === "request" ||
+            event === "response" ||
+            event === "requestfailed"
+          ) {
+            return registerWaiter(
+              contextWaiters,
+              event,
+              options?.predicate ?? (() => true)
+            ) as Promise<any>;
+          }
+
+          throw new Error(`Unexpected browser context event: ${event}`);
+        }
+      ),
+    } satisfies Partial<BrowserContext>;
+
+    const stopButtonLocator = {
+      isVisible: vi.fn().mockResolvedValue(false),
+    };
+    const sendButtonLocator = {
+      isVisible: vi.fn().mockResolvedValue(true),
+      isEnabled: vi.fn().mockResolvedValue(true),
+    };
+
+    const assistantContentLocator = {
+      innerText: vi.fn().mockResolvedValue(""),
+    };
+    const assistantArtifactsLocator = {
+      count: vi.fn().mockResolvedValue(0),
+    };
+    const assistantMessageLocator = {
+      getAttribute: vi.fn().mockResolvedValue(null),
+      getByTestId: vi
+        .fn((testId: string) => {
+          if (testId === "message-content") {
+            return assistantContentLocator as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
+          throw new Error(`Unexpected assistant test id access: ${testId}`);
+        })
+        .mockName("assistantMessageLocator.getByTestId"),
+      locator: vi
+        .fn(() =>
+          assistantArtifactsLocator as unknown as ReturnType<Page["locator"]>
+        )
+        .mockName("assistantMessageLocator.locator"),
+    };
+    const assistantLocator = {
+      count: vi.fn().mockResolvedValue(0),
+      nth: vi
+        .fn(() => assistantMessageLocator as unknown as ReturnType<Page["getByTestId"]>)
+        .mockName("assistantLocator.nth"),
+    };
+    const spinnerLocator = {
+      count: vi.fn().mockResolvedValue(0),
+    };
+    const userLocator = {
+      count: vi.fn().mockResolvedValue(0),
+    };
+    const composerLocator = {
+      inputValue: vi.fn().mockResolvedValue(""),
+      press: vi.fn().mockResolvedValue(undefined),
+    };
+    const suggestedActionsLocator = {
+      isVisible: vi.fn().mockResolvedValue(true),
+    };
+    const toastLocator = {
+      first: vi
+        .fn(() => toastLocator as unknown as ReturnType<Locator["first"]>)
+        .mockName("toastLocator.first"),
+      waitFor: vi
+        .fn(() => new Promise<never>(() => {}))
+        .mockName("toastLocator.waitFor"),
+    };
+
+    const page = {
+      ...createEmitter(pageListeners),
+      context: vi.fn(() => browserContext as BrowserContext),
+      waitForRequest: vi.fn(
+        (
+          predicate: (payload: unknown) => boolean,
+          _options?: { timeout?: number }
+        ) => registerWaiter(pageWaiters, "request", predicate)
+      ),
+      waitForResponse: vi.fn(
+        (
+          predicate: (payload: unknown) => boolean,
+          _options?: { timeout?: number }
+        ) => registerWaiter(pageWaiters, "response", predicate)
+      ),
+      waitForEvent: vi.fn(
+        (
+          event: string,
+          options?: { predicate?: (payload: unknown) => boolean }
+        ) => {
+          if (event !== "requestfailed" && event !== "response") {
+            throw new Error(`Unexpected page event: ${event}`);
+          }
+
+          return registerWaiter(
+            pageWaiters,
+            event,
+            options?.predicate ?? (() => true)
+          );
+        }
+      ),
+      locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid$="-artifact"]') {
+          return assistantArtifactsLocator as unknown as ReturnType<Page["locator"]>;
+        }
+
+        if (selector === TOAST_SELECTOR) {
+          return toastLocator as unknown as ReturnType<Page["locator"]>;
+        }
+
+        throw new Error(`Unexpected locator access: ${selector}`);
+      }),
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "stop-button") {
+          return stopButtonLocator as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "send-button") {
+          return sendButtonLocator as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant") {
+          return assistantLocator as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant-loading") {
+          return spinnerLocator as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-user") {
+          return userLocator as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "multimodal-input") {
+          return composerLocator as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "suggested-actions") {
+          return suggestedActionsLocator as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        throw new Error(`Unexpected test id access: ${testId}`);
+      }),
+      waitForFunction: vi.fn(
+        (
+          _predicate: (...args: unknown[]) => unknown,
+          baseline: unknown,
+          _options?: { timeout?: number }
+        ) => {
+          if (typeof baseline === "number") {
+            const numericBaseline = baseline;
+
+            if (chatSignalCount > numericBaseline) {
+              return Promise.resolve(undefined);
+            }
+
+            /**
+             * The real implementation waits for `window.__PLAYWRIGHT_CHAT_SIGNALS__`
+             * to gain new entries. Replicate that by registering a waiter that
+             * resolves once the in-memory counter surpasses the captured
+             * baseline.
+             */
+            return registerWaiter(
+              pageWaiters,
+              "signal",
+              (payload: unknown) =>
+                typeof payload === "object" &&
+                payload !== null &&
+                "count" in (payload as { count?: unknown }) &&
+                typeof (payload as { count?: unknown }).count === "number" &&
+                ((payload as { count: number }).count > numericBaseline)
+            ).then(() => undefined);
+          }
+
+          if (typeof baseline === "string") {
+            return registerWaiter(
+              pageWaiters,
+              "composer",
+              (payload: unknown) =>
+                typeof payload === "string" &&
+                payload.trim().length === 0 &&
+                payload !== baseline
+            ).then(() => undefined);
+          }
+
+          return Promise.resolve(undefined);
+        }
+      ),
+      waitForTimeout: vi
+        .fn(() => Promise.resolve())
+        .mockName("page.waitForTimeout"),
+      evaluate: vi
+        .fn(() => Promise.resolve(chatSignalCount))
+        .mockName("page.evaluate"),
+    } satisfies Partial<Page>;
+
     return {
       page: page as Page,
-      emitResponse: (payload: any) => emit("response", payload),
-      emitFailure: (payload: any) => emit("requestfailed", payload),
-      listeners,
+      emitRequest: (payload: any) =>
+        emitFrom(pageListeners, pageWaiters, "request", payload),
+      emitContextRequest: (payload: any) =>
+        emitFrom(contextListeners, contextWaiters, "request", payload),
+      emitResponse: (payload: any) =>
+        emitFrom(pageListeners, pageWaiters, "response", payload),
+      emitContextResponse: (payload: any) =>
+        emitFrom(contextListeners, contextWaiters, "response", payload),
+      emitFailure: (payload: any) =>
+        emitFrom(pageListeners, pageWaiters, "requestfailed", payload),
+      emitContextFailure: (payload: any) =>
+        emitFrom(contextListeners, contextWaiters, "requestfailed", payload),
+      emitSignal: (increment = 1) => {
+        /**
+         * Increment the synthetic signal buffer so the `waitForFunction`
+         * promise resolves exactly as it would when the browser pushes a new
+         * entry into `window.__PLAYWRIGHT_CHAT_SIGNALS__`.
+         */
+        chatSignalCount += increment;
+        return emitFrom(pageListeners, pageWaiters, "signal", {
+          count: chatSignalCount,
+        });
+      },
+      emitComposerClear: (nextValue = "") =>
+        emitFrom(pageListeners, pageWaiters, "composer", nextValue),
+      setSignalCount: (nextCount: number) => {
+        chatSignalCount = nextCount;
+      },
+      listeners: { page: pageListeners, context: contextListeners },
+      sendButtonLocator,
+      stopButtonLocator,
+      suggestedActionsLocator,
     };
+  };
+
+  const stubFallback = (chatPage: ChatPage) =>
+    vi
+      .spyOn(chatPage as unknown as { waitForUiStreamingFallback: () => Promise<void> }, "waitForUiStreamingFallback")
+      .mockResolvedValue(undefined);
+
+  const seedPendingSnapshot = (chatPage: ChatPage) => {
+    (chatPage as any).pendingAssistantSnapshot = {
+      count: 0,
+      latestArtifactCount: 0,
+      latestMessageId: null,
+      latestMessageText: "",
+    };
+    (chatPage as any).pendingUserMessageCount = 0;
+    (chatPage as any).pendingStopButtonWasVisible = false;
+    (chatPage as any).pendingSendButtonWasVisible = true;
+    (chatPage as any).pendingSendButtonWasEnabled = true;
+    (chatPage as any).pendingChatSignalCount = 0;
+    (chatPage as any).pendingComposerValue = "";
+    (chatPage as any).pendingComposerNeedsClear = false;
+    (chatPage as any).pendingSuggestedActionsWereVisible = false;
   };
 
   it("resolves once POST /api/chat responds, including query parameters", async () => {
@@ -122,11 +456,10 @@ describe("ChatPage.waitForChatApiResponse", () => {
     try {
       const harness = createEventHarness();
       const chatPage = new ChatPage(harness.page);
+      stubFallback(chatPage);
+      seedPendingSnapshot(chatPage);
 
       const waitPromise = (chatPage as any).waitForChatApiResponse();
-
-      expect(harness.listeners.response.size).toBe(1);
-      expect(harness.listeners.requestfailed.size).toBe(1);
 
       await harness.emitResponse(
         createMockResponse({
@@ -142,11 +475,110 @@ describe("ChatPage.waitForChatApiResponse", () => {
     }
   });
 
+  it("resolves as soon as a Playwright chat signal is emitted", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createEventHarness();
+      const chatPage = new ChatPage(harness.page);
+      stubFallback(chatPage);
+      seedPendingSnapshot(chatPage);
+
+      const waitPromise = (chatPage as any).waitForChatApiResponse();
+
+      await harness.emitSignal();
+
+      await expect(waitPromise).resolves.toBeUndefined();
+      expect(harness.page.waitForFunction).toHaveBeenCalledWith(
+        expect.any(Function),
+        0,
+        expect.objectContaining({ timeout: expect.any(Number) })
+      );
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("resolves when the composer clears after seeding a pending value", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createEventHarness();
+      const chatPage = new ChatPage(harness.page);
+      stubFallback(chatPage);
+      seedPendingSnapshot(chatPage);
+
+      (chatPage as any).pendingComposerValue = "Bonjour";
+      (chatPage as any).pendingComposerNeedsClear = true;
+
+      const waitPromise = (chatPage as any).waitForChatApiResponse();
+
+      await harness.emitComposerClear("");
+
+      await expect(waitPromise).resolves.toBeUndefined();
+      expect((chatPage as any).pendingComposerNeedsClear).toBe(false);
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("observes chat transports emitted directly by the browser context", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createEventHarness();
+      const chatPage = new ChatPage(harness.page);
+      stubFallback(chatPage);
+      seedPendingSnapshot(chatPage);
+
+      const waitPromise = (chatPage as any).waitForChatApiResponse();
+
+      await harness.emitContextResponse(
+        createMockResponse({
+          url: "http://localhost:3000/api/chat",
+          ok: true,
+        })
+      );
+
+      await expect(waitPromise).resolves.toBeUndefined();
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("resolves after observing a matching chat request even when the response is still streaming", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createEventHarness();
+      const chatPage = new ChatPage(harness.page);
+      stubFallback(chatPage);
+      seedPendingSnapshot(chatPage);
+
+      const waitPromise = (chatPage as any).waitForChatApiResponse();
+
+      await harness.emitRequest(
+        createMockRequest({
+          url: "http://localhost:3000/api/chat?chatId=slow-stream",
+          response: () => new Promise(() => {}),
+        })
+      );
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      await expect(waitPromise).resolves.toBeUndefined();
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("accepts streaming endpoints under /api/chat/:id/stream", async () => {
     vi.useFakeTimers();
     try {
       const harness = createEventHarness();
       const chatPage = new ChatPage(harness.page);
+      stubFallback(chatPage);
+      seedPendingSnapshot(chatPage);
 
       const waitPromise = (chatPage as any).waitForChatApiResponse();
 
@@ -154,6 +586,32 @@ describe("ChatPage.waitForChatApiResponse", () => {
         createMockResponse({
           url: "http://localhost:3000/api/chat/fake-id/stream",
           ok: true,
+          method: "GET",
+        })
+      );
+
+      await expect(waitPromise).resolves.toBeUndefined();
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("accepts nested chat endpoints such as message edits", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createEventHarness();
+      const chatPage = new ChatPage(harness.page);
+      stubFallback(chatPage);
+      seedPendingSnapshot(chatPage);
+
+      const waitPromise = (chatPage as any).waitForChatApiResponse();
+
+      await harness.emitResponse(
+        createMockResponse({
+          url: "http://localhost:3000/api/chat/abc/messages/def",
+          ok: true,
+          method: "PATCH",
         })
       );
 
@@ -169,6 +627,8 @@ describe("ChatPage.waitForChatApiResponse", () => {
     try {
       const harness = createEventHarness();
       const chatPage = new ChatPage(harness.page);
+      stubFallback(chatPage);
+      seedPendingSnapshot(chatPage);
 
       const waitPromise = (chatPage as any).waitForChatApiResponse();
 
@@ -214,6 +674,29 @@ describe("ChatPage.waitForChatApiResponse", () => {
     }
   });
 
+  it("throws when a streaming GET transport fails before responding", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createEventHarness();
+      const chatPage = new ChatPage(harness.page);
+
+      const waitPromise = (chatPage as any).waitForChatApiResponse();
+
+      await harness.emitFailure({
+        method: () => "GET",
+        url: () => "http://localhost:3000/api/chat/example-id/stream",
+        failure: () => ({ errorText: "net::ERR_STREAM_CLOSED" }),
+      });
+
+      await expect(waitPromise).rejects.toThrow(
+        "Chat API request failed before receiving a response – net::ERR_STREAM_CLOSED"
+      );
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("falls back to UI polling when the network error indicates an offline transport", async () => {
     vi.useFakeTimers();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -222,34 +705,86 @@ describe("ChatPage.waitForChatApiResponse", () => {
         () => new Promise(() => {})
       );
       const toastInnerText = vi.fn().mockResolvedValue("");
-      const waitForFunction = vi.fn().mockResolvedValue(undefined);
+      const assistantCount = vi.fn().mockResolvedValue(0);
+      const spinnerCount = vi
+        .fn()
+        .mockResolvedValueOnce(1)
+        .mockResolvedValue(0);
+      const toastLocatorHandle = {
+        waitFor: toastWaitFor,
+        innerText: toastInnerText,
+      } as const;
 
       const harness = createEventHarness();
       (harness.page.getByTestId as ReturnType<typeof vi.fn>).mockImplementation(
         (testId: string) => {
           if (testId === "toast") {
+            return toastLocatorHandle as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
+          if (testId === "multimodal-input") {
             return {
-              waitFor: toastWaitFor,
-              innerText: toastInnerText,
+              inputValue: vi.fn().mockResolvedValue(""),
+              press: vi.fn().mockResolvedValue(undefined),
             } as unknown as ReturnType<Page["getByTestId"]>;
           }
 
-          throw new Error(`Unexpected test id ${testId}`);
+          if (testId === "message-assistant") {
+            return {
+              count: assistantCount,
+              nth: vi.fn(),
+            } as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
+          if (testId === "message-assistant-loading") {
+            return {
+              count: spinnerCount,
+            } as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
+          if (testId === "stop-button") {
+            return {
+              isVisible: vi.fn().mockResolvedValue(false),
+            } as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
+        if (testId === "send-button") {
+          return {
+            isVisible: vi.fn().mockResolvedValue(true),
+            isEnabled: vi.fn().mockResolvedValue(true),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-user") {
+          return {
+            count: vi.fn().mockResolvedValue(0),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        throw new Error(`Unexpected test id ${testId}`);
+      }
+    );
+      (harness.page.locator as ReturnType<typeof vi.fn>).mockImplementation(
+        (selector: string) => {
+          if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+            return {
+              first: () => toastLocatorHandle,
+            } as unknown as ReturnType<Page["locator"]>;
+          }
+
+          throw new Error(`Unexpected locator access: ${selector}`);
         }
       );
 
       const chatPage = new ChatPage(harness.page);
-      (chatPage as any).pendingAssistantSnapshot = {
-        count: 0,
-        latestArtifactCount: 0,
-        latestMessageId: null,
-        latestMessageText: "",
-      };
-
-      (harness.page.waitForFunction as ReturnType<typeof vi.fn>).mockImplementation(
-        (...args: Parameters<Page["waitForFunction"]>) =>
-          waitForFunction(...args)
-      );
+      seedPendingSnapshot(chatPage);
 
       const waitPromise = (chatPage as any).waitForChatApiResponse();
 
@@ -272,16 +807,8 @@ describe("ChatPage.waitForChatApiResponse", () => {
         state: "visible",
         timeout: 45_000,
       });
-      expect(waitForFunction).toHaveBeenCalledWith(
-        expect.any(Function),
-        {
-          baselineCount: 0,
-          baselineLatestId: null,
-          baselineLatestText: "",
-          baselineArtifactCount: 0,
-        },
-        { timeout: 45_000 }
-      );
+      expect(assistantCount).toHaveBeenCalled();
+      expect(spinnerCount).toHaveBeenCalled();
     } finally {
       warnSpy.mockRestore();
       vi.runOnlyPendingTimers();
@@ -301,31 +828,69 @@ describe("ChatPage.waitForChatApiResponse", () => {
       const spinnerCount = vi
         .fn()
         .mockImplementation(async () => (spinnerCalls++ === 0 ? 1 : 0));
+      const toastLocatorHandle = {
+        waitFor: toastWaitFor,
+        innerText: toastInnerText,
+      } as const;
 
       const harness = createEventHarness();
       (harness.page.getByTestId as ReturnType<typeof vi.fn>).mockImplementation(
         (testId: string) => {
           if (testId === "toast") {
-            return {
-              waitFor: toastWaitFor,
-              innerText: toastInnerText,
-            } as unknown as ReturnType<Page["getByTestId"]>;
+            return toastLocatorHandle as unknown as ReturnType<Page["getByTestId"]>;
           }
 
-          if (testId === "message-assistant") {
+        if (testId === "message-assistant") {
+          return {
+            count: assistantCount,
+            nth: vi.fn(),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant-loading") {
+          return {
+            count: spinnerCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "stop-button") {
+          return {
+            isVisible: vi.fn().mockResolvedValue(false),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "send-button") {
+          return {
+            isVisible: vi.fn().mockResolvedValue(true),
+            isEnabled: vi.fn().mockResolvedValue(true),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-user") {
+          return {
+            count: vi.fn().mockResolvedValue(0),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        throw new Error(`Unexpected test id ${testId}`);
+      }
+    );
+      (harness.page.locator as ReturnType<typeof vi.fn>).mockImplementation(
+        (selector: string) => {
+          if (selector === '[data-testid="toast"], #automation-toast-bridge') {
             return {
-              count: assistantCount,
-              nth: vi.fn(),
-            } as unknown as ReturnType<Page["getByTestId"]>;
+              first: () => toastLocatorHandle,
+            } as unknown as ReturnType<Page["locator"]>;
           }
 
-          if (testId === "message-assistant-loading") {
-            return {
-              count: spinnerCount,
-            } as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
-          throw new Error(`Unexpected test id ${testId}`);
+          throw new Error(`Unexpected locator access: ${selector}`);
         }
       );
 
@@ -336,10 +901,12 @@ describe("ChatPage.waitForChatApiResponse", () => {
         latestMessageId: null,
         latestMessageText: "",
       };
+      (chatPage as any).pendingSendButtonWasVisible = true;
+      (chatPage as any).pendingStopButtonWasVisible = false;
 
       const waitPromise = (chatPage as any).waitForChatApiResponse();
 
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(15_000);
 
       await expect(waitPromise).resolves.toBeUndefined();
       expect(toastWaitFor).toHaveBeenCalledWith({
@@ -351,7 +918,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
       expect(
         (harness.page.getByTestId as ReturnType<typeof vi.fn>).mock.calls
           .flat()
-      ).not.toContain("stop-button");
+      ).toContain("stop-button");
     } finally {
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
@@ -359,89 +926,905 @@ describe("ChatPage.waitForChatApiResponse", () => {
   });
 
   it("throws a descriptive timeout error when the UI never indicates streaming", async () => {
-    vi.useFakeTimers();
-    try {
-      const toastWaitFor = vi.fn().mockImplementation(
-        () => new Promise(() => {})
-      );
-      const toastInnerText = vi.fn().mockResolvedValue("");
+    const toastWaitFor = vi.fn().mockImplementation(
+      () => new Promise(() => {})
+    );
+    const toastInnerText = vi.fn().mockResolvedValue("");
+    const assistantCount = vi.fn().mockResolvedValue(1);
+    const latestAssistant = {
+      getAttribute: vi.fn().mockResolvedValue("assistant-1"),
+      getByTestId: vi.fn().mockReturnValue({
+        innerText: vi.fn().mockResolvedValue("Thinking..."),
+      }),
+      locator: vi.fn().mockReturnValue({
+        count: vi.fn().mockResolvedValue(0),
+      }),
+    };
+    const spinnerCount = vi.fn().mockResolvedValue(0);
+    const toastLocatorHandle = {
+      waitFor: toastWaitFor,
+      innerText: toastInnerText,
+    } as const;
 
-      const assistantCount = vi.fn().mockResolvedValue(1);
-      const latestAssistant = {
-        getAttribute: vi.fn().mockResolvedValue("assistant-1"),
-        getByTestId: vi.fn().mockReturnValue({
-          innerText: vi.fn().mockResolvedValue("Thinking..."),
-        }),
-        locator: vi.fn().mockReturnValue({
-          count: vi.fn().mockResolvedValue(0),
-        }),
-      };
-      const spinnerCount = vi.fn().mockResolvedValue(0);
+    const harness = createEventHarness();
+    (harness.page.getByTestId as ReturnType<typeof vi.fn>).mockImplementation(
+      (testId: string) => {
+        if (testId === "toast") {
+          return toastLocatorHandle as unknown as ReturnType<Page["getByTestId"]>;
+        }
 
-      const harness = createEventHarness();
-      (harness.page.getByTestId as ReturnType<typeof vi.fn>).mockImplementation(
-        (testId: string) => {
-          if (testId === "toast") {
-            return {
+        if (testId === "message-assistant") {
+          return {
+            count: assistantCount,
+            nth: vi.fn().mockReturnValue(latestAssistant),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant-loading") {
+          return {
+            count: spinnerCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "stop-button") {
+          return {
+            isVisible: vi.fn().mockResolvedValue(false),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "send-button") {
+          return {
+            isVisible: vi.fn().mockResolvedValue(true),
+            isEnabled: vi.fn().mockResolvedValue(true),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-user") {
+          return {
+            count: vi.fn().mockResolvedValue(0),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        throw new Error(`Unexpected test id ${testId}`);
+      }
+    );
+    (harness.page.locator as ReturnType<typeof vi.fn>).mockImplementation(
+      (selector: string) => {
+        if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+          return {
+            first: () => toastLocatorHandle,
+          } as unknown as ReturnType<Page["locator"]>;
+        }
+
+        throw new Error(`Unexpected locator access: ${selector}`);
+      }
+    );
+
+    const chatPage = new ChatPage(harness.page);
+    const pollSpy = vi
+      .spyOn(chatPage as any, "pollForStreamingChange")
+      .mockRejectedValue(new Error("Timed out waiting for chat UI to start streaming"));
+
+    const baselineSnapshot = {
+      count: 1,
+      latestArtifactCount: 0,
+      latestMessageId: "assistant-1",
+      latestMessageText: "Thinking...",
+    } as const;
+
+    await expect(
+      (chatPage as any).waitForUiStreamingFallback({
+        baseline: baselineSnapshot,
+        baselineUserMessageCount: 0,
+        baselineStopButtonVisible: false,
+        baselineSendButtonVisible: true,
+        baselineSendButtonEnabled: true,
+        baselineChatSignalCount: 0,
+        baselineComposerValue: "",
+        baselineSuggestedActionsVisible: false,
+        timeoutMs: 45_000,
+      })
+    ).rejects.toThrow("Timed out waiting for chat UI to start streaming");
+
+    expect(pollSpy).toHaveBeenCalledWith({
+      baseline: baselineSnapshot,
+      baselineUserMessageCount: 0,
+      baselineStopButtonVisible: false,
+      baselineSendButtonVisible: true,
+      baselineSendButtonEnabled: true,
+      baselineChatSignalCount: 0,
+      baselineComposerValue: "",
+      baselineSuggestedActionsVisible: false,
+      timeoutMs: 45_000,
+    });
+    expect(toastWaitFor).toHaveBeenCalledWith({
+      state: "visible",
+      timeout: 45_000,
+    });
+    expect(assistantCount).not.toHaveBeenCalled();
+    expect(spinnerCount).not.toHaveBeenCalled();
+  });
+
+  it("treats a fresh stop button toggle as evidence of streaming", async () => {
+    const toastWaitFor = vi.fn().mockImplementation(
+      () => new Promise(() => {})
+    );
+    const toastInnerText = vi.fn().mockResolvedValue("");
+    const assistantCount = vi.fn().mockResolvedValue(0);
+    const spinnerCount = vi.fn().mockResolvedValue(0);
+    const stopVisible = vi
+      .fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const waitForTimeout = vi.fn().mockResolvedValue(undefined);
+
+    const page = {
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "toast") {
+          return {
+            waitFor: toastWaitFor,
+            innerText: toastInnerText,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant") {
+          return {
+            count: assistantCount,
+            nth: vi.fn(),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant-loading") {
+          return {
+            count: spinnerCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "stop-button") {
+          return {
+            isVisible: stopVisible,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "send-button") {
+          return {
+            isVisible: vi.fn().mockResolvedValue(true),
+            isEnabled: vi.fn().mockResolvedValue(true),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-user") {
+          return {
+            count: vi.fn().mockResolvedValue(0),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        throw new Error(`Unexpected test id: ${testId}`);
+      }),
+      locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+          return {
+            first: () => ({
               waitFor: toastWaitFor,
               innerText: toastInnerText,
-            } as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
-          if (testId === "message-assistant") {
-            return {
-              count: assistantCount,
-              nth: vi.fn().mockReturnValue(latestAssistant),
-            } as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
-          if (testId === "message-assistant-loading") {
-            return {
-              count: spinnerCount,
-            } as unknown as ReturnType<Page["getByTestId"]>;
-          }
-
-          throw new Error(`Unexpected test id ${testId}`);
+            }),
+          } as unknown as ReturnType<Page["locator"]>;
         }
+
+        throw new Error(`Unexpected locator access: ${selector}`);
+      }),
+      waitForTimeout: waitForTimeout as unknown as Page["waitForTimeout"],
+      evaluate: vi
+        .fn(() => Promise.resolve(0))
+        .mockName("page.evaluate"),
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+    const baselineSnapshot = {
+      count: 0,
+      latestArtifactCount: 0,
+      latestMessageId: null,
+      latestMessageText: "",
+    } as const;
+
+  await (chatPage as any).waitForUiStreamingFallback({
+    baseline: baselineSnapshot,
+    baselineUserMessageCount: 0,
+    baselineStopButtonVisible: false,
+    baselineSendButtonVisible: true,
+    baselineSendButtonEnabled: true,
+    baselineChatSignalCount: 0,
+    baselineComposerValue: "",
+    baselineSuggestedActionsVisible: false,
+    timeoutMs: 5_000,
+  });
+
+    expect(stopVisible).toHaveBeenCalledTimes(2);
+    expect(waitForTimeout).toHaveBeenCalled();
+  });
+
+  it("recognises a hidden send button as a fresh streaming signal", async () => {
+    const toastWaitFor = vi.fn().mockImplementation(
+      () => new Promise(() => {})
+    );
+    const toastInnerText = vi.fn().mockResolvedValue("");
+    const assistantCount = vi.fn().mockResolvedValue(0);
+    const spinnerCount = vi.fn().mockResolvedValue(0);
+    const sendVisible = vi
+      .fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    const waitForTimeout = vi.fn().mockResolvedValue(undefined);
+
+    const page = {
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "toast") {
+          return {
+            waitFor: toastWaitFor,
+            innerText: toastInnerText,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant") {
+          return {
+            count: assistantCount,
+            nth: vi.fn(),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant-loading") {
+          return {
+            count: spinnerCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "stop-button") {
+          return {
+            isVisible: vi.fn().mockResolvedValue(false),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "send-button") {
+          return {
+            isVisible: sendVisible,
+            isEnabled: vi.fn().mockResolvedValue(true),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-user") {
+          return {
+            count: vi.fn().mockResolvedValue(0),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        throw new Error(`Unexpected test id: ${testId}`);
+      }),
+      locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+          return {
+            first: () => ({
+              waitFor: toastWaitFor,
+              innerText: toastInnerText,
+            }),
+          } as unknown as ReturnType<Page["locator"]>;
+        }
+
+        throw new Error(`Unexpected locator access: ${selector}`);
+      }),
+      waitForTimeout: waitForTimeout as unknown as Page["waitForTimeout"],
+      evaluate: vi
+        .fn(() => Promise.resolve(0))
+        .mockName("page.evaluate"),
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+    const baselineSnapshot = {
+      count: 0,
+      latestArtifactCount: 0,
+      latestMessageId: null,
+      latestMessageText: "",
+    } as const;
+
+  await (chatPage as any).waitForUiStreamingFallback({
+    baseline: baselineSnapshot,
+    baselineUserMessageCount: 0,
+    baselineStopButtonVisible: false,
+    baselineSendButtonVisible: true,
+    baselineSendButtonEnabled: true,
+    baselineChatSignalCount: 0,
+    baselineComposerValue: "",
+    baselineSuggestedActionsVisible: false,
+    timeoutMs: 5_000,
+  });
+
+    expect(sendVisible).toHaveBeenCalledTimes(2);
+    expect(waitForTimeout).toHaveBeenCalled();
+  });
+
+  it("treats a disabled send button as evidence of streaming", async () => {
+    const toastWaitFor = vi.fn().mockImplementation(
+      () => new Promise(() => {})
+    );
+    const toastInnerText = vi.fn().mockResolvedValue("");
+    const assistantCount = vi.fn().mockResolvedValue(0);
+    const spinnerCount = vi.fn().mockResolvedValue(0);
+    const sendVisible = vi.fn().mockResolvedValue(true);
+    const sendEnabled = vi
+      .fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    const waitForTimeout = vi.fn().mockResolvedValue(undefined);
+
+    const page = {
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "toast") {
+          return {
+            waitFor: toastWaitFor,
+            innerText: toastInnerText,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant") {
+          return {
+            count: assistantCount,
+            nth: vi.fn(),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant-loading") {
+          return {
+            count: spinnerCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "stop-button") {
+          return {
+            isVisible: vi.fn().mockResolvedValue(false),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "send-button") {
+          return {
+            isVisible: sendVisible,
+            isEnabled: sendEnabled,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-user") {
+          return {
+            count: vi.fn().mockResolvedValue(0),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        throw new Error(`Unexpected test id: ${testId}`);
+      }),
+      locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+          return {
+            first: () => ({
+              waitFor: toastWaitFor,
+              innerText: toastInnerText,
+            }),
+          } as unknown as ReturnType<Page["locator"]>;
+        }
+
+        throw new Error(`Unexpected locator access: ${selector}`);
+      }),
+      waitForTimeout: waitForTimeout as unknown as Page["waitForTimeout"],
+      evaluate: vi
+        .fn(() => Promise.resolve(0))
+        .mockName("page.evaluate"),
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+    const baselineSnapshot = {
+      count: 0,
+      latestArtifactCount: 0,
+      latestMessageId: null,
+      latestMessageText: "",
+    } as const;
+
+  await (chatPage as any).waitForUiStreamingFallback({
+    baseline: baselineSnapshot,
+    baselineUserMessageCount: 0,
+    baselineStopButtonVisible: false,
+    baselineSendButtonVisible: true,
+    baselineSendButtonEnabled: true,
+    baselineChatSignalCount: 0,
+    baselineComposerValue: "",
+    baselineSuggestedActionsVisible: false,
+    timeoutMs: 5_000,
+  });
+
+    expect(sendVisible).toHaveBeenCalledTimes(2);
+    expect(sendEnabled).toHaveBeenCalledTimes(2);
+    expect(waitForTimeout).toHaveBeenCalled();
+  });
+
+  it("treats a cleared composer as evidence of streaming", async () => {
+    const toastWaitFor = vi.fn().mockImplementation(
+      () => new Promise(() => {})
+    );
+    const toastInnerText = vi.fn().mockResolvedValue("");
+    const assistantCount = vi.fn().mockResolvedValue(0);
+    const spinnerCount = vi.fn().mockResolvedValue(0);
+    const stopVisible = vi.fn().mockResolvedValue(false);
+    const sendVisible = vi.fn().mockResolvedValue(true);
+    const sendEnabled = vi.fn().mockResolvedValue(true);
+    const userCount = vi.fn().mockResolvedValue(0);
+    const waitForTimeout = vi.fn().mockResolvedValue(undefined);
+    const composerInputValue = vi
+      .fn<() => Promise<string>>()
+      .mockResolvedValueOnce("")
+      .mockResolvedValue("");
+
+    const page = {
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "toast") {
+          return {
+            waitFor: toastWaitFor,
+            innerText: toastInnerText,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant") {
+          return {
+            count: assistantCount,
+            nth: vi.fn(),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant-loading") {
+          return {
+            count: spinnerCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "stop-button") {
+          return {
+            isVisible: stopVisible,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "send-button") {
+          return {
+            isVisible: sendVisible,
+            isEnabled: sendEnabled,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-user") {
+          return {
+            count: userCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: composerInputValue,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        throw new Error(`Unexpected test id: ${testId}`);
+      }),
+      locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+          return {
+            first: () => ({
+              waitFor: toastWaitFor,
+              innerText: toastInnerText,
+            }),
+          } as unknown as ReturnType<Page["locator"]>;
+        }
+
+        throw new Error(`Unexpected locator access: ${selector}`);
+      }),
+      waitForTimeout: waitForTimeout as unknown as Page["waitForTimeout"],
+      evaluate: vi
+        .fn(() => Promise.resolve(0))
+        .mockName("page.evaluate"),
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+    const baselineSnapshot = {
+      count: 0,
+      latestArtifactCount: 0,
+      latestMessageId: null,
+      latestMessageText: "",
+    } as const;
+
+    await expect(
+      (chatPage as any).pollForStreamingChange({
+        baseline: baselineSnapshot,
+        baselineUserMessageCount: 0,
+        baselineStopButtonVisible: false,
+        baselineSendButtonVisible: true,
+        baselineSendButtonEnabled: true,
+        baselineChatSignalCount: 0,
+        baselineComposerValue: "Run the quarterly planning session",
+        baselineSuggestedActionsVisible: false,
+        timeoutMs: 5_000,
+      })
+    ).resolves.toBeUndefined();
+
+    expect(composerInputValue).toHaveBeenCalled();
+    expect(waitForTimeout).not.toHaveBeenCalled();
+  });
+
+  it("waits until the suggestion prefill appears before treating composer clearing as progress", async () => {
+    const toastWaitFor = vi.fn().mockImplementation(
+      () => new Promise(() => {})
+    );
+    const toastInnerText = vi.fn().mockResolvedValue("");
+    const assistantCount = vi.fn().mockResolvedValue(0);
+    const spinnerCount = vi.fn().mockResolvedValue(0);
+    const stopVisible = vi.fn().mockResolvedValue(false);
+    const sendVisible = vi.fn().mockResolvedValue(true);
+    const sendEnabled = vi.fn().mockResolvedValue(true);
+    const userCount = vi.fn().mockResolvedValue(0);
+    const suggestedActionsVisible = vi.fn().mockResolvedValue(true);
+    const composerValues = [
+      "",
+      "Run the quarterly planning session",
+      "",
+    ];
+    const composerInputValue = vi
+      .fn<() => Promise<string>>()
+      .mockImplementation(() =>
+        Promise.resolve(
+          composerValues.length > 0 ? composerValues.shift() ?? "" : ""
+        )
       );
+    const waitForTimeout = vi.fn().mockResolvedValue(undefined);
 
-      const chatPage = new ChatPage(harness.page);
-      const baselineSnapshot = {
-        count: 1,
-        latestArtifactCount: 0,
-        latestMessageId: "assistant-1",
-        latestMessageText: "Thinking...",
-      } as const;
+    const page = {
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "toast") {
+          return {
+            waitFor: toastWaitFor,
+            innerText: toastInnerText,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
 
-      let caughtError: unknown;
-      try {
-        const waitPromise = (chatPage as any).waitForUiStreamingFallback(
-          baselineSnapshot,
-          45_000
-        );
+        if (testId === "message-assistant") {
+          return {
+            count: assistantCount,
+            nth: vi.fn(),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
 
-        await vi.advanceTimersByTimeAsync(45_000);
+        if (testId === "message-assistant-loading") {
+          return {
+            count: spinnerCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
 
-        await waitPromise;
-      } catch (error) {
-        caughtError = error;
-      }
+        if (testId === "stop-button") {
+          return {
+            isVisible: stopVisible,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
 
-      expect(caughtError).toBeInstanceOf(Error);
-      expect((caughtError as Error).message).toBe(
-        "Timed out waiting for chat UI to start streaming"
-      );
-      expect(toastWaitFor).toHaveBeenCalledWith({
-        state: "visible",
-        timeout: 45_000,
-      });
-      expect(assistantCount).toHaveBeenCalled();
-      expect(latestAssistant.getAttribute).toHaveBeenCalled();
-      expect(spinnerCount).toHaveBeenCalled();
-    } finally {
-      vi.runOnlyPendingTimers();
-      vi.useRealTimers();
-    }
+        if (testId === "send-button") {
+          return {
+            isVisible: sendVisible,
+            isEnabled: sendEnabled,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-user") {
+          return {
+            count: userCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "suggested-actions") {
+          return {
+            isVisible: suggestedActionsVisible,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: composerInputValue,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        throw new Error(`Unexpected test id: ${testId}`);
+      }),
+      locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+          return {
+            first: () => ({
+              waitFor: toastWaitFor,
+              innerText: toastInnerText,
+            }),
+          } as unknown as ReturnType<Page["locator"]>;
+        }
+
+        throw new Error(`Unexpected locator access: ${selector}`);
+      }),
+      waitForTimeout: waitForTimeout as unknown as Page["waitForTimeout"],
+      evaluate: vi.fn(() => Promise.resolve(0)),
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+    (chatPage as any).pendingComposerPrefill =
+      "Run the quarterly planning session";
+
+    const baselineSnapshot = {
+      count: 0,
+      latestArtifactCount: 0,
+      latestMessageId: null,
+      latestMessageText: "",
+    } as const;
+
+    await expect(
+      (chatPage as any).pollForStreamingChange({
+        baseline: baselineSnapshot,
+        baselineUserMessageCount: 0,
+        baselineStopButtonVisible: false,
+        baselineSendButtonVisible: true,
+        baselineSendButtonEnabled: true,
+        baselineChatSignalCount: 0,
+        baselineComposerValue: "Run the quarterly planning session",
+        baselineSuggestedActionsVisible: true,
+        timeoutMs: 5_000,
+      })
+    ).resolves.toBeUndefined();
+
+    expect(waitForTimeout).toHaveBeenCalledWith(50);
+    expect(composerInputValue).toHaveBeenCalledTimes(3);
+  });
+
+  it("treats hidden suggested actions as evidence of streaming", async () => {
+    const toastWaitFor = vi.fn().mockImplementation(
+      () => new Promise(() => {})
+    );
+    const toastInnerText = vi.fn().mockResolvedValue("");
+    const assistantCount = vi.fn().mockResolvedValue(0);
+    const spinnerCount = vi.fn().mockResolvedValue(0);
+    const stopVisible = vi.fn().mockResolvedValue(false);
+    const sendVisible = vi.fn().mockResolvedValue(true);
+    const sendEnabled = vi.fn().mockResolvedValue(true);
+    const userCount = vi.fn().mockResolvedValue(0);
+    const suggestedActionsVisible = vi
+      .fn<() => Promise<boolean>>()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValue(false);
+    const waitForTimeout = vi.fn().mockResolvedValue(undefined);
+
+    const page = {
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "toast") {
+          return {
+            waitFor: toastWaitFor,
+            innerText: toastInnerText,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant") {
+          return {
+            count: assistantCount,
+            nth: vi.fn(),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant-loading") {
+          return {
+            count: spinnerCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "stop-button") {
+          return {
+            isVisible: stopVisible,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "send-button") {
+          return {
+            isVisible: sendVisible,
+            isEnabled: sendEnabled,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-user") {
+          return {
+            count: userCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "suggested-actions") {
+          return {
+            isVisible: suggestedActionsVisible,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        throw new Error(`Unexpected test id: ${testId}`);
+      }),
+      locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+          return {
+            first: () => ({
+              waitFor: toastWaitFor,
+              innerText: toastInnerText,
+            }),
+          } as unknown as ReturnType<Page["locator"]>;
+        }
+
+        throw new Error(`Unexpected locator access: ${selector}`);
+      }),
+      waitForTimeout: waitForTimeout as unknown as Page["waitForTimeout"],
+      evaluate: vi
+        .fn(() => Promise.resolve(0))
+        .mockName("page.evaluate"),
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+    const baselineSnapshot = {
+      count: 0,
+      latestArtifactCount: 0,
+      latestMessageId: null,
+      latestMessageText: "",
+    } as const;
+
+    await expect(
+      (chatPage as any).pollForStreamingChange({
+        baseline: baselineSnapshot,
+        baselineUserMessageCount: 0,
+        baselineStopButtonVisible: false,
+        baselineSendButtonVisible: true,
+        baselineSendButtonEnabled: true,
+        baselineChatSignalCount: 0,
+        baselineComposerValue: "",
+        baselineSuggestedActionsVisible: true,
+        timeoutMs: 5_000,
+      })
+    ).resolves.toBeUndefined();
+
+    expect(suggestedActionsVisible).toHaveBeenCalledTimes(2);
+    expect(waitForTimeout).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats a new user message as evidence of streaming when other guards stay idle", async () => {
+    const toastWaitFor = vi.fn().mockImplementation(
+      () => new Promise(() => {})
+    );
+    const toastInnerText = vi.fn().mockResolvedValue("");
+    const assistantCount = vi.fn().mockResolvedValue(0);
+    const spinnerCount = vi.fn().mockResolvedValue(0);
+    const stopVisible = vi.fn().mockResolvedValue(false);
+    const sendVisible = vi.fn().mockResolvedValue(true);
+    const sendEnabled = vi.fn().mockResolvedValue(true);
+    const userCount = vi
+      .fn()
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(1);
+    const waitForTimeout = vi.fn().mockResolvedValue(undefined);
+
+    const page = {
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "toast") {
+          return {
+            waitFor: toastWaitFor,
+            innerText: toastInnerText,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant") {
+          return {
+            count: assistantCount,
+            nth: vi.fn(),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant-loading") {
+          return {
+            count: spinnerCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "stop-button") {
+          return {
+            isVisible: stopVisible,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "send-button") {
+          return {
+            isVisible: sendVisible,
+            isEnabled: sendEnabled,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-user") {
+          return {
+            count: userCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        throw new Error(`Unexpected test id: ${testId}`);
+      }),
+      locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+          return {
+            first: () => ({
+              waitFor: toastWaitFor,
+              innerText: toastInnerText,
+            }),
+          } as unknown as ReturnType<Page["locator"]>;
+        }
+
+        throw new Error(`Unexpected locator access: ${selector}`);
+      }),
+      waitForTimeout: waitForTimeout as unknown as Page["waitForTimeout"],
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+    const baselineSnapshot = {
+      count: 0,
+      latestArtifactCount: 0,
+      latestMessageId: null,
+      latestMessageText: "",
+    } as const;
+
+  await (chatPage as any).waitForUiStreamingFallback({
+    baseline: baselineSnapshot,
+    baselineUserMessageCount: 0,
+    baselineStopButtonVisible: false,
+    baselineSendButtonVisible: true,
+    baselineSendButtonEnabled: true,
+    baselineChatSignalCount: 0,
+    baselineComposerValue: "",
+    baselineSuggestedActionsVisible: false,
+    timeoutMs: 5_000,
+  });
+
+    expect(userCount).toHaveBeenCalledTimes(2);
+    expect(waitForTimeout).toHaveBeenCalled();
   });
 });
 
@@ -539,6 +1922,10 @@ describe("ChatPage vote helpers", () => {
     const toastWaitFor = vi.fn().mockResolvedValue(undefined);
     const toastToContain = vi.fn().mockResolvedValue(undefined);
     const waitForTimeout = vi.fn().mockResolvedValue(undefined);
+    const toastLocatorHandle = {
+      waitFor: toastWaitFor,
+      innerText: vi.fn().mockResolvedValue("Upvoted Response!"),
+    } as const;
 
     const page = {
       waitForResponse: vi.fn().mockResolvedValue({
@@ -556,14 +1943,31 @@ describe("ChatPage vote helpers", () => {
           return voteButton as unknown as ReturnType<Page["getByTestId"]>;
         }
         if (testId === "toast") {
+          return toastLocatorHandle as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "multimodal-input") {
           return {
-            waitFor: toastWaitFor,
+            inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
 
         throw new Error(`Unexpected test id: ${testId}`);
       }),
+      locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+          return {
+            first: () => toastLocatorHandle,
+          } as unknown as ReturnType<Page["locator"]>;
+        }
+
+        throw new Error(`Unexpected locator access: ${selector}`);
+      }),
       waitForTimeout,
+      evaluate: vi
+        .fn(() => Promise.resolve(0))
+        .mockName("page.evaluate"),
     } satisfies Partial<Page>;
 
     const originalExpect = ChatPage.expect;
@@ -601,6 +2005,10 @@ describe("ChatPage vote helpers", () => {
     };
     const toastWaitFor = vi.fn().mockRejectedValue(new Error("timeout"));
     const waitForTimeout = vi.fn().mockResolvedValue(undefined);
+    const toastLocatorHandle = {
+      waitFor: toastWaitFor,
+      innerText: vi.fn().mockResolvedValue(""),
+    } as const;
 
     const page = {
       waitForResponse: vi.fn().mockResolvedValue({
@@ -618,13 +2026,30 @@ describe("ChatPage vote helpers", () => {
           return voteButton as unknown as ReturnType<Page["getByTestId"]>;
         }
         if (testId === "toast") {
+          return toastLocatorHandle as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "multimodal-input") {
           return {
-            waitFor: toastWaitFor,
+            inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
         throw new Error(`Unexpected test id: ${testId}`);
       }),
+      locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+          return {
+            first: () => toastLocatorHandle,
+          } as unknown as ReturnType<Page["locator"]>;
+        }
+
+        throw new Error(`Unexpected locator access: ${selector}`);
+      }),
       waitForTimeout,
+      evaluate: vi
+        .fn(() => Promise.resolve(0))
+        .mockName("page.evaluate"),
     } satisfies Partial<Page>;
 
     const chatPage = new ChatPage(page as Page);
@@ -649,6 +2074,10 @@ describe("ChatPage vote helpers", () => {
     };
     const toastWaitFor = vi.fn().mockRejectedValue(new Error("timeout"));
     const waitForTimeout = vi.fn().mockResolvedValue(undefined);
+    const toastLocatorHandle = {
+      waitFor: toastWaitFor,
+      innerText: vi.fn().mockResolvedValue(""),
+    } as const;
 
     const page = {
       waitForResponse: vi.fn().mockResolvedValue({
@@ -666,13 +2095,30 @@ describe("ChatPage vote helpers", () => {
           return voteButton as unknown as ReturnType<Page["getByTestId"]>;
         }
         if (testId === "toast") {
+          return toastLocatorHandle as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "multimodal-input") {
           return {
-            waitFor: toastWaitFor,
+            inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
           } as unknown as ReturnType<Page["getByTestId"]>;
         }
         throw new Error(`Unexpected test id: ${testId}`);
       }),
+      locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+          return {
+            first: () => toastLocatorHandle,
+          } as unknown as ReturnType<Page["locator"]>;
+        }
+
+        throw new Error(`Unexpected locator access: ${selector}`);
+      }),
       waitForTimeout,
+      evaluate: vi
+        .fn(() => Promise.resolve(0))
+        .mockName("page.evaluate"),
     } satisfies Partial<Page>;
 
     const chatPage = new ChatPage(page as Page);
@@ -781,20 +2227,44 @@ describe("ChatPage generation helpers", () => {
       click: vi.fn(async () => {
         order.push("send-click");
       }),
+      isVisible: vi.fn().mockResolvedValue(true),
+      isEnabled: vi.fn().mockResolvedValue(true),
     };
     const page = {
       getByTestId: vi.fn((testId: string) => {
-        if (testId === "send-button") {
-          return sendButtonLocator;
-        }
-
         if (testId === "message-assistant") {
           order.push("assistant-snapshot");
           return assistantLocator;
         }
 
+        if (testId === "stop-button") {
+          return {
+            isVisible: vi.fn().mockResolvedValue(false),
+          };
+        }
+
+        if (testId === "send-button") {
+          return sendButtonLocator;
+        }
+
+        if (testId === "message-user") {
+          return {
+            count: vi.fn().mockResolvedValue(0),
+          };
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
+          };
+        }
+
         throw new Error(`Unexpected test id: ${testId}`);
       }),
+      evaluate: vi
+        .fn(() => Promise.resolve(0))
+        .mockName("page.evaluate"),
     } satisfies Partial<Page>;
 
     const chatPage = new ChatPage(page as Page);
@@ -815,6 +2285,7 @@ describe("ChatPage generation helpers", () => {
       .spyOn(chatPage as any, "waitForComposerReady")
       .mockImplementation(async () => {
         order.push("composer-ready");
+        return { sendButtonEnabled: true };
       });
     const waitSpy = vi
       .spyOn(chatPage as any, "waitForChatApiResponse")
@@ -829,6 +2300,102 @@ describe("ChatPage generation helpers", () => {
     expect(waitSpy).toHaveBeenCalledOnce();
     expect(order.indexOf("capture-call")).toBeLessThan(order.indexOf("send-click"));
     expect((chatPage as any).pendingAssistantSnapshot).toEqual(baseline);
+    expect((chatPage as any).pendingUserMessageCount).toBe(0);
+  });
+
+  it("submits via Enter when the send button remains disabled", async () => {
+    const assistantLocator = {
+      count: vi.fn().mockResolvedValue(0),
+      nth: vi.fn(),
+    };
+    const userLocator = {
+      count: vi.fn().mockResolvedValue(0),
+    };
+    const stopButtonLocator = {
+      isVisible: vi.fn().mockResolvedValue(false),
+    };
+    const sendClick = vi.fn().mockResolvedValue(undefined);
+    const sendButtonLocator = {
+      click: sendClick,
+      isVisible: vi.fn().mockResolvedValue(true),
+      isEnabled: vi.fn().mockResolvedValue(true),
+    };
+    const pressMock = vi.fn().mockResolvedValue(undefined);
+    const inputValueMock = vi.fn().mockResolvedValue("");
+    const composerLocator = {
+      click: vi.fn(),
+      fill: vi.fn(),
+      type: vi.fn(),
+      inputValue: inputValueMock,
+      press: pressMock,
+    };
+    const suggestedActionsLocator = {
+      isVisible: vi.fn().mockResolvedValue(false),
+    };
+
+    const page = {
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "message-assistant") {
+          return assistantLocator as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-user") {
+          return userLocator as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "stop-button") {
+          return stopButtonLocator as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "send-button") {
+          return sendButtonLocator as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "multimodal-input") {
+          return composerLocator as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "suggested-actions") {
+          return suggestedActionsLocator as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        throw new Error(`Unexpected test id: ${testId}`);
+      }),
+      evaluate: vi.fn().mockResolvedValue(0),
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+    const captureSpy = vi
+      .spyOn(chatPage as any, "captureAssistantSnapshot")
+      .mockResolvedValue({
+        count: 0,
+        latestArtifactCount: 0,
+        latestMessageId: null,
+        latestMessageText: "",
+      });
+    const prepareSpy = vi.spyOn(chatPage as any, "prepareForGeneration");
+    const composerSpy = vi
+      .spyOn(chatPage as any, "waitForComposerReady")
+      .mockResolvedValue({
+        sendButtonEnabled: false,
+      });
+    const waitSpy = vi
+      .spyOn(chatPage as any, "waitForChatApiResponse")
+      .mockResolvedValue(undefined);
+
+    await chatPage.sendUserMessage("Hello");
+
+    expect(prepareSpy).toHaveBeenCalledWith({
+      composerValueOverride: "Hello",
+    });
+    expect(waitSpy).toHaveBeenCalledOnce();
+    expect(sendClick).not.toHaveBeenCalled();
+    expect(pressMock).toHaveBeenCalledWith("Enter");
+
+    captureSpy.mockRestore();
+    prepareSpy.mockRestore();
+    composerSpy.mockRestore();
+    waitSpy.mockRestore();
   });
 
   it("records a snapshot before sending a suggestion message", async () => {
@@ -840,6 +2407,10 @@ describe("ChatPage generation helpers", () => {
       click: vi.fn(async () => {
         order.push("suggestion-click");
       }),
+      innerText: vi.fn().mockResolvedValue(DEFAULT_ONBOARDING_SUGGESTION),
+      textContent: vi.fn().mockResolvedValue(DEFAULT_ONBOARDING_SUGGESTION),
+      getAttribute: vi.fn().mockResolvedValue(null),
+      evaluate: vi.fn().mockResolvedValue(""),
     };
     const userMessagesLocator = {
       count: vi.fn().mockResolvedValue(0),
@@ -864,17 +2435,38 @@ describe("ChatPage generation helpers", () => {
             click: vi.fn(),
             fill: vi.fn(),
             inputValue: vi.fn().mockResolvedValue("fallback"),
+            press: vi.fn().mockResolvedValue(undefined),
           };
+        }
+
+        if (testId === "stop-button") {
+          return {
+            isVisible: vi.fn().mockResolvedValue(false),
+          };
+        }
+
+        if (testId === "suggested-actions") {
+          return { isVisible: vi.fn().mockResolvedValue(true) };
         }
 
         if (testId === "send-button") {
           return {
             click: vi.fn(),
+            isVisible: vi.fn().mockResolvedValue(true),
+            isEnabled: vi.fn().mockResolvedValue(true),
+          };
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
           };
         }
 
         throw new Error(`Unexpected test id: ${testId}`);
       }),
+      evaluate: vi.fn().mockResolvedValue(0),
     } satisfies Partial<Page>;
 
     const chatPage = new ChatPage(page as Page);
@@ -917,11 +2509,156 @@ describe("ChatPage generation helpers", () => {
       expect(captureSpy).toHaveBeenCalledOnce();
       expect(waitSpy).toHaveBeenCalledOnce();
       expect(toBeVisible).toHaveBeenCalledWith({ timeout: 15_000 });
-      expect(toHaveCount).toHaveBeenCalledWith(1, { timeout: 5_000 });
+      expect(toHaveCount).toHaveBeenCalledWith(1, { timeout: 7_500 });
       expect(order.indexOf("capture-call")).toBeLessThan(
         order.indexOf("suggestion-click")
       );
       expect((chatPage as any).pendingAssistantSnapshot).toEqual(baseline);
+      expect((chatPage as any).pendingUserMessageCount).toBe(0);
+    } finally {
+      ChatPage.expect = originalExpect;
+    }
+  });
+
+  it("retries a suggestion when the initial user bubble never appears", async () => {
+    const order: string[] = [];
+    const suggestionText = DEFAULT_ONBOARDING_SUGGESTION;
+    const suggestionLocator = {
+      click: vi.fn(async () => {
+        order.push("suggestion-click");
+      }),
+      innerText: vi.fn().mockResolvedValue(suggestionText),
+      textContent: vi.fn().mockResolvedValue(suggestionText),
+      getAttribute: vi.fn().mockResolvedValue(null),
+      evaluate: vi.fn().mockResolvedValue(""),
+    };
+    const userMessagesLocator = {
+      count: vi.fn().mockResolvedValue(0),
+    };
+    const sendButtonLocator = {
+      click: vi.fn(async () => {
+        order.push("send-click");
+      }),
+      isEnabled: vi.fn().mockResolvedValue(true),
+      isVisible: vi.fn().mockResolvedValue(true),
+    };
+    const multimodalLocator = {
+      inputValue: vi
+        .fn()
+        .mockResolvedValueOnce("")
+        .mockResolvedValue(suggestionText),
+      click: vi.fn(),
+      fill: vi.fn(),
+      type: vi.fn(),
+      press: vi.fn().mockResolvedValue(undefined),
+    };
+    const stopButtonLocator = {
+      isVisible: vi.fn().mockResolvedValue(false),
+    };
+    const page = {
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "suggested-action-0") {
+          return suggestionLocator;
+        }
+
+        if (testId === "message-user") {
+          return userMessagesLocator;
+        }
+
+        if (testId === "multimodal-input") {
+          return multimodalLocator;
+        }
+
+        if (testId === "send-button") {
+          return sendButtonLocator;
+        }
+
+        if (testId === "stop-button") {
+          return stopButtonLocator;
+        }
+
+        if (testId === "suggested-actions") {
+          return { isVisible: vi.fn().mockResolvedValue(true) };
+        }
+
+        throw new Error(`Unexpected test id: ${testId}`);
+      }),
+      evaluate: vi.fn().mockResolvedValue(0),
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+
+    const prepareSpy = vi
+      .spyOn(chatPage as any, "prepareForGeneration")
+      .mockImplementation(async (options?: { composerValueOverride?: string }) => {
+        if (options?.composerValueOverride) {
+          order.push(`prepare-override:${options.composerValueOverride}`);
+        } else {
+          order.push("prepare");
+        }
+
+        await (chatPage as any).captureAssistantSnapshot();
+      });
+    const waitSpy = vi
+      .spyOn(chatPage as any, "waitForChatApiResponse")
+      .mockImplementation(async () => {
+        order.push("wait");
+      });
+    const composerReadySpy = vi
+      .spyOn(chatPage as any, "waitForComposerReady")
+      .mockImplementation(async (message: string) => {
+        order.push(`composer-ready:${message}`);
+        return { sendButtonEnabled: true };
+      });
+    const captureSpy = vi
+      .spyOn(chatPage as any, "captureAssistantSnapshot")
+      .mockResolvedValue({
+        count: 0,
+        latestArtifactCount: 0,
+        latestMessageId: null,
+        latestMessageText: "",
+      });
+
+    const originalExpect = ChatPage.expect;
+    const toBeVisible = vi.fn().mockResolvedValue(undefined);
+    const toHaveCount = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("no user message"))
+      .mockResolvedValueOnce(undefined);
+
+    ChatPage.expect = vi
+      .fn((locator: unknown) => {
+        if (locator === suggestionLocator) {
+          return { toBeVisible } as any;
+        }
+
+        if (locator === userMessagesLocator) {
+          return { toHaveCount } as any;
+        }
+
+        throw new Error("Unexpected locator passed to ChatPage.expect");
+      }) as any;
+
+    try {
+      await expect(chatPage.sendUserMessageFromSuggestion()).resolves.toBeUndefined();
+
+      expect(captureSpy).toHaveBeenCalledTimes(2);
+      expect(prepareSpy).toHaveBeenCalledTimes(2);
+      expect(prepareSpy).toHaveBeenNthCalledWith(1, {
+        composerValueOverride: suggestionText,
+      });
+      const secondCallArgs = prepareSpy.mock.calls[1] ?? [];
+      expect(secondCallArgs).toHaveLength(0);
+      expect(waitSpy).toHaveBeenCalledTimes(2);
+      expect(composerReadySpy).toHaveBeenCalledWith(suggestionText);
+      expect(sendButtonLocator.click).toHaveBeenCalledTimes(1);
+      expect(toBeVisible).toHaveBeenCalledWith({ timeout: 15_000 });
+      expect(toHaveCount).toHaveBeenNthCalledWith(1, 1, { timeout: 7_500 });
+      expect(toHaveCount).toHaveBeenNthCalledWith(2, 1, { timeout: 10_000 });
+      expect(order).toContain("suggestion-click");
+      expect(order).toContain(`prepare-override:${suggestionText}`);
+      expect(order).toContain("prepare");
+      expect(order.filter((label) => label === "wait").length).toBe(2);
     } finally {
       ChatPage.expect = originalExpect;
     }
@@ -965,6 +2702,7 @@ describe("ChatPage generation helpers", () => {
         if (testId === "message-user") {
           return {
             all: vi.fn().mockResolvedValue([userMessageLocator]),
+            count: vi.fn().mockResolvedValue(1),
           };
         }
 
@@ -988,6 +2726,26 @@ describe("ChatPage generation helpers", () => {
         if (testId === "message-attachments") {
           return {
             isVisible: vi.fn().mockResolvedValue(false),
+          };
+        }
+
+        if (testId === "stop-button") {
+          return {
+            isVisible: vi.fn().mockResolvedValue(false),
+          };
+        }
+
+        if (testId === "send-button") {
+          return {
+            isVisible: vi.fn().mockResolvedValue(true),
+            isEnabled: vi.fn().mockResolvedValue(true),
+          };
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: vi.fn().mockResolvedValue(""),
+            press: vi.fn().mockResolvedValue(undefined),
           };
         }
 
@@ -1032,6 +2790,7 @@ describe("ChatPage generation helpers", () => {
     expect(messageEditorSendButton.waitFor).toHaveBeenNthCalledWith(2, {
       state: "detached",
     });
+    expect((chatPage as any).pendingUserMessageCount).toBe(1);
   });
 
   describe("waitForComposerReady", () => {
@@ -1083,23 +2842,85 @@ describe("ChatPage generation helpers", () => {
 
       const chatPage = new ChatPage(page as Page);
 
-      await (chatPage as any).waitForComposerReady("Hello world", {
-        timeout: 1_000,
-        pollInterval: 50,
-      });
+    const result = await (chatPage as any).waitForComposerReady("Hello world", {
+      timeout: 1_000,
+      pollInterval: 50,
+    });
 
-      expect(fillMock).toHaveBeenNthCalledWith(1, "");
-      expect(typeMock).toHaveBeenNthCalledWith(1, "Hello world");
+    expect(result).toEqual({ sendButtonEnabled: true });
+    expect(fillMock).toHaveBeenNthCalledWith(1, "");
+    expect(typeMock).toHaveBeenNthCalledWith(1, "Hello world");
       expect(fillMock).toHaveBeenNthCalledWith(2, "");
       expect(typeMock).toHaveBeenNthCalledWith(2, "Hello world");
       expect(fillMock).toHaveBeenCalledTimes(2);
       expect(typeMock).toHaveBeenCalledTimes(2);
-      expect(inputValueMock).toHaveBeenCalledTimes(3);
+      expect(inputValueMock).toHaveBeenCalledTimes(2);
       expect(isEnabledMock).toHaveBeenCalledTimes(2);
-      expect(waitForTimeoutMock).toHaveBeenCalledTimes(2);
+      expect(waitForTimeoutMock).toHaveBeenCalledTimes(1);
       expect(stopVisibleMock).toHaveBeenCalled();
-      expect(order[0]).toBe("click");
-      expect(order).toContain("wait");
+    expect(order[0]).toBe("click");
+    expect(order).toContain("wait");
+  });
+
+    it("returns the disabled state when the composer stabilises but the send button never enables", async () => {
+      const fillMock = vi.fn().mockResolvedValue(undefined);
+      const typeMock = vi.fn().mockResolvedValue(undefined);
+      const inputValueMock = vi.fn().mockResolvedValue("Hello world");
+      const isEnabledMock = vi.fn().mockResolvedValue(false);
+      const stopVisibleMock = vi.fn().mockResolvedValue(false);
+      const waitForTimeoutMock = vi.fn().mockResolvedValue(undefined);
+
+      const page = {
+        getByTestId: vi.fn((testId: string) => {
+          if (testId === "multimodal-input") {
+            return {
+              click: vi.fn(),
+              fill: fillMock,
+              type: typeMock,
+              inputValue: inputValueMock,
+              press: vi.fn(),
+            } as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
+          if (testId === "send-button") {
+            return {
+              isEnabled: isEnabledMock,
+            } as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
+          if (testId === "stop-button") {
+            return {
+              isVisible: stopVisibleMock,
+            } as unknown as ReturnType<Page["getByTestId"]>;
+          }
+
+          throw new Error(`Unexpected test id: ${testId}`);
+        }),
+        waitForTimeout: waitForTimeoutMock,
+      } satisfies Partial<Page>;
+
+      const chatPage = new ChatPage(page as Page);
+      const synchroniseSpy = vi
+        .spyOn(chatPage as any, "synchroniseComposerValue")
+        .mockResolvedValue(undefined);
+
+      const nowValues = [0, 0, 2_000];
+      let callIndex = 0;
+      const nowSpy = vi
+        .spyOn(Date, "now")
+        .mockImplementation(() => nowValues[Math.min(callIndex++, nowValues.length - 1)]);
+
+      const result = await (chatPage as any).waitForComposerReady("Hello world", {
+        timeout: 1_000,
+        pollInterval: 50,
+      });
+
+      expect(result).toEqual({ sendButtonEnabled: false });
+      expect(waitForTimeoutMock).toHaveBeenCalled();
+      expect(isEnabledMock).toHaveBeenCalled();
+      expect(stopVisibleMock).toHaveBeenCalled();
+      synchroniseSpy.mockRestore();
+      nowSpy.mockRestore();
     });
   });
 });

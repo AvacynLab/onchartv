@@ -22,6 +22,16 @@ const nextConfig: NextConfig = {
       process.env.NEXT_PUBLIC_FEATURE_FINANCE ??
       process.env.FEATURE_FINANCE ??
       "true",
+    /**
+     * Surface the Playwright automation hint in the browser bundle so client
+     * components (e.g. the toast bridge) can deterministically render testing
+     * helpers even when the flag is only set on the server environment.
+     */
+    NEXT_PUBLIC_PLAYWRIGHT:
+      process.env.NEXT_PUBLIC_PLAYWRIGHT ??
+      process.env.PLAYWRIGHT ??
+      process.env.CI_PLAYWRIGHT ??
+      "false",
   },
   images: {
     remotePatterns: [

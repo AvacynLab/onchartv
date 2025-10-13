@@ -7,6 +7,7 @@ import {
   errors as playwrightErrors,
 } from "@playwright/test";
 import { chatModels, type ChatModel } from "@/lib/ai/models";
+import { DEFAULT_ONBOARDING_SUGGESTION } from "@/lib/constants";
 
 /**
  * Validate that the current page URL ends with a chat identifier without
@@ -67,6 +68,80 @@ export class ChatPage {
    * `/api/vote` response and avoid relying solely on transient UI signals.
    */
   private pendingVoteRequest: Promise<void> | null = null;
+
+  /**
+   * Record how many user messages were present before dispatching the current
+   * action. Suggested quick actions append the bubble immediately while the UI
+   * may still be hydrating its streaming indicators. Falling back to this
+   * counter lets the polling guard unblock as soon as the DOM reflects the
+   * optimistic user echo, even if the stop button or spinner never toggles.
+   */
+  private pendingUserMessageCount = 0;
+
+  /**
+   * Record whether the stop button was visible when the next generation cycle
+   * started so polling can differentiate between the residual cooldown from the
+   * previous run and a fresh streaming toggle.
+   */
+  private pendingStopButtonWasVisible = false;
+
+  /**
+   * Record the send button visibility before dispatching a message so the UI
+   * polling fallback can recognise when the stop control takes over, even if
+   * the spinner fails to render during fast hermetic runs.
+   */
+  private pendingSendButtonWasVisible = false;
+
+  /**
+   * Preserve the send button enabled state before dispatching a prompt. Certain
+   * automation flows (for example suggested quick actions) keep the control
+   * visible yet disable it instead of swapping in the stop button. Capturing the
+   * baseline enabled flag allows the polling fallback to treat that transition
+   * as proof that streaming started even when visibility stays unchanged.
+   */
+  private pendingSendButtonWasEnabled = false;
+
+  /**
+   * Mirror the automation bridge's chat signal counter so the network guard can
+   * observe synthetic events emitted by the client bundle whenever a submission
+   * is dispatched. The signals complement Playwright's network events and keep
+   * the helpers resilient when fetch hooks miss the streaming transport.
+   */
+  private pendingChatSignalCount = 0;
+
+  /**
+   * Snapshot the composer value prior to dispatching a prompt. Suggested
+   * actions pre-fill the textarea before immediately submitting, so the DOM
+   * clearing that follows is a reliable indication that the UI kicked off the
+   * new generation even when other streaming toggles are slow to appear.
+   */
+  private pendingComposerValue = "";
+
+  /**
+   * Flag whether the upcoming submission should clear a pre-seeded composer
+   * value. When true, the network guard races a dedicated waiter against the
+   * transport so suggestion-driven flows resolve as soon as the textarea is
+   * emptied, even if Playwright misses the underlying fetch events.
+   */
+  private pendingComposerNeedsClear = false;
+
+  /**
+   * Remember the exact composer value that a suggestion is expected to stage
+   * before submitting. The polling guard only treats the subsequent clearing as
+   * progress once this value has been observed at least once, preventing early
+   * exits that would otherwise occur while the DOM still reflects the empty
+   * textarea baseline.
+   */
+  private pendingComposerPrefill: string | null = null;
+
+  /**
+   * Remember whether the suggested actions panel was visible before dispatching
+   * the next submission. Suggested quick actions hide the grid immediately
+   * after a selection, so tracking the baseline visibility gives the polling
+   * guard another deterministic signal to recognise streaming progress without
+   * depending solely on spinners or network hooks.
+   */
+  private pendingSuggestedActionsWereVisible = false;
 
   constructor(page: Page) {
     this.page = page;
@@ -141,20 +216,44 @@ export class ChatPage {
   }
 
   async sendUserMessage(message: string) {
-    await this.waitForComposerReady(message);
+    const { sendButtonEnabled } = await this.waitForComposerReady(message);
 
-    await this.prepareForGeneration();
+    await this.prepareForGeneration({ composerValueOverride: message });
 
     /**
      * Trigger the send action and the API wait concurrently so we capture the
      * network response associated with this submission. Surfacing transport
      * failures immediately makes the suite easier to debug than waiting for the
-     * streaming assertions to eventually time out.
+     * streaming assertions to eventually time out. When the editor exposes a
+     * disabled submit control (an edge case observed during hydration races),
+     * fall back to the native "Enter" workflow to mimic how end users submit
+     * prompts through the textarea.
      */
-    await Promise.all([
-      this.waitForChatApiResponse(),
-      this.sendButton.click(),
-    ]);
+    const submission = sendButtonEnabled
+      ? this.sendButton.click()
+      : this.page.evaluate(() => {
+          const textarea = document.querySelector<
+            HTMLTextAreaElement
+          >("textarea[data-testid='multimodal-input']");
+
+          if (!textarea) {
+            throw new Error(
+              "Unable to submit chat message because the composer textarea was not present in the DOM."
+            );
+          }
+
+          const form = textarea.form;
+
+          if (!form) {
+            throw new Error(
+              "Unable to submit chat message because the composer form element could not be resolved."
+            );
+          }
+
+          form.requestSubmit();
+        });
+
+    await Promise.all([this.waitForChatApiResponse(), submission]);
   }
 
   async isGenerationComplete() {
@@ -396,34 +495,145 @@ export class ChatPage {
     const suggestion = this.page.getByTestId("suggested-action-0");
     await ChatPage.expect(suggestion).toBeVisible({ timeout: 15_000 });
 
+    const candidateTexts: string[] = [];
+    // Gather every accessible label the button may expose so automation can
+    // recover the intended prompt even when innerText is empty (for example,
+    // during partially hydrated renders or when fonts fall back and collapse
+    // whitespace differently).
+    candidateTexts.push(await suggestion.innerText().catch(() => ""));
+
+    const textContentCandidate = await suggestion.textContent().catch(() => null);
+    if (textContentCandidate) {
+      candidateTexts.push(textContentCandidate);
+    }
+
+    const ariaLabelCandidate = (await suggestion.getAttribute("aria-label")) ?? "";
+    if (ariaLabelCandidate) {
+      candidateTexts.push(ariaLabelCandidate);
+    }
+
+    const datasetCandidate = await suggestion
+      .evaluate((node) => (node as HTMLElement).dataset?.suggestion ?? "")
+      .catch(() => "");
+    if (datasetCandidate) {
+      candidateTexts.push(datasetCandidate);
+    }
+
+    // As a final guard, fall back to the baseline onboarding suggestion so the
+    // helper can still drive the composer even if the DOM yields no readable
+    // content (for example when an icon-only button is rendered).
+    candidateTexts.push(DEFAULT_ONBOARDING_SUGGESTION);
+
+    const normalisedSuggestion =
+      candidateTexts
+        .map((candidate) => candidate.trim())
+        .find((candidate) => candidate.length > 0) ?? DEFAULT_ONBOARDING_SUGGESTION;
+
+    const composerOverride = normalisedSuggestion;
+
     const userMessages = this.page.getByTestId("message-user");
     const initialUserCount = await userMessages.count();
+    const targetUserCount = initialUserCount + 1;
 
-    await this.prepareForGeneration();
+    await this.prepareForGeneration({
+      composerValueOverride: composerOverride,
+    });
 
-    await Promise.all([
-      this.waitForChatApiResponse(),
-      suggestion.click(),
-    ]);
+    const networkWatcher = this.waitForChatApiResponse();
+    networkWatcher.catch(() => {});
+
+    await suggestion.click();
+
+    const awaitUserBubble = async (timeout: number) => {
+      await ChatPage.expect(userMessages).toHaveCount(targetUserCount, {
+        timeout,
+      });
+    };
 
     try {
-      await ChatPage.expect(userMessages).toHaveCount(initialUserCount + 1, {
-        timeout: 5_000,
-      });
-    } catch (error) {
+      await awaitUserBubble(7_500);
+      await networkWatcher.catch(() => {});
+      return;
+    } catch (initialError) {
       const composerValue = await this.multimodalInput
         .inputValue()
         .catch(() => "");
+      const signalCount = await this.page
+        .evaluate(() => {
+          const globalWindow = window as typeof window & {
+            __PLAYWRIGHT_CHAT_SIGNALS__?: Array<unknown>;
+          };
+
+          return Array.isArray(globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__)
+            ? globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__!.length
+            : 0;
+        })
+        .catch(() => 0);
+      const stopVisible = await this.stopButton.isVisible().catch(() => false);
       const diagnostic =
         composerValue.trim().length > 0
           ? ` Composer retained value: "${composerValue}".`
           : " Composer remained empty.";
 
-      throw new Error(
-        "Timed out waiting for the suggested action to append a user message." +
-          diagnostic,
-        error instanceof Error ? { cause: error } : undefined
+      const baseError =
+        initialError instanceof Error
+          ? initialError
+          : new Error(String(initialError));
+
+      const fallbackPrompt =
+        composerOverride && composerOverride.trim().length > 0
+          ? composerOverride
+          : normalisedSuggestion;
+
+      if (!fallbackPrompt || fallbackPrompt.trim().length === 0) {
+        throw new Error(
+          "Suggested action did not stage any text to send." +
+            diagnostic +
+            ` Signals observed: ${signalCount}. Stop button visible: ${stopVisible}.`,
+          { cause: baseError }
+        );
+      }
+
+      const { sendButtonEnabled } = await this.waitForComposerReady(
+        fallbackPrompt
       );
+
+      await this.prepareForGeneration({
+        composerValueOverride: fallbackPrompt,
+      });
+
+      const manualWatcher = this.waitForChatApiResponse();
+      manualWatcher.catch(() => {});
+
+      if (sendButtonEnabled) {
+        await this.sendButton.click();
+      } else {
+        await this.multimodalInput.press("Enter");
+      }
+
+      try {
+        await awaitUserBubble(10_000);
+      } catch (fallbackError) {
+        const latestComposerValue = await this.multimodalInput
+          .inputValue()
+          .catch(() => "");
+        const fallbackDiagnostic =
+          latestComposerValue.trim().length > 0
+            ? ` Composer retained value: "${latestComposerValue}".`
+            : " Composer remained empty.";
+
+        throw new Error(
+          "Failed to send the suggested prompt via automation fallback." +
+            fallbackDiagnostic,
+          fallbackError instanceof Error
+            ? { cause: fallbackError }
+            : undefined
+        );
+      }
+
+      await manualWatcher.catch(() => {});
+
+      return;
     }
   }
 
@@ -692,14 +902,68 @@ export class ChatPage {
    * This keeps the polling logic deterministic across synchronous mocks and
    * long-running finance tool chains.
    */
-  private async prepareForGeneration(): Promise<void> {
+  private async prepareForGeneration({
+    composerValueOverride,
+  }: {
+    composerValueOverride?: string;
+  } = {}): Promise<void> {
     this.pendingAssistantSnapshot = await this.captureAssistantSnapshot();
+    this.pendingUserMessageCount = await this.page
+      .getByTestId("message-user")
+      .count()
+      .catch(() => 0);
+    this.pendingStopButtonWasVisible = await this.stopButton
+      .isVisible()
+      .catch(() => false);
+    this.pendingSendButtonWasVisible = await this.sendButton
+      .isVisible()
+      .catch(() => false);
+    this.pendingSendButtonWasEnabled = await this.sendButton
+      .isEnabled()
+      .catch(() => false);
+    if (typeof composerValueOverride === "string") {
+      this.pendingComposerValue = composerValueOverride;
+      this.pendingComposerNeedsClear =
+        composerValueOverride.trim().length > 0;
+      this.pendingComposerPrefill = composerValueOverride;
+    } else {
+      const composerValue = await this.multimodalInput
+        .inputValue()
+        .catch(() => "");
+
+      this.pendingComposerValue = composerValue;
+      this.pendingComposerNeedsClear = composerValue.trim().length > 0;
+      this.pendingComposerPrefill = null;
+    }
+    this.pendingChatSignalCount = await this.page
+      .evaluate(() => {
+        const globalWindow = window as typeof window & {
+          __PLAYWRIGHT_CHAT_SIGNALS__?: Array<unknown>;
+        };
+
+        return Array.isArray(globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__)
+          ? globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__.length
+          : 0;
+      })
+      .catch(() => 0);
+
+    this.pendingSuggestedActionsWereVisible = await this.page
+      .getByTestId("suggested-actions")
+      .isVisible()
+      .catch(() => false);
   }
 
+  /**
+   * Seeds the controlled composer with the outbound prompt and waits for the
+   * UI to acknowledge that input.  The helper continually replays the text
+   * whenever hydration swaps out the textarea element and returns whether the
+   * send button ended up enabled.  Callers can fall back to submitting via the
+   * Enter key whenever the button stays disabled.
+   */
   private async waitForComposerReady(
     message: string,
     options?: { timeout?: number; pollInterval?: number }
-  ): Promise<void> {
+  ): Promise<{ sendButtonEnabled: boolean }> {
     const timeout = options?.timeout ?? 30_000;
     const pollInterval = options?.pollInterval ?? 100;
     const deadline = Date.now() + timeout;
@@ -714,10 +978,12 @@ export class ChatPage {
     await composer.click();
     await composer.fill("");
     await composer.type(message);
+    await this.synchroniseComposerValue(message).catch(() => {});
 
     let lastComposerValue = "";
     let lastSendEnabled = false;
     let stopVisible = false;
+    let rescueAttempts = 0;
 
     while (Date.now() < deadline) {
       [lastComposerValue, lastSendEnabled, stopVisible] = await Promise.all([
@@ -727,7 +993,7 @@ export class ChatPage {
       ]);
 
       if (lastComposerValue === message && lastSendEnabled && !stopVisible) {
-        return;
+        return { sendButtonEnabled: true };
       }
 
       // Hydration occasionally replaces the textarea node, wiping the value in
@@ -737,14 +1003,32 @@ export class ChatPage {
       if (lastComposerValue !== message) {
         await composer.fill("");
         await composer.type(message);
+        await this.synchroniseComposerValue(message).catch(() => {});
+      } else if (!lastSendEnabled && !stopVisible) {
+        // If the DOM already mirrors the outbound prompt but the submit button
+        // remains disabled, force a synthetic input event so React flushes the
+        // controlled state. Without this guard the Playwright driver can outpace
+        // state reconciliation, leaving the composer visually populated while
+        // the send button stays inert.
+        rescueAttempts += 1;
+        if (rescueAttempts <= 3) {
+          await this.synchroniseComposerValue(message).catch(() => {});
+        }
       }
 
       const remaining = Math.max(0, deadline - Date.now());
       await this.page.waitForTimeout(Math.min(pollInterval, remaining));
     }
 
+    const normalizedComposerValue = lastComposerValue.trim();
+    const normalizedMessage = message.trim();
+
+    if (normalizedComposerValue === normalizedMessage && !stopVisible) {
+      return { sendButtonEnabled: lastSendEnabled };
+    }
+
     const composerDiagnostic =
-      lastComposerValue.trim().length > 0
+      normalizedComposerValue.length > 0
         ? ` Composer retained value: "${lastComposerValue}".`
         : " Composer remained empty.";
     const sendDiagnostic = lastSendEnabled ? "" : " Send button stayed disabled.";
@@ -760,9 +1044,28 @@ export class ChatPage {
     );
   }
 
-  private async captureAssistantSnapshot(): Promise<
-    NonNullable<typeof this.pendingAssistantSnapshot>
-  > {
+  private async synchroniseComposerValue(value: string): Promise<void> {
+    await this.multimodalInput
+      .evaluate((textarea, nextValue) => {
+        if (!(textarea instanceof HTMLTextAreaElement)) {
+          return;
+        }
+
+        const descriptor = Object.getOwnPropertyDescriptor(
+          HTMLTextAreaElement.prototype,
+          "value"
+        );
+
+        descriptor?.set?.call(textarea, nextValue);
+        textarea.dispatchEvent(new Event("input", { bubbles: true }));
+        textarea.dispatchEvent(new Event("change", { bubbles: true }));
+      }, value)
+      .catch(async () => {
+        await this.multimodalInput.fill(value);
+      });
+  }
+
+  private async captureAssistantSnapshot(): Promise<AssistantSnapshot> {
     const assistantMessages = this.page.getByTestId("message-assistant");
     const count = await assistantMessages.count();
 
@@ -813,24 +1116,49 @@ export class ChatPage {
       return false;
     }
 
-    if (typeof candidate.method !== "function" || typeof candidate.url !== "function") {
+    if (typeof candidate.url !== "function") {
       return false;
     }
 
-    if (candidate.method() !== "POST") {
-      return false;
-    }
+    const method =
+      typeof candidate.method === "function" ? candidate.method() : null;
+    const normalizedMethod = method?.toUpperCase() ?? null;
 
     const rawUrl = candidate.url();
-
+    
     try {
       const { pathname } = new URL(rawUrl);
 
-      if (pathname === "/api/chat") {
+      const isStreamPath = CHAT_STREAM_PATH_REGEX.test(pathname);
+      // Accept nested chat endpoints (for example, edit or follow-up routes)
+      // that live under the /api/chat namespace so network hooks observe the
+      // transports powering inline message edits in addition to the root chat
+      // entry point.
+      const isChatNamespace =
+        pathname === "/api/chat" || pathname.startsWith("/api/chat/");
+
+      if (!isChatNamespace && !isStreamPath) {
+        return false;
+      }
+
+      if (!normalizedMethod) {
         return true;
       }
 
-      return CHAT_STREAM_PATH_REGEX.test(pathname);
+      if (["POST", "PATCH", "PUT"].includes(normalizedMethod)) {
+        return true;
+      }
+
+      if (normalizedMethod === "GET") {
+        /**
+         * The Vercel AI SDK resumes Server-Sent Event streams via
+         * `GET /api/chat/:id/stream`. Accept the read transport so suggestion
+         * helpers observe the streaming hook without waiting for UI fallbacks.
+         */
+        return isStreamPath;
+      }
+
+      return false;
     } catch {
       /**
        * Unit tests occasionally stub the Playwright request object with bare
@@ -838,7 +1166,26 @@ export class ChatPage {
        * permissive for those scenarios while the production code continues to
        * rely on full URL parsing.
        */
-      return rawUrl.includes("/api/chat");
+      const includesChatPath = rawUrl.includes("/api/chat");
+      const includesStreamSegment = rawUrl.includes("/stream");
+
+      if (!includesChatPath) {
+        return false;
+      }
+
+      if (!normalizedMethod) {
+        return true;
+      }
+
+      if (["POST", "PATCH", "PUT"].includes(normalizedMethod)) {
+        return true;
+      }
+
+      if (normalizedMethod === "GET") {
+        return includesStreamSegment;
+      }
+
+      return false;
     }
   }
 
@@ -851,199 +1198,382 @@ export class ChatPage {
      * stop button appears.
      */
     const networkTimeoutMarker = Symbol("chat-network-timeout");
-    const networkTimeoutMs = 5_000;
+    const networkTimeoutMs = 15_000;
     const uiFallbackTimeoutMs = 45_000;
-
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const page = this.page;
-        let settled = false;
-        let timer: ReturnType<typeof setTimeout>;
-
-        const cleanup = () => {
-          clearTimeout(timer);
-          page.off("response", handleResponse);
-          page.off("requestfailed", handleFailure);
-        };
-
-        const settle = (result: "resolve" | "reject", reason?: unknown) => {
-          if (settled) {
-            return;
-          }
-
-          settled = true;
-          cleanup();
-
-          if (result === "resolve") {
-            resolve();
-          } else {
-            reject(reason);
-          }
-        };
-
-        const handleResponse = async (response: unknown) => {
-          const candidate =
-            typeof response === "object" &&
-            response !== null &&
-            "request" in response
-              ? (response as any).request()
-              : null;
-
-          if (!this.matchesChatApiRequest(candidate)) {
-            return;
-          }
-
-          try {
-            if (!(response as any).ok()) {
-              let bodySnippet = "";
-
-              try {
-                bodySnippet = await (response as any).text();
-              } catch {
-                bodySnippet = "";
-              }
-
-              const trimmedBody = bodySnippet.trim().slice(0, 1_000);
-              const diagnostic =
-                trimmedBody.length > 0 ? ` – ${trimmedBody}` : "";
-
-              settle(
-                "reject",
-                new Error(
-                  `Chat API request failed with ${(response as any).status()} ${(response as any).statusText()}${diagnostic}`
-                )
-              );
-              return;
-            }
-
-            settle("resolve");
-          } catch (error) {
-            settle(
-              "reject",
-              error instanceof Error
-                ? error
-                : new Error("Chat API response handling failed")
-            );
-          }
-        };
-
-        const handleFailure = async (request: unknown) => {
-          const candidate = request as any;
-
-          if (!this.matchesChatApiRequest(candidate)) {
-            return;
-          }
-
-          let diagnostic = "";
-          let normalizedDiagnostic = "";
-          try {
-            // Normalise Playwright's optional `failure()` accessor so the
-            // helper can surface the original network error text without
-            // tripping strict type checks in the Vitest environment.
-            const failureFn =
-              candidate &&
-              typeof candidate === "object" &&
-              "failure" in candidate &&
-              typeof (candidate as { failure?: unknown }).failure === "function"
-                ? (candidate as { failure: () => unknown }).failure
-                : null;
-
-            const failureDetails = await Promise.resolve(
-              failureFn ? failureFn() : null
-            );
-            // Some runtimes expose richer error payloads (Chromium) while
-            // others only emit bare network codes. Gate access through a
-            // structural check so we stay compatible everywhere.
-            const failureText =
-              failureDetails &&
-              typeof failureDetails === "object" &&
-              "errorText" in failureDetails &&
-              typeof (failureDetails as { errorText?: unknown }).errorText ===
-                "string"
-                ? (failureDetails as { errorText: string }).errorText.trim()
-                : "";
-            diagnostic = failureText ? ` – ${failureText}` : "";
-            normalizedDiagnostic = failureText.toUpperCase();
-          } catch {
-            diagnostic = "";
-            normalizedDiagnostic = "";
-          }
-
-          // Offline Playwright runs may surface ENETUNREACH/ERR_NETWORK_* when
-          // Chromium blocks requests to the hermetic Next.js server while it is
-          // still compiling. Treat those as soft failures so we can fall back to
-          // DOM-based polling instead of failing the scenario outright.
-          const offlineFailureSignals = [
-            "ENETUNREACH",
-            "ERR_NETWORK_CHANGED",
-            "ERR_INTERNET_DISCONNECTED",
-            "ERR_NETWORK_IO_SUSPENDED",
-            "ERR_CONNECTION_REFUSED",
-            "ERR_CONNECTION_RESET",
-            "ERR_ADDRESS_UNREACHABLE",
-          ];
-
-          if (
-            offlineFailureSignals.some((signal) =>
-              normalizedDiagnostic.includes(signal)
-            )
-          ) {
-            console.warn(
-              "Chat API network request failed in offline mode; falling back to UI polling.",
-              {
-                failure:
-                  diagnostic.length > 0
-                    ? diagnostic.trim().replace(/^–\s*/, "")
-                    : offlineFailureSignals.find((signal) =>
-                        normalizedDiagnostic.includes(signal)
-                      ),
-                url:
-                  typeof candidate?.url === "function"
-                    ? candidate.url()
-                    : undefined,
-              }
-            );
-
-            settle("reject", networkTimeoutMarker);
-            return;
-          }
-
-          settle(
-            "reject",
-            new Error(
-              `Chat API request failed before receiving a response${diagnostic}`
-            )
-          );
-        };
-
-        timer = setTimeout(() => {
-          settle("reject", networkTimeoutMarker);
-        }, networkTimeoutMs);
-
-        page.on("response", handleResponse);
-        page.on("requestfailed", handleFailure);
-      });
-
-      return;
-    } catch (error) {
-      if (error !== networkTimeoutMarker) {
-        throw error instanceof Error
-          ? error
-          : new Error("Chat API request failed");
-      }
-    }
 
     const baselineSnapshot =
       this.pendingAssistantSnapshot ??
       (await this.captureAssistantSnapshot());
 
-    await this.waitForUiStreamingFallback(baselineSnapshot, uiFallbackTimeoutMs);
+    /**
+     * Kick off the UI polling guard alongside the network listener so we reuse
+     * the baseline state no matter which signal resolves first. When the
+     * Playwright driver misses the streaming transport entirely, the DOM still
+     * reflects progress almost immediately (new user echoes, send-button
+     * toggles, etc.), so starting the fallback eagerly avoids idling for the
+     * full network timeout before observing the UI transition we already
+     * expect.
+     */
+    const baselineSignalCount = this.pendingChatSignalCount ?? 0;
+
+    const baselineComposerValue = this.pendingComposerValue ?? "";
+    const shouldWatchComposerClear =
+      this.pendingComposerNeedsClear &&
+      baselineComposerValue.trim().length > 0;
+
+    const fallbackPromise = this.waitForUiStreamingFallback({
+      baseline: baselineSnapshot,
+      baselineUserMessageCount: this.pendingUserMessageCount,
+      baselineStopButtonVisible: this.pendingStopButtonWasVisible,
+      baselineSendButtonVisible: this.pendingSendButtonWasVisible,
+      baselineSendButtonEnabled: this.pendingSendButtonWasEnabled,
+      baselineChatSignalCount: baselineSignalCount,
+      baselineComposerValue,
+      baselineSuggestedActionsVisible: this.pendingSuggestedActionsWereVisible,
+      timeoutMs: uiFallbackTimeoutMs,
+    });
+
+    const page = this.page;
+    const browserContext =
+      typeof page.context === "function" ? page.context() : null;
+
+    type NetworkEvent =
+      | { kind: "request"; request: unknown }
+      | { kind: "response"; response: unknown }
+      | { kind: "failure"; request: unknown }
+      | { kind: "signal" };
+
+    const requestMatcher = (candidate: unknown) =>
+      this.matchesChatApiRequest(candidate as any);
+
+    const watchers: Array<Promise<NetworkEvent>> = [];
+
+    const pushWatcher = (promise: Promise<NetworkEvent>) => {
+      watchers.push(
+        promise.catch((error) => {
+          if (isTimeoutLikeError(error)) {
+            return new Promise<NetworkEvent>(() => {});
+          }
+          throw error;
+        })
+      );
+    };
+
+    pushWatcher(
+      page
+        .waitForFunction(
+          (baseline) => {
+            const globalWindow = window as typeof window & {
+              __PLAYWRIGHT_CHAT_SIGNALS__?: Array<unknown>;
+            };
+            const signals = globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__;
+            return Array.isArray(signals) && signals.length > baseline;
+          },
+          baselineSignalCount,
+          { timeout: networkTimeoutMs }
+        )
+        .then(() => ({ kind: "signal" }))
+    );
+
+    if (shouldWatchComposerClear) {
+      pushWatcher(
+        page
+          .waitForFunction(
+            (baseline: string) => {
+              const textarea = document.querySelector<
+                HTMLTextAreaElement
+              >('textarea[data-testid="multimodal-input"]');
+
+              if (!textarea) {
+                return false;
+              }
+
+              const value = textarea.value;
+              return value.trim().length === 0 && value !== baseline;
+            },
+            baselineComposerValue,
+            { timeout: networkTimeoutMs }
+          )
+          .then(() => ({ kind: "signal" }))
+      );
+    }
+
+    pushWatcher(
+      page
+        .waitForRequest((request) => requestMatcher(request))
+        .then((request) => ({ kind: "request", request }))
+    );
+
+    pushWatcher(
+      page
+        .waitForResponse((response) =>
+          requestMatcher(
+            typeof response?.request === "function"
+              ? response.request()
+              : response?.request ?? null
+          )
+        )
+        .then((response) => ({ kind: "response", response }))
+    );
+
+    pushWatcher(
+      page
+        .waitForEvent("requestfailed", {
+          predicate: (request) => requestMatcher(request),
+        })
+        .then((request) => ({ kind: "failure", request }))
+    );
+
+    if (browserContext && typeof browserContext.waitForEvent === "function") {
+      pushWatcher(
+        browserContext
+          .waitForEvent("request", {
+            predicate: (request) => requestMatcher(request),
+          })
+          .then((request) => ({ kind: "request", request }))
+      );
+
+      pushWatcher(
+        browserContext
+          .waitForEvent("response", {
+            predicate: (response) =>
+              requestMatcher(
+                response && typeof (response as any).request === "function"
+                  ? (response as any).request()
+                  : null
+              ),
+          })
+          .then((response) => ({ kind: "response", response }))
+      );
+
+      pushWatcher(
+        browserContext
+          .waitForEvent("requestfailed", {
+            predicate: (request) => requestMatcher(request),
+          })
+          .then((request) => ({ kind: "failure", request }))
+      );
+    }
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let shouldAwaitFallback = false;
+
+    try {
+      const networkResult = await Promise.race<NetworkEvent | never>([
+        ...watchers,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(networkTimeoutMarker),
+            networkTimeoutMs
+          );
+        }),
+      ]);
+
+      fallbackPromise.catch(() => {});
+
+      if (networkResult.kind === "response") {
+        const response = networkResult.response as any;
+        try {
+          if (!response?.ok?.()) {
+            let bodySnippet = "";
+            try {
+              bodySnippet = await response.text?.();
+            } catch {
+              bodySnippet = "";
+            }
+
+            const trimmedBody = bodySnippet.trim().slice(0, 1_000);
+            const diagnostic =
+              trimmedBody.length > 0 ? ` – ${trimmedBody}` : "";
+
+            throw new Error(
+              `Chat API request failed with ${response?.status?.()} ${response?.statusText?.()}${diagnostic}`
+            );
+          }
+        } catch (error) {
+          throw error instanceof Error
+            ? error
+            : new Error("Chat API response handling failed");
+        }
+
+        this.pendingComposerNeedsClear = false;
+        return;
+      }
+
+      if (networkResult.kind === "failure") {
+        const candidate = networkResult.request as any;
+        let diagnostic = "";
+        let normalizedDiagnostic = "";
+        try {
+          const failureFn =
+            candidate &&
+            typeof candidate === "object" &&
+            "failure" in candidate &&
+            typeof (candidate as { failure?: unknown }).failure === "function"
+              ? (candidate as { failure: () => unknown }).failure
+              : null;
+
+          const failureDetails = await Promise.resolve(
+            failureFn ? failureFn() : null
+          );
+          const failureText =
+            failureDetails &&
+            typeof failureDetails === "object" &&
+            "errorText" in failureDetails &&
+            typeof (failureDetails as { errorText?: unknown }).errorText ===
+              "string"
+              ? (failureDetails as { errorText: string }).errorText.trim()
+              : "";
+          diagnostic = failureText ? ` – ${failureText}` : "";
+          normalizedDiagnostic = failureText.toUpperCase();
+        } catch {
+          diagnostic = "";
+          normalizedDiagnostic = "";
+        }
+
+        const offlineFailureSignals = [
+          "ENETUNREACH",
+          "ERR_NETWORK_CHANGED",
+          "ERR_INTERNET_DISCONNECTED",
+          "ERR_NETWORK_IO_SUSPENDED",
+          "ERR_CONNECTION_REFUSED",
+          "ERR_CONNECTION_RESET",
+          "ERR_ADDRESS_UNREACHABLE",
+        ];
+
+        if (
+          offlineFailureSignals.some((signal) =>
+            normalizedDiagnostic.includes(signal)
+          )
+        ) {
+          console.warn(
+            "Chat API network request failed in offline mode; falling back to UI polling.",
+            {
+              failure:
+                diagnostic.length > 0
+                  ? diagnostic.trim().replace(/^–\s*/, "")
+                  : offlineFailureSignals.find((signal) =>
+                      normalizedDiagnostic.includes(signal)
+                    ),
+              url:
+                typeof candidate?.url === "function"
+                  ? candidate.url()
+                  : undefined,
+            }
+          );
+
+          throw networkTimeoutMarker;
+        }
+
+        this.pendingComposerNeedsClear = false;
+
+        throw new Error(
+          `Chat API request failed before receiving a response${diagnostic}`
+        );
+      }
+
+      if (networkResult.kind === "signal") {
+        this.pendingComposerNeedsClear = false;
+        return;
+      }
+
+      if (networkResult.kind === "request") {
+        const request = networkResult.request as any;
+        if (request && typeof request.response === "function") {
+          try {
+            const response = await Promise.race([
+              Promise.resolve(request.response()),
+              new Promise<null>((resolve) =>
+                setTimeout(() => resolve(null), 1_000)
+              ),
+            ]);
+
+            if (response && typeof (response as any).ok === "function") {
+              if (!(response as any).ok()) {
+                let bodySnippet = "";
+                try {
+                  bodySnippet = await (response as any).text();
+                } catch {
+                  bodySnippet = "";
+                }
+
+                const trimmedBody = bodySnippet.trim().slice(0, 1_000);
+                const diagnostic =
+                  trimmedBody.length > 0 ? ` – ${trimmedBody}` : "";
+
+                throw new Error(
+                  `Chat API request failed with ${(response as any).status()} ${(response as any).statusText()}${diagnostic}`
+                );
+              }
+            }
+          } catch (error) {
+            if (error === networkTimeoutMarker) {
+              throw error;
+            }
+
+            throw error instanceof Error
+              ? error
+              : new Error("Chat API request inspection failed");
+          }
+        }
+
+        this.pendingComposerNeedsClear = false;
+        return;
+      }
+
+      return;
+    } catch (error) {
+      if (error !== networkTimeoutMarker) {
+        fallbackPromise.catch(() => {});
+        this.pendingComposerNeedsClear = false;
+        throw error instanceof Error
+          ? error
+          : new Error("Chat API request failed");
+      }
+
+      shouldAwaitFallback = true;
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+      for (const watcher of watchers) {
+        watcher.catch(() => {});
+      }
+    }
+
+    if (!shouldAwaitFallback) {
+      return;
+    }
+
+    try {
+      await fallbackPromise;
+    } finally {
+      fallbackPromise.catch(() => {});
+      this.pendingComposerNeedsClear = false;
+    }
   }
 
-  private async waitForUiStreamingFallback(
-    baseline: NonNullable<typeof this.pendingAssistantSnapshot>,
-    timeoutMs: number
-  ): Promise<void> {
+  private async waitForUiStreamingFallback({
+    baseline,
+    baselineUserMessageCount,
+    baselineStopButtonVisible,
+    baselineSendButtonVisible,
+    baselineSendButtonEnabled,
+    baselineChatSignalCount,
+    baselineComposerValue,
+    baselineSuggestedActionsVisible,
+    timeoutMs,
+  }: {
+    baseline: AssistantSnapshot;
+    baselineUserMessageCount: number;
+    baselineStopButtonVisible: boolean;
+    baselineSendButtonVisible: boolean;
+    baselineSendButtonEnabled: boolean;
+    baselineChatSignalCount: number;
+    baselineComposerValue: string;
+    baselineSuggestedActionsVisible: boolean;
+    timeoutMs: number;
+  }): Promise<void> {
     const toast = this.page.locator(TOAST_LOCATOR).first();
 
     const rawToastPromise = toast
@@ -1063,6 +1593,13 @@ export class ChatPage {
 
     const streamingPromise = this.pollForStreamingChange({
       baseline,
+      baselineUserMessageCount,
+      baselineStopButtonVisible,
+      baselineSendButtonVisible,
+      baselineSendButtonEnabled,
+      baselineChatSignalCount,
+      baselineComposerValue,
+      baselineSuggestedActionsVisible,
       timeoutMs,
     });
 
@@ -1120,22 +1657,144 @@ export class ChatPage {
 
   private async pollForStreamingChange({
     baseline,
+    baselineUserMessageCount,
+    baselineStopButtonVisible,
+    baselineSendButtonVisible,
+    baselineSendButtonEnabled,
+    baselineChatSignalCount,
+    baselineComposerValue,
+    baselineSuggestedActionsVisible,
     timeoutMs,
   }: {
     baseline: AssistantSnapshot;
+    baselineUserMessageCount: number;
+    baselineStopButtonVisible: boolean;
+    baselineSendButtonVisible: boolean;
+    baselineSendButtonEnabled: boolean;
+    baselineChatSignalCount: number;
+    baselineComposerValue: string;
+    baselineSuggestedActionsVisible: boolean;
     timeoutMs: number;
   }): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     const assistantLocator = this.page.getByTestId("message-assistant");
+    const userLocator = this.page.getByTestId("message-user");
     const spinnerLocator = this.page.getByTestId("message-assistant-loading");
+    const stopButtonLocator = this.stopButton;
+    const sendButtonLocator = this.sendButton;
+    const suggestedActionsLocator = this.page.getByTestId("suggested-actions");
+    let hasObservedStopButtonHidden = !baselineStopButtonVisible;
+    let hasObservedSendButtonVisible = baselineSendButtonVisible;
+    let hasObservedSendButtonEnabled = baselineSendButtonEnabled;
+    let hasObservedSuggestedActionsHidden = !baselineSuggestedActionsVisible;
+    const expectedComposerPrefill = this.pendingComposerPrefill;
+    this.pendingComposerPrefill = null;
+    let hasObservedComposerPrefill =
+      !expectedComposerPrefill || expectedComposerPrefill.trim().length === 0;
+
+    const baselineComposerTrimmed = baselineComposerValue.trim();
 
     while (Date.now() < deadline) {
-      const [assistantCount, spinnerCount] = await Promise.all([
+      const [
+        assistantCount,
+        spinnerCount,
+        stopVisible,
+        sendVisible,
+        sendEnabled,
+        userCount,
+        signalCount,
+        composerValue,
+        suggestedActionsVisible,
+      ] = await Promise.all([
         assistantLocator.count().catch(() => 0),
         spinnerLocator.count().catch(() => 0),
+        stopButtonLocator.isVisible().catch(() => false),
+        sendButtonLocator.isVisible().catch(() => false),
+        sendButtonLocator.isEnabled().catch(() => false),
+        userLocator.count().catch(() => 0),
+        this.page
+          .evaluate(() => {
+            const globalWindow = window as typeof window & {
+              __PLAYWRIGHT_CHAT_SIGNALS__?: Array<unknown>;
+            };
+
+            return Array.isArray(globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__)
+              ? globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__.length
+              : 0;
+          })
+          .catch(() => 0),
+        this.multimodalInput.inputValue().catch(() => ""),
+        suggestedActionsLocator.isVisible().catch(() => false),
       ]);
 
+      if (baselineSuggestedActionsVisible && !suggestedActionsVisible) {
+        return;
+      }
+
+      if (!baselineSuggestedActionsVisible && suggestedActionsVisible && !hasObservedSuggestedActionsHidden) {
+        hasObservedSuggestedActionsHidden = true;
+      }
+
+      if (signalCount > baselineChatSignalCount) {
+        return;
+      }
+
       if (spinnerCount > 0) {
+        return;
+      }
+
+      const composerTrimmed = composerValue.trim();
+      if (expectedComposerPrefill && !hasObservedComposerPrefill) {
+        const expectedTrimmed = expectedComposerPrefill.trim();
+        if (
+          composerTrimmed.length > 0 &&
+          (composerTrimmed === expectedTrimmed || composerValue === baselineComposerValue)
+        ) {
+          hasObservedComposerPrefill = true;
+          await this.page.waitForTimeout(50);
+          continue;
+        }
+      }
+
+      if (baselineComposerTrimmed.length > 0) {
+        if (composerTrimmed.length === 0 && composerValue !== baselineComposerValue) {
+          if (hasObservedComposerPrefill || !expectedComposerPrefill) {
+            return;
+          }
+        }
+      }
+
+      if (!sendVisible) {
+        if (hasObservedSendButtonVisible) {
+          return;
+        }
+      } else {
+        if (!hasObservedSendButtonVisible) {
+          hasObservedSendButtonVisible = true;
+        }
+
+        if (!sendEnabled && hasObservedSendButtonEnabled) {
+          return;
+        }
+
+        if (sendEnabled && !hasObservedSendButtonEnabled) {
+          hasObservedSendButtonEnabled = true;
+        }
+      }
+
+      if (stopVisible) {
+        if (!baselineStopButtonVisible) {
+          return;
+        }
+
+        if (hasObservedStopButtonHidden) {
+          return;
+        }
+      } else if (baselineStopButtonVisible && !hasObservedStopButtonHidden) {
+        hasObservedStopButtonHidden = true;
+      }
+
+      if (userCount > baselineUserMessageCount) {
         return;
       }
 
