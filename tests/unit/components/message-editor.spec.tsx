@@ -118,6 +118,22 @@ describe("MessageEditor", () => {
 
   it("preserves attachments while resubmitting an edit", async () => {
     const setMode = vi.fn();
+    // Define a message that mixes a file part and a text part to ensure the
+    // inline edit flow retains non-text payloads when the user resubmits.
+    const messageWithAttachment: ChatMessage = {
+      id: "message-with-file",
+      role: "user",
+      metadata: { createdAt: "2024-01-01T00:00:00.000Z" },
+      parts: [
+        {
+          type: "file",
+          url: "https://example.com/image.png",
+          name: "image.png",
+          mediaType: "image/png",
+        },
+        { type: "text", text: "Original prompt" },
+      ],
+    };
     let messages: ChatMessage[] = [
       messageWithAttachment,
       {
@@ -140,20 +156,6 @@ describe("MessageEditor", () => {
       }
     );
     const regenerate = vi.fn().mockResolvedValue(undefined);
-    const messageWithAttachment: ChatMessage = {
-      id: "message-with-file",
-      role: "user",
-      metadata: { createdAt: "2024-01-01T00:00:00.000Z" },
-      parts: [
-        {
-          type: "file",
-          url: "https://example.com/image.png",
-          name: "image.png",
-          mediaType: "image/png",
-        },
-        { type: "text", text: "Original prompt" },
-      ],
-    };
 
     render(
       <MessageEditor
