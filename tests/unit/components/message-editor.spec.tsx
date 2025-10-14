@@ -100,6 +100,7 @@ describe("MessageEditor", () => {
     expect(messages).toEqual([
       {
         ...baseMessage,
+        content: "Edited reasoning prompt",
         parts: [{ type: "text", text: "Edited reasoning prompt" }],
       },
     ]);
@@ -193,6 +194,7 @@ describe("MessageEditor", () => {
     expect(messages).toEqual([
       {
         ...messageWithAttachment,
+        content: "Edited attachment prompt",
         parts: [
           {
             type: "file",

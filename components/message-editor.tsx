@@ -153,24 +153,36 @@ export function MessageEditor({
                 (part): part is FilePart => part.type === "file"
               );
 
-              setMessages((messages) => {
-                const index = messages.findIndex((candidate) => {
-                  return candidate.id === message.id;
+              // Ensure the shared chat store reflects the edited prompt before
+              // we trigger a new generation so the assistant sees the latest
+              // text instead of the stale copy that originally produced the
+              // response Playwright is about to replace.
+              await new Promise<void>((resolve) => {
+                setMessages((messages) => {
+                  const index = messages.findIndex((candidate) => {
+                    return candidate.id === message.id;
+                  });
+
+                  if (index === -1) {
+                    resolve();
+                    return messages;
+                  }
+
+                  const updatedMessage: ChatMessage = {
+                    ...message,
+                    content: draftContent,
+                    parts: [
+                      ...preservedAttachments,
+                      { type: "text", text: draftContent },
+                    ],
+                  };
+
+                  resolve();
+                  return [
+                    ...messages.slice(0, index),
+                    updatedMessage,
+                  ];
                 });
-
-                if (index === -1) {
-                  return messages;
-                }
-
-                const updatedMessage: ChatMessage = {
-                  ...message,
-                  parts: [
-                    ...preservedAttachments,
-                    { type: "text", text: draftContent },
-                  ],
-                };
-
-                return [...messages.slice(0, index), updatedMessage];
               });
 
               /**
