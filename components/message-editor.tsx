@@ -9,7 +9,10 @@ import {
   useRef,
   useState,
 } from "react";
-import { deleteTrailingMessages } from "@/app/(chat)/actions";
+import {
+  deleteTrailingMessages,
+  updateMessageParts,
+} from "@/app/(chat)/actions";
 import type { ChatMessage } from "@/lib/types";
 import { cn, getTextFromMessage } from "@/lib/utils";
 import { Button } from "./ui/button";
@@ -28,6 +31,8 @@ type NonTextPart = Exclude<
   ChatMessage["parts"][number],
   { type: "text" }
 >;
+
+type FilePart = Extract<ChatMessage["parts"][number], { type: "file" }>;
 
 type MessageContentEntry =
   | string
@@ -143,19 +148,57 @@ export function MessageEditor({
             try {
               emitPlaywrightSignal("submit");
 
-              await deleteTrailingMessages({
-                id: message.id,
-              });
-
-              /**
-               * Update the local message store immediately so the edited
-               * prompt appears in the transcript before the regeneration
-               * finishes. This mirrors the behaviour of the original inline
-               * editor while keeping attachments and metadata intact.
-               */
               const preservedNonTextParts = (message.parts ?? []).filter(
                 (part): part is NonTextPart => part.type !== "text"
               );
+
+              const updatedParts = [
+                ...preservedNonTextParts,
+                { type: "text", text: draftContent },
+              ] as ChatMessage["parts"];
+
+              const attachmentsForPersistence = preservedNonTextParts
+                .filter((part): part is FilePart => part.type === "file")
+                .map((part) => {
+                  const namedPart = part as {
+                    name?: string;
+                    filename?: string;
+                    mediaType?: string;
+                    contentType?: string;
+                    url: string;
+                  };
+
+                  const derivedName =
+                    typeof namedPart.name === "string" && namedPart.name.trim()
+                      ? namedPart.name
+                      : typeof namedPart.filename === "string" &&
+                          namedPart.filename.trim()
+                        ? namedPart.filename
+                        : "attachment";
+
+                  const mediaType =
+                    (typeof namedPart.mediaType === "string" &&
+                      namedPart.mediaType) ||
+                    (typeof namedPart.contentType === "string" &&
+                      namedPart.contentType) ||
+                    "application/octet-stream";
+
+                  return {
+                    name: derivedName,
+                    url: namedPart.url,
+                    contentType: mediaType,
+                  };
+                });
+
+              await updateMessageParts({
+                id: message.id,
+                parts: updatedParts,
+                attachments: attachmentsForPersistence,
+              });
+
+              await deleteTrailingMessages({
+                id: message.id,
+              });
 
               // Ensure the shared chat store reflects the edited prompt before
               // we trigger a new generation so the assistant sees the latest
@@ -179,10 +222,7 @@ export function MessageEditor({
                      * any non-text payloads (attachments, metadata) while
                      * replacing the prompt text with the freshly edited value.
                      */
-                    parts: [
-                      ...preservedNonTextParts,
-                      { type: "text", text: draftContent },
-                    ],
+                    parts: updatedParts,
                   } as ChatMessage & { content?: unknown };
 
                   if ("content" in message) {

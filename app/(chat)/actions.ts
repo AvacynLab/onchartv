@@ -8,7 +8,9 @@ import {
   deleteMessagesByChatIdAfterTimestamp,
   getMessageById,
   updateChatVisiblityById,
+  updateMessagePartsById,
 } from "@/lib/db/queries";
+import type { Attachment, ChatMessage } from "@/lib/types";
 
 export async function saveChatModelAsCookie(model: string) {
   const cookieStore = await cookies();
@@ -44,6 +46,18 @@ export async function deleteTrailingMessages({ id }: { id: string }) {
     chatId: message.chatId,
     timestamp: message.createdAt,
   });
+}
+
+export async function updateMessageParts({
+  id,
+  parts,
+  attachments,
+}: {
+  id: string;
+  parts: ChatMessage["parts"];
+  attachments: Attachment[];
+}) {
+  await updateMessagePartsById({ id, parts, attachments });
 }
 
 export async function updateChatVisibility({

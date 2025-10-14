@@ -24,6 +24,7 @@ import { ChatSDKError } from "../errors";
 import { logWarning } from "../logging";
 import type { AppUsage } from "../usage";
 import { generateUUID } from "../utils";
+import type { Attachment, ChatMessage } from "@/lib/types";
 import {
   type Chat,
   chat,
@@ -1145,6 +1146,44 @@ export async function getMessageById({ id }: { id: string }) {
   }
 }
 
+export async function updateMessagePartsById({
+  id,
+  parts,
+  attachments,
+}: {
+  id: string;
+  parts: ChatMessage["parts"];
+  attachments: Attachment[];
+}) {
+  if (isTestEnvironment()) {
+    const store = getInMemoryStore();
+    const messageRecord = store.messages.get(id);
+
+    if (messageRecord) {
+      store.messages.set(id, {
+        ...messageRecord,
+        parts,
+        attachments,
+      });
+    }
+
+    return;
+  }
+
+  try {
+    const database = getRequiredDatabase();
+    await database
+      .update(message)
+      .set({ parts, attachments })
+      .where(eq(message.id, id));
+  } catch (_error) {
+    throw new ChatSDKError(
+      "bad_request:database",
+      "Failed to update message parts by id"
+    );
+  }
+}
+
 export async function deleteMessagesByChatIdAfterTimestamp({
   chatId,
   timestamp,
@@ -1157,7 +1196,7 @@ export async function deleteMessagesByChatIdAfterTimestamp({
     const messagesToDelete = Array.from(store.messages.values()).filter(
       (messageRecord) =>
         messageRecord.chatId === chatId &&
-        new Date(messageRecord.createdAt) >= timestamp
+        new Date(messageRecord.createdAt) > timestamp
     );
 
     for (const messageRecord of messagesToDelete) {
@@ -1173,9 +1212,7 @@ export async function deleteMessagesByChatIdAfterTimestamp({
     const messagesToDelete = await database
       .select({ id: message.id })
       .from(message)
-      .where(
-        and(eq(message.chatId, chatId), gte(message.createdAt, timestamp))
-      );
+      .where(and(eq(message.chatId, chatId), gt(message.createdAt, timestamp)));
 
     const messageIds = messagesToDelete.map(
       (currentMessage) => currentMessage.id

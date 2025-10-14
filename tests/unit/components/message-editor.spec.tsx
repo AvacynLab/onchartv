@@ -14,12 +14,16 @@ type EditableChatMessage = ChatMessage & {
 // runtime continue to work under Vitest.
 (globalThis as unknown as { React: typeof React }).React = React;
 
-const { deleteTrailingMessagesMock } = vi.hoisted(() => ({
-  deleteTrailingMessagesMock: vi.fn().mockResolvedValue(undefined),
-}));
+const { deleteTrailingMessagesMock, updateMessagePartsMock } = vi.hoisted(
+  () => ({
+    deleteTrailingMessagesMock: vi.fn().mockResolvedValue(undefined),
+    updateMessagePartsMock: vi.fn().mockResolvedValue(undefined),
+  })
+);
 
 vi.mock("@/app/(chat)/actions", () => ({
   deleteTrailingMessages: deleteTrailingMessagesMock,
+  updateMessageParts: updateMessagePartsMock,
 }));
 
 vi.mock("@/components/toast", () => ({
@@ -96,6 +100,11 @@ describe("MessageEditor", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
+    expect(updateMessagePartsMock).toHaveBeenCalledWith({
+      id: baseMessage.id,
+      attachments: [],
+      parts: [{ type: "text", text: "Edited reasoning prompt" }],
+    });
     expect(deleteTrailingMessagesMock).toHaveBeenCalledWith({
       id: baseMessage.id,
     });
@@ -205,6 +214,25 @@ describe("MessageEditor", () => {
       messageId: messageWithAttachment.id,
     });
     expect(setMode).toHaveBeenCalledWith("view");
+    expect(updateMessagePartsMock).toHaveBeenCalledWith({
+      id: messageWithAttachment.id,
+      attachments: [
+        {
+          contentType: "image/png",
+          name: "image.png",
+          url: "https://example.com/image.png",
+        },
+      ],
+      parts: [
+        {
+          mediaType: "image/png",
+          name: "image.png",
+          type: "file",
+          url: "https://example.com/image.png",
+        },
+        { type: "text", text: "Edited attachment prompt" },
+      ],
+    });
     expect(deleteTrailingMessagesMock).toHaveBeenCalledWith({
       id: messageWithAttachment.id,
     });
