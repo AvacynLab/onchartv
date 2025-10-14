@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
   type APIRequestContext,
@@ -8,7 +9,6 @@ import {
   type Page,
 } from "@playwright/test";
 import { generateId } from "ai";
-import { getUnixTime } from "date-fns";
 import { chatModels } from "@/lib/ai/models";
 import { ChatPage } from "./pages/chat";
 
@@ -421,8 +421,15 @@ export async function createAuthenticatedContext({
   };
 }
 
+/**
+ * Generate a unique pair of Playwright credentials. Combining the current
+ * timestamp with a UUID prevents collisions when multiple registration flows
+ * start within the same second, which previously caused reused addresses and
+ * flaky success toasts.
+ */
 export function generateRandomTestUser() {
-  const email = `test-${getUnixTime(new Date())}@playwright.com`;
+  const uniqueFragment = `${Date.now()}-${randomUUID()}`;
+  const email = `test-${uniqueFragment}@playwright.com`;
   const password = generateId();
 
   return {

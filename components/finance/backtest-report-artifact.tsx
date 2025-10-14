@@ -104,6 +104,9 @@ const METRICS: readonly MetricConfig[] = [
 /** Timeframes proposés pour le formulaire de re-test. */
 const TIMEFRAME_OPTIONS = ["1D", "4H", "1H", "30m", "15m"] as const;
 
+/** Accessible label applied to the retest toggle button. */
+const RETEST_TOGGLE_LABEL = "Re-tester avec ces paramètres";
+
 type TimeframeOption = (typeof TIMEFRAME_OPTIONS)[number];
 
 export interface BacktestReportArtifactProps {
@@ -316,6 +319,7 @@ export function BacktestReportArtifact({
         <Button
           aria-controls={retestFormId}
           aria-expanded={isRetestOpen}
+          aria-label={RETEST_TOGGLE_LABEL}
           /**
            * Stable hook for Playwright. Using a test id avoids brittle text-based
            * lookups when the copy changes while still exposing a readable label
@@ -328,7 +332,7 @@ export function BacktestReportArtifact({
           variant="outline"
         >
           <Repeat2 className="mr-2 size-4" />
-          Re-tester avec ces paramètres
+          {RETEST_TOGGLE_LABEL}
         </Button>
       </header>
 

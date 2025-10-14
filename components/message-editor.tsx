@@ -190,6 +190,50 @@ export function MessageEditor({
                   };
                 });
 
+              const updatedMessage: ChatMessage & {
+                content?: MessageContentEntry[] | MessageContentEntry;
+              } = {
+                ...message,
+                parts: updatedParts,
+              };
+
+              if ("content" in message) {
+                const existingContent = (message as {
+                  content?: MessageContentEntry[] | MessageContentEntry;
+                }).content;
+
+                if (typeof existingContent === "string") {
+                  updatedMessage.content = draftContent;
+                } else if (Array.isArray(existingContent)) {
+                  const preservedContentEntries = existingContent.filter(
+                    (entry) => {
+                      if (entry == null) {
+                        return false;
+                      }
+
+                      if (typeof entry === "string") {
+                        return false;
+                      }
+
+                      if (
+                        typeof entry === "object" &&
+                        "type" in entry &&
+                        entry.type === "text"
+                      ) {
+                        return false;
+                      }
+
+                      return true;
+                    }
+                  );
+
+                  updatedMessage.content = [
+                    ...preservedContentEntries,
+                    { type: "text", text: draftContent },
+                  ];
+                }
+              }
+
               await updateMessageParts({
                 id: message.id,
                 parts: updatedParts,
@@ -199,6 +243,16 @@ export function MessageEditor({
               await deleteTrailingMessages({
                 id: message.id,
               });
+
+              const serialisableMessage = (() => {
+                try {
+                  return structuredClone(updatedMessage);
+                } catch (_error) {
+                  return JSON.parse(JSON.stringify(updatedMessage));
+                }
+              })() as ChatMessage & {
+                content?: MessageContentEntry[] | MessageContentEntry;
+              };
 
               // Ensure the shared chat store reflects the edited prompt before
               // we trigger a new generation so the assistant sees the latest
@@ -215,69 +269,10 @@ export function MessageEditor({
                     return messages;
                   }
 
-                  const updatedMessage = {
-                    ...message,
-                    /**
-                     * Rebuild the message parts so the inline edit flow preserves
-                     * any non-text payloads (attachments, metadata) while
-                     * replacing the prompt text with the freshly edited value.
-                     */
-                    parts: updatedParts,
-                  } as ChatMessage & { content?: unknown };
-
-                  if ("content" in message) {
-                    const existingContent = (message as {
-                      content?: MessageContentEntry[] | MessageContentEntry;
-                    }).content;
-
-                    if (typeof existingContent === "string") {
-                      updatedMessage.content = draftContent;
-                    } else if (Array.isArray(existingContent)) {
-                      /**
-                       * Mirror the part filtering logic for the legacy content
-                       * payload to keep attachments (files, tool calls, etc.) in
-                       * sync for providers that still inspect the structured
-                       * message array.
-                       */
-                      const preservedContentEntries = existingContent.filter(
-                        (entry) => {
-                          if (entry == null) {
-                            return false;
-                          }
-
-                          if (typeof entry === "string") {
-                            return false;
-                          }
-
-                          if (
-                            typeof entry === "object" &&
-                            "type" in entry &&
-                            entry.type === "text"
-                          ) {
-                            return false;
-                          }
-
-                          return true;
-                        }
-                      );
-
-                      updatedMessage.content = [
-                        ...preservedContentEntries,
-                        { type: "text", text: draftContent },
-                      ];
-                    }
-                  }
-
-                  /**
-                   * Drop any assistant replies that followed the edited prompt so
-                   * the subsequent regeneration doesn't leave stale content in the
-                   * transcript. The server-side action prunes the persisted rows; we
-                   * mirror that behaviour locally to keep the UI in sync.
-                   */
                   const preservedHistory = messages.slice(0, index);
 
                   resolve();
-                  return [...preservedHistory, updatedMessage];
+                  return [...preservedHistory, serialisableMessage];
                 });
               });
 
@@ -289,6 +284,9 @@ export function MessageEditor({
                */
               submissionPromise = regenerate({
                 messageId: message.id,
+                body: {
+                  message: serialisableMessage,
+                },
               });
 
               setMode("view");

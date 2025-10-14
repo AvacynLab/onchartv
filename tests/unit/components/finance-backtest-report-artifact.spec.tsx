@@ -99,6 +99,16 @@ describe("BacktestReportArtifact", () => {
     ).toHaveTextContent("Le symbole est requis");
   });
 
+  it("expose le bouton de re-test via un nom accessible stable", () => {
+    render(<BacktestReportArtifact artifact={makeArtifact()} />);
+
+    expect(
+      screen.getByRole("button", {
+        name: /Re-tester avec ces paramètres/,
+      })
+    ).toBeVisible();
+  });
+
   it("transmet un payload normalisé lors d'un re-test valide", async () => {
     const onRetest = vi.fn();
     const user = userEvent.setup();
