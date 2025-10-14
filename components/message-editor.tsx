@@ -262,28 +262,29 @@ export function MessageEditor({
               // response Playwright is about to replace.
               await new Promise<void>((resolve) => {
                 setMessages((messages) => {
-                  const nextMessages: ChatMessage[] = [];
-                  let foundEditedMessage = false;
+                  const messageIndex = messages.findIndex(
+                    (candidate) => candidate.id === message.id
+                  );
 
-                  for (const candidate of messages) {
-                    if (candidate.id === message.id) {
-                      nextMessages.push(serialisableMessage);
-                      foundEditedMessage = true;
-                      break;
-                    }
-
-                    nextMessages.push(candidate);
-                  }
-
-                  resolve();
-
-                  if (!foundEditedMessage) {
+                  if (messageIndex === -1) {
+                    resolve();
                     return messages;
                   }
 
+                  const nextMessages = messages
+                    .slice(0, messageIndex + 1)
+                    .map((candidate, index) =>
+                      index === messageIndex ? serialisableMessage : candidate
+                    );
+
+                  resolve();
                   return nextMessages;
                 });
               });
+
+              // Yield to the event loop so the chat helpers observe the updated
+              // transcript before we dispatch the regeneration request.
+              await new Promise((resolve) => setTimeout(resolve, 0));
 
               /**
                * Kick off a fresh generation so the assistant produces a new

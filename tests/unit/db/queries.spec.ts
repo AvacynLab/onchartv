@@ -96,6 +96,44 @@ describe("finance queries", () => {
     expect(retried?.id).toBe(initial?.id);
   });
 
+  it("purges assistant messages that share the edited user's timestamp", async () => {
+    const chatId = "chat-inline-trim";
+    const timestamp = new Date("2024-01-01T00:00:00.000Z");
+
+    await queries.saveMessages({
+      messages: [
+        {
+          id: "user-msg",
+          chatId,
+          role: "user",
+          parts: [{ type: "text", text: "Original prompt" }],
+          attachments: [],
+          artifacts: [],
+          createdAt: timestamp,
+        },
+        {
+          id: "assistant-msg",
+          chatId,
+          role: "assistant",
+          parts: [{ type: "text", text: "Stale response" }],
+          attachments: [],
+          artifacts: [],
+          createdAt: timestamp,
+        },
+      ],
+    });
+
+    await queries.deleteMessagesByChatIdAfterTimestamp({
+      chatId,
+      timestamp,
+      excludeMessageId: "user-msg",
+    });
+
+    const remaining = await queries.getMessagesByChatId({ id: chatId });
+
+    expect(remaining.map((record) => record.id)).toEqual(["user-msg"]);
+  });
+
   it("normalises assets on upsert and fetch", async () => {
     const created = await queries.upsertAsset({
       symbol: "aapl",

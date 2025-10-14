@@ -92,8 +92,22 @@ function shouldRenderAutomationToast(): boolean {
 }
 
 function renderAutomationToast(props: Omit<ToastProps, "id">) {
-  if (!shouldRenderAutomationToast()) {
+  if (typeof window === "undefined" || typeof document === "undefined") {
     return;
+  }
+
+  if (!shouldRenderAutomationToast()) {
+    /**
+     * Hermes-style Playwright runs occasionally miss our automation heuristics.
+     * Fall back to a best-effort bridge whenever the native Sonner portal has
+     * not yet rendered a toast in the current frame so end-to-end flows still
+     * surface a visible notification.
+     */
+    const nativeToast = document.querySelector('[data-testid="toast"]');
+
+    if (nativeToast) {
+      return;
+    }
   }
 
   let bridge = document.getElementById(

@@ -45,6 +45,13 @@ export async function deleteTrailingMessages({ id }: { id: string }) {
   await deleteMessagesByChatIdAfterTimestamp({
     chatId: message.chatId,
     timestamp: message.createdAt,
+    /**
+     * Ensure regenerated responses do not reuse the previous assistant output
+     * even when both messages share the same millisecond-level timestamp. The
+     * optional guard keeps the edited user prompt intact while pruning any
+     * sibling entries created during the original generation cycle.
+     */
+    excludeMessageId: message.id,
   });
 }
 

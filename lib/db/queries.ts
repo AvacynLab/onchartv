@@ -13,6 +13,8 @@ import {
   gte,
   inArray,
   lt,
+  ne,
+  or,
   type SQL,
 } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -1187,16 +1189,35 @@ export async function updateMessagePartsById({
 export async function deleteMessagesByChatIdAfterTimestamp({
   chatId,
   timestamp,
+  excludeMessageId,
 }: {
   chatId: string;
   timestamp: Date;
+  /**
+   * Preserve the anchor message while purging siblings created at the exact
+   * same millisecond – a scenario observed during mocked streaming where both
+   * the user prompt and assistant reply share the same `createdAt` value.
+   */
+  excludeMessageId?: string;
 }) {
   if (isTestEnvironment()) {
     const store = getInMemoryStore();
+    const cutoffTime = timestamp.getTime();
     const messagesToDelete = Array.from(store.messages.values()).filter(
-      (messageRecord) =>
-        messageRecord.chatId === chatId &&
-        new Date(messageRecord.createdAt) > timestamp
+      (messageRecord) => {
+        if (messageRecord.chatId !== chatId) {
+          return false;
+        }
+
+        const createdAtMs = new Date(messageRecord.createdAt).getTime();
+        const strictlyAfter = createdAtMs > cutoffTime;
+        const sharesTimestamp =
+          excludeMessageId !== undefined &&
+          createdAtMs === cutoffTime &&
+          messageRecord.id !== excludeMessageId;
+
+        return strictlyAfter || sharesTimestamp;
+      }
     );
 
     for (const messageRecord of messagesToDelete) {
@@ -1209,10 +1230,17 @@ export async function deleteMessagesByChatIdAfterTimestamp({
 
   try {
     const database = getRequiredDatabase();
+    const cutoffCondition = excludeMessageId
+      ? or(
+          gt(message.createdAt, timestamp),
+          and(eq(message.createdAt, timestamp), ne(message.id, excludeMessageId))
+        )
+      : gt(message.createdAt, timestamp);
+
     const messagesToDelete = await database
       .select({ id: message.id })
       .from(message)
-      .where(and(eq(message.chatId, chatId), gt(message.createdAt, timestamp)));
+      .where(and(eq(message.chatId, chatId), cutoffCondition));
 
     const messageIds = messagesToDelete.map(
       (currentMessage) => currentMessage.id
