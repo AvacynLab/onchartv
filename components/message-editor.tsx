@@ -144,13 +144,13 @@ export function MessageEditor({
                * finishes. This mirrors the behaviour of the original inline
                * editor while keeping attachments and metadata intact.
                */
-              type FilePart = Extract<
+              type NonTextPart = Exclude<
                 ChatMessage["parts"][number],
-                { type: "file" }
+                { type: "text" }
               >;
 
-              const preservedAttachments = message.parts.filter(
-                (part): part is FilePart => part.type === "file"
+              const preservedNonTextParts = message.parts.filter(
+                (part): part is NonTextPart => part.type !== "text"
               );
 
               // Ensure the shared chat store reflects the edited prompt before
@@ -170,9 +170,13 @@ export function MessageEditor({
 
                   const updatedMessage: ChatMessage = {
                     ...message,
-                    content: draftContent,
+                    /**
+                     * Rebuild the message parts so the inline edit flow preserves
+                     * any non-text payloads (attachments, metadata) while
+                     * replacing the prompt text with the freshly edited value.
+                     */
                     parts: [
-                      ...preservedAttachments,
+                      ...preservedNonTextParts,
                       { type: "text", text: draftContent },
                     ],
                   };
@@ -181,6 +185,7 @@ export function MessageEditor({
                   return [
                     ...messages.slice(0, index),
                     updatedMessage,
+                    ...messages.slice(index + 1),
                   ];
                 });
               });
