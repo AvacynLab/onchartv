@@ -228,11 +228,16 @@ export function MessageEditor({
                     }
                   }
 
+                  /**
+                   * Drop any assistant replies that followed the edited prompt so
+                   * the subsequent regeneration doesn't leave stale content in the
+                   * transcript. The server-side action prunes the persisted rows; we
+                   * mirror that behaviour locally to keep the UI in sync.
+                   */
+                  const preservedHistory = messages.slice(0, index);
+
                   resolve();
-                  return [
-                    ...messages.slice(0, index),
-                    updatedMessage,
-                  ];
+                  return [...preservedHistory, updatedMessage];
                 });
               });
 
