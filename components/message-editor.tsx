@@ -10,7 +10,7 @@ import {
   useState,
 } from "react";
 import { deleteTrailingMessages, updateMessageParts } from "@/app/(chat)/actions";
-import type { ChatMessage } from "@/lib/types";
+import type { Attachment, ChatMessage } from "@/lib/types";
 import { cn, getTextFromMessage } from "@/lib/utils";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
@@ -154,7 +154,7 @@ export function MessageEditor({
                 { type: "text", text: draftContent },
               ] as ChatMessage["parts"];
 
-              const attachmentsForPersistence = preservedNonTextParts
+              const attachmentsForPersistence: Attachment[] = preservedNonTextParts
                 .filter((part): part is FilePart => part.type === "file")
                 .map((part) => {
                   const namedPart = part as {
@@ -189,6 +189,7 @@ export function MessageEditor({
 
               const updatedMessage: ChatMessage & {
                 content?: MessageContentEntry[] | MessageContentEntry;
+                attachments?: Attachment[];
               } = {
                 ...message,
                 parts: updatedParts,
@@ -250,6 +251,7 @@ export function MessageEditor({
                 }
               })() as ChatMessage & {
                 content?: MessageContentEntry[] | MessageContentEntry;
+                attachments?: Attachment[];
               };
 
               serialisableMessage.attachments = attachmentsForPersistence;
@@ -260,19 +262,26 @@ export function MessageEditor({
               // response Playwright is about to replace.
               await new Promise<void>((resolve) => {
                 setMessages((messages) => {
-                  const index = messages.findIndex((candidate) => {
-                    return candidate.id === message.id;
-                  });
+                  const nextMessages: ChatMessage[] = [];
+                  let foundEditedMessage = false;
 
-                  if (index === -1) {
-                    resolve();
+                  for (const candidate of messages) {
+                    if (candidate.id === message.id) {
+                      nextMessages.push(serialisableMessage);
+                      foundEditedMessage = true;
+                      break;
+                    }
+
+                    nextMessages.push(candidate);
+                  }
+
+                  resolve();
+
+                  if (!foundEditedMessage) {
                     return messages;
                   }
 
-                  const preservedHistory = messages.slice(0, index);
-
-                  resolve();
-                  return [...preservedHistory, serialisableMessage];
+                  return nextMessages;
                 });
               });
 
