@@ -314,18 +314,12 @@ export function BacktestReportArtifact({
           </p>
         </div>
         <Button
-          /**
-           * Expose an explicit accessible name so Playwright (and assistive
-           * technologies) can reliably locate the retest toggle even if the
-           * visible copy evolves.
-           */
-          aria-label="Re-tester avec ces paramètres"
           aria-controls={retestFormId}
           aria-expanded={isRetestOpen}
           /**
            * Stable hook for Playwright. Using a test id avoids brittle text-based
-           * lookups when the copy changes while preserving the accessible name
-           * exposed to end users.
+           * lookups when the copy changes while still exposing a readable label
+           * to assistive technologies.
            */
           data-testid="finance-backtest-retest-toggle"
           onClick={handleRetestToggle}

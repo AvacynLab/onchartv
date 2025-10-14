@@ -287,21 +287,8 @@ export function MessageEditor({
                * emitting the Playwright signal to guarantee the streaming
                * watchers observe a completed transition.
                */
-              const nextMessagePayload = {
-                id: message.id,
-                role: message.role,
-                parts: updatedParts,
-              } satisfies {
-                id: string;
-                role: ChatMessage["role"];
-                parts: ChatMessage["parts"];
-              };
-
               submissionPromise = regenerate({
                 messageId: message.id,
-                body: {
-                  message: nextMessagePayload,
-                },
               });
 
               setMode("view");

@@ -111,13 +111,6 @@ describe("MessageEditor", () => {
     expect(regenerate).toHaveBeenCalledTimes(1);
     expect(regenerate).toHaveBeenCalledWith({
       messageId: baseMessage.id,
-      body: {
-        message: {
-          id: baseMessage.id,
-          role: baseMessage.role,
-          parts: [{ type: "text", text: "Edited reasoning prompt" }],
-        },
-      },
     });
     expect(setMode).toHaveBeenCalledWith("view");
 
@@ -221,21 +214,6 @@ describe("MessageEditor", () => {
     expect(regenerate).toHaveBeenCalledTimes(1);
     expect(regenerate).toHaveBeenCalledWith({
       messageId: messageWithAttachment.id,
-      body: {
-        message: {
-          id: messageWithAttachment.id,
-          role: messageWithAttachment.role,
-          parts: [
-            {
-              type: "file",
-              url: "https://example.com/image.png",
-              name: "image.png",
-              mediaType: "image/png",
-            },
-            { type: "text", text: "Edited attachment prompt" },
-          ],
-        },
-      },
     });
     expect(setMode).toHaveBeenCalledWith("view");
     expect(updateMessagePartsMock).toHaveBeenCalledWith({
