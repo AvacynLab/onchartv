@@ -9,10 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-import {
-  deleteTrailingMessages,
-  updateMessageParts,
-} from "@/app/(chat)/actions";
+import { deleteTrailingMessages, updateMessageParts } from "@/app/(chat)/actions";
 import type { ChatMessage } from "@/lib/types";
 import { cn, getTextFromMessage } from "@/lib/utils";
 import { Button } from "./ui/button";
@@ -195,6 +192,7 @@ export function MessageEditor({
               } = {
                 ...message,
                 parts: updatedParts,
+                attachments: attachmentsForPersistence,
               };
 
               if ("content" in message) {
@@ -254,6 +252,8 @@ export function MessageEditor({
                 content?: MessageContentEntry[] | MessageContentEntry;
               };
 
+              serialisableMessage.attachments = attachmentsForPersistence;
+
               // Ensure the shared chat store reflects the edited prompt before
               // we trigger a new generation so the assistant sees the latest
               // text instead of the stale copy that originally produced the
@@ -284,9 +284,6 @@ export function MessageEditor({
                */
               submissionPromise = regenerate({
                 messageId: message.id,
-                body: {
-                  message: serialisableMessage,
-                },
               });
 
               setMode("view");

@@ -36,6 +36,7 @@ describe("MessageEditor", () => {
     role: "user",
     parts: [{ type: "text", text: "Original prompt" }],
     content: [{ type: "text", text: "Original prompt" }],
+    attachments: [],
   };
 
   beforeEach(() => {
@@ -111,13 +112,6 @@ describe("MessageEditor", () => {
     expect(regenerate).toHaveBeenCalledTimes(1);
     expect(regenerate).toHaveBeenCalledWith({
       messageId: baseMessage.id,
-      body: {
-        message: expect.objectContaining({
-          id: baseMessage.id,
-          parts: [{ type: "text", text: "Edited reasoning prompt" }],
-          content: [{ type: "text", text: "Edited reasoning prompt" }],
-        }),
-      },
     });
     expect(setMode).toHaveBeenCalledWith("view");
 
@@ -149,6 +143,13 @@ describe("MessageEditor", () => {
       id: "message-with-file",
       role: "user",
       metadata: { createdAt: "2024-01-01T00:00:00.000Z" },
+      attachments: [
+        {
+          name: "image.png",
+          url: "https://example.com/image.png",
+          contentType: "image/png",
+        },
+      ],
       parts: [
         {
           type: "file",
@@ -221,25 +222,6 @@ describe("MessageEditor", () => {
     expect(regenerate).toHaveBeenCalledTimes(1);
     expect(regenerate).toHaveBeenCalledWith({
       messageId: messageWithAttachment.id,
-      body: {
-        message: expect.objectContaining({
-          id: messageWithAttachment.id,
-          parts: [
-            expect.objectContaining({
-              type: "file",
-              url: "https://example.com/image.png",
-            }),
-            { type: "text", text: "Edited attachment prompt" },
-          ],
-          content: [
-            expect.objectContaining({
-              type: "file",
-              url: "https://example.com/image.png",
-            }),
-            { type: "text", text: "Edited attachment prompt" },
-          ],
-        }),
-      },
     });
     expect(setMode).toHaveBeenCalledWith("view");
     expect(updateMessagePartsMock).toHaveBeenCalledWith({
