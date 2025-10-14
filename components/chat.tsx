@@ -249,6 +249,7 @@ export function Chat({
           isArtifactVisible={isArtifactVisible}
           isReadonly={isReadonly}
           messages={safeMessages}
+          sendMessage={sendMessage}
           regenerate={regenerate}
           selectedModelId={initialChatModel}
           setMessages={setMessages}

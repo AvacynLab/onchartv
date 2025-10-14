@@ -1,6 +1,5 @@
 "use client";
 
-import type { UseChatHelpers } from "@ai-sdk/react";
 import {
   type Dispatch,
   type SetStateAction,
@@ -15,19 +14,28 @@ import { cn, getTextFromMessage } from "@/lib/utils";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
 import { toast } from "./toast";
+import { isAutomationRuntime } from "./utils/automation";
 
 export type MessageEditorProps = {
   message: ChatMessage;
   setMode: Dispatch<SetStateAction<"view" | "edit">>;
-  setMessages: UseChatHelpers<ChatMessage>["setMessages"];
-  regenerate: UseChatHelpers<ChatMessage>["regenerate"];
+  sendMessage: ({
+    messageId,
+    parts,
+    role,
+    metadata,
+  }: {
+    messageId: string;
+    parts: ChatMessage["parts"];
+    role?: ChatMessage["role"];
+    metadata?: ChatMessage["metadata"];
+  }) => Promise<void>;
 };
 
 export function MessageEditor({
   message,
   setMode,
-  setMessages,
-  regenerate,
+  sendMessage,
 }: MessageEditorProps) {
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
@@ -35,6 +43,42 @@ export function MessageEditor({
     getTextFromMessage(message)
   );
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  /**
+   * Playwright relies on an in-page signal buffer to detect when inline edits
+   * kick off a fresh generation. Re-using the same emitter as the composer
+   * keeps both flows observable without forcing the test harness to fall back
+   * exclusively on DOM heuristics (which would be far more brittle).
+   */
+  const emitPlaywrightSignal = useCallback((phase: string) => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const globalWindow = window as Window & {
+      __PLAYWRIGHT_CHAT_SIGNALS__?: Array<{
+        phase: string;
+        timestamp: number;
+      }>;
+    };
+
+    if (!Array.isArray(globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__)) {
+      globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__ = [];
+    }
+
+    globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__!.push({
+      phase,
+      timestamp: performance.now(),
+    });
+
+    if (!isAutomationRuntime()) {
+      const maxSignals = 5;
+      const signalBuffer = globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__!;
+      if (signalBuffer.length > maxSignals) {
+        signalBuffer.splice(0, signalBuffer.length - maxSignals);
+      }
+    }
+  }, []);
 
   const adjustHeight = useCallback(() => {
     if (textareaRef.current) {
@@ -92,42 +136,52 @@ export function MessageEditor({
 
             setIsSubmitting(true);
             let switchedToViewMode = false;
-            let regenerationPromise: Promise<unknown> | undefined;
+            let submissionPromise: Promise<unknown> | undefined;
 
             try {
+              emitPlaywrightSignal("submit");
+
               await deleteTrailingMessages({
                 id: message.id,
               });
 
-              setMessages((messages) => {
-                const index = messages.findIndex((m) => m.id === message.id);
-
-                if (index !== -1) {
-                  const updatedMessage: ChatMessage = {
-                    ...message,
-                    parts: [{ type: "text", text: draftContent }],
-                  };
-
-                  return [...messages.slice(0, index), updatedMessage];
-                }
-
-                return messages;
-              });
-
               /**
-               * Start the regeneration before collapsing the editor so the
-               * chat helpers capture the freshly edited prompt. Once the
-               * request is inflight we immediately swap back to the standard
-               * view mode so the inline controls disappear without waiting for
-               * the network roundtrip, matching the behaviour Playwright
-               * expects during the edit flow.
+               * Re-submit the edited message through the official chat helper
+               * so downstream transports (streaming status, request lifecycle)
+               * remain consistent with brand new prompts. Inline edits reuse
+               * the original message identifier which instructs the helper to
+               * replace the prior user part before triggering a fresh
+               * generation.
                */
-              regenerationPromise = regenerate();
+              type FilePart = Extract<
+                ChatMessage["parts"][number],
+                { type: "file" }
+              >;
+
+              const preservedAttachments = message.parts.filter(
+                (part): part is FilePart => part.type === "file"
+              );
+
+              const payload: Parameters<typeof sendMessage>[0] = {
+                messageId: message.id,
+                parts: [
+                  ...preservedAttachments,
+                  { type: "text", text: draftContent },
+                ],
+                role: message.role,
+              };
+
+              if (message.metadata) {
+                payload.metadata = message.metadata;
+              }
+
+              submissionPromise = sendMessage(payload);
 
               setMode("view");
               switchedToViewMode = true;
 
-              await regenerationPromise;
+              await submissionPromise;
+              emitPlaywrightSignal("sent");
             } catch (error) {
               console.error("Failed to resubmit edited message", error);
 
@@ -135,6 +189,8 @@ export function MessageEditor({
                 type: "error",
                 description: "We couldn't resend your edit. Please try again.",
               });
+
+              emitPlaywrightSignal("error");
 
               // Restore edit mode so the user can make further adjustments if
               // the server rejects the request.
