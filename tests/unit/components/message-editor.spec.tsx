@@ -6,6 +6,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MessageEditor } from "@/components/message-editor";
 import type { ChatMessage } from "@/lib/types";
 
+type EditableChatMessage = ChatMessage & {
+  content?: Array<Record<string, unknown>> | string;
+};
+
 // Provide the global React export so mocked components that rely on the legacy
 // runtime continue to work under Vitest.
 (globalThis as unknown as { React: typeof React }).React = React;
@@ -23,10 +27,11 @@ vi.mock("@/components/toast", () => ({
 }));
 
 describe("MessageEditor", () => {
-  const baseMessage: ChatMessage = {
+  const baseMessage: EditableChatMessage = {
     id: "message-id",
     role: "user",
     parts: [{ type: "text", text: "Original prompt" }],
+    content: [{ type: "text", text: "Original prompt" }],
   };
 
   beforeEach(() => {
@@ -95,17 +100,14 @@ describe("MessageEditor", () => {
       id: baseMessage.id,
     });
     expect(regenerate).toHaveBeenCalledTimes(1);
+    expect(regenerate).toHaveBeenCalledWith({ messageId: baseMessage.id });
     expect(setMode).toHaveBeenCalledWith("view");
 
     expect(messages).toEqual([
       {
         ...baseMessage,
         parts: [{ type: "text", text: "Edited reasoning prompt" }],
-      },
-      {
-        id: "assistant-message",
-        role: "assistant",
-        parts: [{ type: "text", text: "It's just blue duh!" }],
+        content: [{ type: "text", text: "Edited reasoning prompt" }],
       },
     ]);
 
@@ -125,11 +127,20 @@ describe("MessageEditor", () => {
     const setMode = vi.fn();
     // Define a message that mixes a file part and a text part to ensure the
     // inline edit flow retains non-text payloads when the user resubmits.
-    const messageWithAttachment: ChatMessage = {
+    const messageWithAttachment: EditableChatMessage = {
       id: "message-with-file",
       role: "user",
       metadata: { createdAt: "2024-01-01T00:00:00.000Z" },
       parts: [
+        {
+          type: "file",
+          url: "https://example.com/image.png",
+          name: "image.png",
+          mediaType: "image/png",
+        },
+        { type: "text", text: "Original prompt" },
+      ],
+      content: [
         {
           type: "file",
           url: "https://example.com/image.png",
@@ -190,6 +201,9 @@ describe("MessageEditor", () => {
     });
 
     expect(regenerate).toHaveBeenCalledTimes(1);
+    expect(regenerate).toHaveBeenCalledWith({
+      messageId: messageWithAttachment.id,
+    });
     expect(setMode).toHaveBeenCalledWith("view");
     expect(deleteTrailingMessagesMock).toHaveBeenCalledWith({
       id: messageWithAttachment.id,
@@ -207,11 +221,15 @@ describe("MessageEditor", () => {
           },
           { type: "text", text: "Edited attachment prompt" },
         ],
-      },
-      {
-        id: "assistant-response",
-        role: "assistant",
-        parts: [{ type: "text", text: "It's just blue duh!" }],
+        content: [
+          {
+            type: "file",
+            url: "https://example.com/image.png",
+            name: "image.png",
+            mediaType: "image/png",
+          },
+          { type: "text", text: "Edited attachment prompt" },
+        ],
       },
     ]);
   });

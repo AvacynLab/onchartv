@@ -24,6 +24,15 @@ export type MessageEditorProps = {
   regenerate: UseChatHelpers<ChatMessage>["regenerate"];
 };
 
+type NonTextPart = Exclude<
+  ChatMessage["parts"][number],
+  { type: "text" }
+>;
+
+type MessageContentEntry =
+  | string
+  | ({ type: string } & Record<string, unknown>);
+
 export function MessageEditor({
   message,
   setMode,
@@ -144,12 +153,7 @@ export function MessageEditor({
                * finishes. This mirrors the behaviour of the original inline
                * editor while keeping attachments and metadata intact.
                */
-              type NonTextPart = Exclude<
-                ChatMessage["parts"][number],
-                { type: "text" }
-              >;
-
-              const preservedNonTextParts = message.parts.filter(
+              const preservedNonTextParts = (message.parts ?? []).filter(
                 (part): part is NonTextPart => part.type !== "text"
               );
 
@@ -168,7 +172,7 @@ export function MessageEditor({
                     return messages;
                   }
 
-                  const updatedMessage: ChatMessage = {
+                  const updatedMessage = {
                     ...message,
                     /**
                      * Rebuild the message parts so the inline edit flow preserves
@@ -179,13 +183,55 @@ export function MessageEditor({
                       ...preservedNonTextParts,
                       { type: "text", text: draftContent },
                     ],
-                  };
+                  } as ChatMessage & { content?: unknown };
+
+                  if ("content" in message) {
+                    const existingContent = (message as {
+                      content?: MessageContentEntry[] | MessageContentEntry;
+                    }).content;
+
+                    if (typeof existingContent === "string") {
+                      updatedMessage.content = draftContent;
+                    } else if (Array.isArray(existingContent)) {
+                      /**
+                       * Mirror the part filtering logic for the legacy content
+                       * payload to keep attachments (files, tool calls, etc.) in
+                       * sync for providers that still inspect the structured
+                       * message array.
+                       */
+                      const preservedContentEntries = existingContent.filter(
+                        (entry) => {
+                          if (entry == null) {
+                            return false;
+                          }
+
+                          if (typeof entry === "string") {
+                            return false;
+                          }
+
+                          if (
+                            typeof entry === "object" &&
+                            "type" in entry &&
+                            entry.type === "text"
+                          ) {
+                            return false;
+                          }
+
+                          return true;
+                        }
+                      );
+
+                      updatedMessage.content = [
+                        ...preservedContentEntries,
+                        { type: "text", text: draftContent },
+                      ];
+                    }
+                  }
 
                   resolve();
                   return [
                     ...messages.slice(0, index),
                     updatedMessage,
-                    ...messages.slice(index + 1),
                   ];
                 });
               });
@@ -196,7 +242,7 @@ export function MessageEditor({
                * emitting the Playwright signal to guarantee the streaming
                * watchers observe a completed transition.
                */
-              submissionPromise = regenerate();
+              submissionPromise = regenerate({ messageId: message.id });
 
               setMode("view");
               switchedToViewMode = true;
