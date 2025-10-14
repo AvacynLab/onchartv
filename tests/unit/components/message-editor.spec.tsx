@@ -3,10 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  MessageEditor,
-  type MessageEditorProps,
-} from "@/components/message-editor";
+import { MessageEditor } from "@/components/message-editor";
 import type { ChatMessage } from "@/lib/types";
 
 // Provide the global React export so mocked components that rely on the legacy
@@ -43,15 +40,36 @@ describe("MessageEditor", () => {
   });
 
   it("flushes the edited prompt before triggering a regeneration", async () => {
-    const sendMessage = vi.fn<ReturnType<MessageEditorProps["sendMessage"]>, Parameters<MessageEditorProps["sendMessage"]>>()
-      .mockResolvedValue(undefined);
     const setMode = vi.fn();
+    let messages: ChatMessage[] = [
+      baseMessage,
+      {
+        id: "assistant-message",
+        role: "assistant",
+        parts: [{ type: "text", text: "It's just blue duh!" }],
+      },
+    ];
+
+    const setMessages = vi.fn(
+      (
+        updater:
+          | ChatMessage[]
+          | ((currentMessages: ChatMessage[]) => ChatMessage[])
+      ) => {
+        messages =
+          typeof updater === "function"
+            ? updater(messages)
+            : updater;
+      }
+    );
+    const regenerate = vi.fn().mockResolvedValue(undefined);
 
     render(
       <MessageEditor
         message={baseMessage}
-        sendMessage={sendMessage}
+        regenerate={regenerate}
         setMode={setMode}
+        setMessages={setMessages}
       />
     );
 
@@ -73,20 +91,55 @@ describe("MessageEditor", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
-    expect(sendMessage).toHaveBeenCalledWith({
-      messageId: baseMessage.id,
-      parts: [{ type: "text", text: "Edited reasoning prompt" }],
-      role: baseMessage.role,
+    expect(deleteTrailingMessagesMock).toHaveBeenCalledWith({
+      id: baseMessage.id,
     });
-    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(regenerate).toHaveBeenCalledTimes(1);
     expect(setMode).toHaveBeenCalledWith("view");
+
+    expect(messages).toEqual([
+      {
+        ...baseMessage,
+        parts: [{ type: "text", text: "Edited reasoning prompt" }],
+      },
+    ]);
+
+    const signals = (window as typeof window & {
+      __PLAYWRIGHT_CHAT_SIGNALS__?: Array<{ phase: string }>;
+    }).__PLAYWRIGHT_CHAT_SIGNALS__;
+
+    expect(signals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ phase: "submit" }),
+        expect.objectContaining({ phase: "sent" }),
+      ])
+    );
   });
 
-  it("preserves attachments and surfaces Playwright signals during edits", async () => {
-    const sendMessage = vi
-      .fn<ReturnType<MessageEditorProps["sendMessage"]>, Parameters<MessageEditorProps["sendMessage"]>>()
-      .mockResolvedValue(undefined);
+  it("preserves attachments while resubmitting an edit", async () => {
     const setMode = vi.fn();
+    let messages: ChatMessage[] = [
+      messageWithAttachment,
+      {
+        id: "assistant-response",
+        role: "assistant",
+        parts: [{ type: "text", text: "It's just blue duh!" }],
+      },
+    ];
+
+    const setMessages = vi.fn(
+      (
+        updater:
+          | ChatMessage[]
+          | ((currentMessages: ChatMessage[]) => ChatMessage[])
+      ) => {
+        messages =
+          typeof updater === "function"
+            ? updater(messages)
+            : updater;
+      }
+    );
+    const regenerate = vi.fn().mockResolvedValue(undefined);
     const messageWithAttachment: ChatMessage = {
       id: "message-with-file",
       role: "user",
@@ -105,8 +158,9 @@ describe("MessageEditor", () => {
     render(
       <MessageEditor
         message={messageWithAttachment}
-        sendMessage={sendMessage}
+        regenerate={regenerate}
         setMode={setMode}
+        setMessages={setMessages}
       />
     );
 
@@ -128,34 +182,25 @@ describe("MessageEditor", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
-    expect(sendMessage).toHaveBeenCalledWith({
-      messageId: messageWithAttachment.id,
-      parts: [
-        {
-          type: "file",
-          url: "https://example.com/image.png",
-          name: "image.png",
-          mediaType: "image/png",
-        },
-        { type: "text", text: "Edited attachment prompt" },
-      ],
-      role: messageWithAttachment.role,
-      metadata: messageWithAttachment.metadata,
-    });
-
-    const signals = (window as typeof window & {
-      __PLAYWRIGHT_CHAT_SIGNALS__?: Array<{ phase: string }>;
-    }).__PLAYWRIGHT_CHAT_SIGNALS__;
-
-    expect(signals).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ phase: "submit" }),
-        expect.objectContaining({ phase: "sent" }),
-      ])
-    );
+    expect(regenerate).toHaveBeenCalledTimes(1);
     expect(setMode).toHaveBeenCalledWith("view");
     expect(deleteTrailingMessagesMock).toHaveBeenCalledWith({
       id: messageWithAttachment.id,
     });
+
+    expect(messages).toEqual([
+      {
+        ...messageWithAttachment,
+        parts: [
+          {
+            type: "file",
+            url: "https://example.com/image.png",
+            name: "image.png",
+            mediaType: "image/png",
+          },
+          { type: "text", text: "Edited attachment prompt" },
+        ],
+      },
+    ]);
   });
 });

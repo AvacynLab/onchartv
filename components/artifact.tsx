@@ -379,7 +379,6 @@ function PureArtifact({
                   isReadonly={isReadonly}
                   messages={messages}
                   regenerate={regenerate}
-                  sendMessage={sendMessage}
                   setMessages={setMessages}
                   status={status}
                   votes={votes}

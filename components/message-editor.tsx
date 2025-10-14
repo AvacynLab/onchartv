@@ -1,5 +1,6 @@
 "use client";
 
+import type { UseChatHelpers } from "@ai-sdk/react";
 import {
   type Dispatch,
   type SetStateAction,
@@ -19,23 +20,15 @@ import { isAutomationRuntime } from "./utils/automation";
 export type MessageEditorProps = {
   message: ChatMessage;
   setMode: Dispatch<SetStateAction<"view" | "edit">>;
-  sendMessage: ({
-    messageId,
-    parts,
-    role,
-    metadata,
-  }: {
-    messageId: string;
-    parts: ChatMessage["parts"];
-    role?: ChatMessage["role"];
-    metadata?: ChatMessage["metadata"];
-  }) => Promise<void>;
+  setMessages: UseChatHelpers<ChatMessage>["setMessages"];
+  regenerate: UseChatHelpers<ChatMessage>["regenerate"];
 };
 
 export function MessageEditor({
   message,
   setMode,
-  sendMessage,
+  setMessages,
+  regenerate,
 }: MessageEditorProps) {
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
@@ -146,12 +139,10 @@ export function MessageEditor({
               });
 
               /**
-               * Re-submit the edited message through the official chat helper
-               * so downstream transports (streaming status, request lifecycle)
-               * remain consistent with brand new prompts. Inline edits reuse
-               * the original message identifier which instructs the helper to
-               * replace the prior user part before triggering a fresh
-               * generation.
+               * Update the local message store immediately so the edited
+               * prompt appears in the transcript before the regeneration
+               * finishes. This mirrors the behaviour of the original inline
+               * editor while keeping attachments and metadata intact.
                */
               type FilePart = Extract<
                 ChatMessage["parts"][number],
@@ -162,20 +153,33 @@ export function MessageEditor({
                 (part): part is FilePart => part.type === "file"
               );
 
-              const payload: Parameters<typeof sendMessage>[0] = {
-                messageId: message.id,
-                parts: [
-                  ...preservedAttachments,
-                  { type: "text", text: draftContent },
-                ],
-                role: message.role,
-              };
+              setMessages((messages) => {
+                const index = messages.findIndex((candidate) => {
+                  return candidate.id === message.id;
+                });
 
-              if (message.metadata) {
-                payload.metadata = message.metadata;
-              }
+                if (index === -1) {
+                  return messages;
+                }
 
-              submissionPromise = sendMessage(payload);
+                const updatedMessage: ChatMessage = {
+                  ...message,
+                  parts: [
+                    ...preservedAttachments,
+                    { type: "text", text: draftContent },
+                  ],
+                };
+
+                return [...messages.slice(0, index), updatedMessage];
+              });
+
+              /**
+               * Kick off a fresh generation so the assistant produces a new
+               * response for the edited prompt. Await the promise before
+               * emitting the Playwright signal to guarantee the streaming
+               * watchers observe a completed transition.
+               */
+              submissionPromise = regenerate();
 
               setMode("view");
               switchedToViewMode = true;

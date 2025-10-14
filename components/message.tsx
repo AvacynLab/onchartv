@@ -51,7 +51,6 @@ const PurePreviewMessage = ({
   isLoading,
   setMessages,
   regenerate,
-  sendMessage,
   isReadonly,
   requiresScrollPadding,
 }: {
@@ -61,7 +60,6 @@ const PurePreviewMessage = ({
   isLoading: boolean;
   setMessages: UseChatHelpers<ChatMessage>["setMessages"];
   regenerate: UseChatHelpers<ChatMessage>["regenerate"];
-  sendMessage: UseChatHelpers<ChatMessage>["sendMessage"];
   isReadonly: boolean;
   requiresScrollPadding: boolean;
 }) => {
@@ -182,8 +180,9 @@ const PurePreviewMessage = ({
                       <MessageEditor
                         key={message.id}
                         message={message}
-                        sendMessage={sendMessage}
+                        regenerate={regenerate}
                         setMode={setMode}
+                        setMessages={setMessages}
                       />
                     </div>
                   </div>

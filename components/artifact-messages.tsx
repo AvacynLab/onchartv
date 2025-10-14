@@ -15,7 +15,6 @@ type ArtifactMessagesProps = {
   messages: ChatMessage[];
   setMessages: UseChatHelpers<ChatMessage>["setMessages"];
   regenerate: UseChatHelpers<ChatMessage>["regenerate"];
-  sendMessage: UseChatHelpers<ChatMessage>["sendMessage"];
   isReadonly: boolean;
   artifactStatus: UIArtifact["status"];
 };
@@ -27,7 +26,6 @@ function PureArtifactMessages({
   messages,
   setMessages,
   regenerate,
-  sendMessage,
   isReadonly,
 }: ArtifactMessagesProps) {
   const {
@@ -53,9 +51,6 @@ function PureArtifactMessages({
           key={message.id}
           message={message}
           regenerate={regenerate}
-          // Forward the shared sendMessage helper so inline edits reuse the
-          // exact submission pipeline as the main chat composer.
-          sendMessage={sendMessage}
           requiresScrollPadding={
             hasSentMessage && index === messages.length - 1
           }

@@ -17,7 +17,6 @@ type MessagesProps = {
   messages?: ChatMessage[] | null;
   setMessages: UseChatHelpers<ChatMessage>["setMessages"];
   regenerate: UseChatHelpers<ChatMessage>["regenerate"];
-  sendMessage: UseChatHelpers<ChatMessage>["sendMessage"];
   isReadonly: boolean;
   isArtifactVisible: boolean;
   selectedModelId: string;
@@ -38,7 +37,6 @@ function PureMessages({
   messages,
   setMessages,
   regenerate,
-  sendMessage,
   isReadonly,
   selectedModelId,
 }: MessagesProps) {
@@ -159,7 +157,6 @@ function PureMessages({
                 key={message.id}
                 message={normalisedMessage}
                 regenerate={regenerate}
-                sendMessage={sendMessage}
                 requiresScrollPadding={
                   hasSentMessage && index === safeMessages.length - 1
                 }
