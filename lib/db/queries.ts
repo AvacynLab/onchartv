@@ -13,6 +13,7 @@ import {
   gte,
   inArray,
   lt,
+  neq,
   type SQL,
 } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -24,6 +25,7 @@ import { ChatSDKError } from "../errors";
 import { logWarning } from "../logging";
 import type { AppUsage } from "../usage";
 import { generateUUID } from "../utils";
+import type { ChatMessage } from "../types";
 import {
   type Chat,
   chat,
@@ -61,6 +63,10 @@ import {
   FINANCE_MARKET_IDS,
   type FinancePreferences,
 } from "../finance/preferences";
+
+type MessageContent = ChatMessage extends { content: infer Content }
+  ? Content
+  : unknown;
 
 // Optionally, if not using email/pass login, you can
 // use the Drizzle adapter for Auth.js / NextAuth
@@ -1148,16 +1154,25 @@ export async function getMessageById({ id }: { id: string }) {
 export async function deleteMessagesByChatIdAfterTimestamp({
   chatId,
   timestamp,
+  excludeMessageId,
 }: {
   chatId: string;
   timestamp: Date;
+  excludeMessageId?: string;
 }) {
   if (isTestEnvironment()) {
     const store = getInMemoryStore();
+    const cutoff = timestamp.getTime();
     const messagesToDelete = Array.from(store.messages.values()).filter(
-      (messageRecord) =>
-        messageRecord.chatId === chatId &&
-        new Date(messageRecord.createdAt) >= timestamp
+      (messageRecord) => {
+        const createdAt = new Date(messageRecord.createdAt).getTime();
+
+        return (
+          messageRecord.chatId === chatId &&
+          createdAt >= cutoff &&
+          messageRecord.id !== excludeMessageId
+        );
+      }
     );
 
     for (const messageRecord of messagesToDelete) {
@@ -1170,12 +1185,19 @@ export async function deleteMessagesByChatIdAfterTimestamp({
 
   try {
     const database = getRequiredDatabase();
+    const conditions = [
+      eq(message.chatId, chatId),
+      gte(message.createdAt, timestamp),
+    ];
+
+    if (excludeMessageId) {
+      conditions.push(neq(message.id, excludeMessageId));
+    }
+
     const messagesToDelete = await database
       .select({ id: message.id })
       .from(message)
-      .where(
-        and(eq(message.chatId, chatId), gte(message.createdAt, timestamp))
-      );
+      .where(and(...conditions));
 
     const messageIds = messagesToDelete.map(
       (currentMessage) => currentMessage.id
@@ -1198,6 +1220,67 @@ export async function deleteMessagesByChatIdAfterTimestamp({
     throw new ChatSDKError(
       "bad_request:database",
       "Failed to delete messages by chat id after timestamp"
+    );
+  }
+}
+
+export async function updateMessagePartsById({
+  id,
+  parts,
+  attachments,
+  content,
+}: {
+  id: string;
+  parts: ChatMessage["parts"];
+  attachments: ChatMessage["attachments"];
+  content?: MessageContent;
+}) {
+  const resolvedAttachments = attachments ?? [];
+  const shouldUpdateContent = typeof content !== "undefined";
+
+  if (isTestEnvironment()) {
+    const store = getInMemoryStore();
+    const existingMessage = store.messages.get(id);
+
+    if (!existingMessage) {
+      return;
+    }
+
+    const normalizedContent = shouldUpdateContent
+      ? ((content ?? null) as MessageContent | null)
+      : existingMessage.content;
+
+    const updatedRecord: DBMessage = {
+      ...existingMessage,
+      parts,
+      attachments: resolvedAttachments,
+      ...(shouldUpdateContent ? { content: normalizedContent } : {}),
+    };
+
+    store.messages.set(id, updatedRecord);
+
+    return;
+  }
+
+  try {
+    const database = getRequiredDatabase();
+    const updatePayload: Partial<typeof message.$inferInsert> = {
+      parts,
+      attachments: resolvedAttachments,
+    };
+
+    if (shouldUpdateContent) {
+      Object.assign(updatePayload, { content: content ?? null });
+    }
+
+    await database
+      .update(message)
+      .set(updatePayload)
+      .where(eq(message.id, id));
+  } catch (_error) {
+    throw new ChatSDKError(
+      "bad_request:database",
+      "Failed to update message parts"
     );
   }
 }

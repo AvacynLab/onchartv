@@ -107,8 +107,8 @@ describe("MessageEditor", () => {
       id: baseMessage.id,
       attachments: [],
       parts: [{ type: "text", text: "Edited reasoning prompt" }],
+      content: [{ type: "text", text: "Edited reasoning prompt" }],
     });
-    expect(updateArgs).not.toHaveProperty("content");
     expect(deleteTrailingMessagesMock).toHaveBeenCalledWith({
       id: baseMessage.id,
     });
@@ -249,8 +249,16 @@ describe("MessageEditor", () => {
         },
         { type: "text", text: "Edited attachment prompt" },
       ],
+      content: [
+        {
+          type: "file",
+          url: "https://example.com/image.png",
+          name: "image.png",
+          mediaType: "image/png",
+        },
+        { type: "text", text: "Edited attachment prompt" },
+      ],
     });
-    expect(attachmentUpdateArgs).not.toHaveProperty("content");
     expect(deleteTrailingMessagesMock).toHaveBeenCalledWith({
       id: messageWithAttachment.id,
     });
@@ -349,8 +357,13 @@ describe("MessageEditor", () => {
       id: messageWithInputText.id,
       attachments: [],
       parts: [{ type: "text", text: "Edited green prompt" }],
+      content: [
+        {
+          type: "input_text",
+          input_text: "Edited green prompt",
+        },
+      ],
     });
-    expect(inputTextUpdateArgs).not.toHaveProperty("content");
 
     expect(messages).toEqual([
       {
