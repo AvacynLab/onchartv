@@ -10,15 +10,23 @@ import {
   useState,
 } from "react";
 import { deleteTrailingMessages, updateMessageParts } from "@/app/(chat)/actions";
-import type { ChatMessage } from "@/lib/types";
+import type { Attachment, ChatMessage } from "@/lib/types";
 import { cn, getTextFromMessage } from "@/lib/utils";
 import { isAutomationRuntime } from "./utils/automation";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
 import { toast } from "./toast";
 
+/**
+ * Chat messages flowing through the UI include an `attachments` property at
+ * runtime even though the base `ChatMessage` type does not declare it. Extend
+ * the shape locally so we can preserve uploaded files while resubmitting an
+ * edited prompt.
+ */
+type MessageWithAttachments = ChatMessage & { attachments?: Attachment[] };
+
 export type MessageEditorProps = {
-  message: ChatMessage;
+  message: MessageWithAttachments;
   setMode: Dispatch<SetStateAction<"view" | "edit">>;
   setMessages: UseChatHelpers<ChatMessage>["setMessages"];
   regenerate: UseChatHelpers<ChatMessage>["regenerate"];
@@ -104,9 +112,7 @@ export function MessageEditor({
               });
 
               const updatedParts = rebuildMessageParts(message, trimmedDraft);
-              const updatedAttachments = Array.isArray(message.attachments)
-                ? message.attachments.map((attachment) => ({ ...attachment }))
-                : [];
+              const updatedAttachments = cloneAttachments(message);
               const updatedContent = rebuildLegacyContent(
                 message.content,
                 trimmedDraft
@@ -127,12 +133,13 @@ export function MessageEditor({
                 }
 
                 const existingMessage = messages[index];
-                const updatedMessage: ChatMessage = {
+                const updatedMessage = {
                   ...existingMessage,
                   parts: updatedParts,
-                  attachments: updatedAttachments,
                   content: updatedContent,
-                };
+                } as MessageWithAttachments;
+
+                updatedMessage.attachments = updatedAttachments;
 
                 return [...messages.slice(0, index), updatedMessage];
               });
@@ -181,6 +188,19 @@ export function MessageEditor({
 }
 
 type LegacyContent = ChatMessage["content"];
+
+function cloneAttachments(message: MessageWithAttachments): Attachment[] {
+  if (Array.isArray(message.attachments)) {
+    /**
+     * Perform a shallow copy so mutations do not leak back into the existing
+     * React state. Attachments only contain primitives, therefore a shallow
+     * spread keeps the helper inexpensive while remaining safe.
+     */
+    return message.attachments.map((attachment) => ({ ...attachment }));
+  }
+
+  return [];
+}
 
 function rebuildMessageParts(
   originalMessage: ChatMessage,

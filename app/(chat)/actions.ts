@@ -4,7 +4,7 @@ import { generateText, type UIMessage } from "ai";
 import { cookies } from "next/headers";
 import type { VisibilityType } from "@/components/visibility-selector";
 import { myProvider } from "@/lib/ai/providers";
-import type { ChatMessage } from "@/lib/types";
+import type { Attachment, ChatMessage } from "@/lib/types";
 import {
   deleteMessagesByChatIdAfterTimestamp,
   getMessageById,
@@ -61,7 +61,7 @@ export async function updateMessageParts({
 }: {
   id: string;
   parts: ChatMessage["parts"];
-  attachments: ChatMessage["attachments"];
+  attachments?: Attachment[];
   content?: MessageContent;
 }) {
   await updateMessagePartsById({ id, parts, attachments, content });

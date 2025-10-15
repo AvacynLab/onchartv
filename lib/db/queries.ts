@@ -13,7 +13,7 @@ import {
   gte,
   inArray,
   lt,
-  neq,
+  ne,
   type SQL,
 } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -25,7 +25,7 @@ import { ChatSDKError } from "../errors";
 import { logWarning } from "../logging";
 import type { AppUsage } from "../usage";
 import { generateUUID } from "../utils";
-import type { ChatMessage } from "../types";
+import type { Attachment, ChatMessage } from "../types";
 import {
   type Chat,
   chat,
@@ -1191,7 +1191,7 @@ export async function deleteMessagesByChatIdAfterTimestamp({
     ];
 
     if (excludeMessageId) {
-      conditions.push(neq(message.id, excludeMessageId));
+      conditions.push(ne(message.id, excludeMessageId));
     }
 
     const messagesToDelete = await database
@@ -1232,10 +1232,10 @@ export async function updateMessagePartsById({
 }: {
   id: string;
   parts: ChatMessage["parts"];
-  attachments: ChatMessage["attachments"];
+  attachments?: Attachment[];
   content?: MessageContent;
 }) {
-  const resolvedAttachments = attachments ?? [];
+  const resolvedAttachments = Array.isArray(attachments) ? attachments : [];
   const shouldUpdateContent = typeof content !== "undefined";
 
   if (isTestEnvironment()) {
