@@ -18,12 +18,19 @@ import { Textarea } from "./ui/textarea";
 import { toast } from "./toast";
 
 /**
- * Chat messages flowing through the UI include an `attachments` property at
- * runtime even though the base `ChatMessage` type does not declare it. Extend
- * the shape locally so we can preserve uploaded files while resubmitting an
- * edited prompt.
+ * Preserve compatibility with historical message payloads that surfaced a
+ * `content` field alongside structured `parts`. The base `ChatMessage` type
+ * does not guarantee either legacy content nor attachments, so we extend the
+ * shape locally to guard our updates.
  */
-type MessageWithAttachments = ChatMessage & { attachments?: Attachment[] };
+type LegacyContent = ChatMessage extends { content: infer Content }
+  ? Content
+  : undefined;
+
+type MessageWithAttachments = ChatMessage & {
+  attachments?: Attachment[];
+  content?: LegacyContent;
+};
 
 export type MessageEditorProps = {
   message: MessageWithAttachments;
@@ -133,13 +140,15 @@ export function MessageEditor({
                 }
 
                 const existingMessage = messages[index];
-                const updatedMessage = {
+                const updatedMessage: MessageWithAttachments = {
                   ...existingMessage,
                   parts: updatedParts,
-                  content: updatedContent,
-                } as MessageWithAttachments;
+                  attachments: updatedAttachments,
+                };
 
-                updatedMessage.attachments = updatedAttachments;
+                if (typeof updatedContent !== "undefined") {
+                  updatedMessage.content = updatedContent;
+                }
 
                 return [...messages.slice(0, index), updatedMessage];
               });
@@ -187,8 +196,6 @@ export function MessageEditor({
   );
 }
 
-type LegacyContent = ChatMessage["content"];
-
 function cloneAttachments(message: MessageWithAttachments): Attachment[] {
   if (Array.isArray(message.attachments)) {
     /**
@@ -229,9 +236,13 @@ function rebuildMessageParts(
 }
 
 function rebuildLegacyContent(
-  originalContent: LegacyContent,
+  originalContent: LegacyContent | undefined,
   nextText: string
-): LegacyContent {
+): LegacyContent | undefined {
+  if (typeof originalContent === "undefined") {
+    return undefined;
+  }
+
   if (Array.isArray(originalContent)) {
     let textEntryReplaced = false;
     let inputTextEntryReplaced = false;
