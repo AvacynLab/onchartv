@@ -4,9 +4,11 @@ import { generateText, type UIMessage } from "ai";
 import { cookies } from "next/headers";
 import type { VisibilityType } from "@/components/visibility-selector";
 import { myProvider } from "@/lib/ai/providers";
+import type { Attachment, ChatMessage } from "@/lib/types";
 import {
   deleteMessagesByChatIdAfterTimestamp,
   getMessageById,
+  updateMessagePartsById,
   updateChatVisiblityById,
 } from "@/lib/db/queries";
 
@@ -36,10 +38,27 @@ export async function generateTitleFromUserMessage({
 export async function deleteTrailingMessages({ id }: { id: string }) {
   const [message] = await getMessageById({ id });
 
+  if (!message) {
+    return;
+  }
+
   await deleteMessagesByChatIdAfterTimestamp({
     chatId: message.chatId,
     timestamp: message.createdAt,
+    excludeMessageId: message.id,
   });
+}
+
+export async function updateMessageParts({
+  id,
+  parts,
+  attachments,
+}: {
+  id: string;
+  parts: ChatMessage["parts"];
+  attachments?: Attachment[];
+}) {
+  await updateMessagePartsById({ id, parts, attachments });
 }
 
 export async function updateChatVisibility({

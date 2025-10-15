@@ -9,15 +9,20 @@ import {
   useRef,
   useState,
 } from "react";
-import { deleteTrailingMessages } from "@/app/(chat)/actions";
-import type { ChatMessage } from "@/lib/types";
+import { deleteTrailingMessages, updateMessageParts } from "@/app/(chat)/actions";
+import type { Attachment, ChatMessage } from "@/lib/types";
 import { cn, getTextFromMessage } from "@/lib/utils";
+import { isAutomationRuntime } from "./utils/automation";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
 import { toast } from "./toast";
 
+type MessageWithAttachments = ChatMessage & {
+  attachments?: Attachment[];
+};
+
 export type MessageEditorProps = {
-  message: ChatMessage;
+  message: MessageWithAttachments;
   setMode: Dispatch<SetStateAction<"view" | "edit">>;
   setMessages: UseChatHelpers<ChatMessage>["setMessages"];
   regenerate: UseChatHelpers<ChatMessage>["regenerate"];
@@ -79,10 +84,12 @@ export function MessageEditor({
           data-testid="message-editor-send-button"
           disabled={isSubmitting}
           onClick={async () => {
+            const trimmedDraft = draftContent.trim();
+
             // Guard against accidental submissions when the user clears the
             // textarea entirely while editing. Sending an empty prompt would
             // lead to confusing assistant responses.
-            if (!draftContent.trim()) {
+            if (trimmedDraft.length === 0) {
               toast({
                 type: "error",
                 description: "Please enter a message before resubmitting.",
@@ -90,6 +97,7 @@ export function MessageEditor({
               return;
             }
 
+            emitPlaywrightSignal("submit");
             setIsSubmitting(true);
             let switchedToViewMode = false;
             let regenerationPromise: Promise<unknown> | undefined;
@@ -99,19 +107,29 @@ export function MessageEditor({
                 id: message.id,
               });
 
+              const updatedParts = rebuildMessageParts(message, trimmedDraft);
+              const updatedAttachments = cloneAttachments(message);
+              await updateMessageParts({
+                id: message.id,
+                parts: updatedParts,
+                attachments: updatedAttachments,
+              });
+
               setMessages((messages) => {
-                const index = messages.findIndex((m) => m.id === message.id);
+                const index = messages.findIndex((current) => current.id === message.id);
 
-                if (index !== -1) {
-                  const updatedMessage: ChatMessage = {
-                    ...message,
-                    parts: [{ type: "text", text: draftContent }],
-                  };
-
-                  return [...messages.slice(0, index), updatedMessage];
+                if (index === -1) {
+                  return messages;
                 }
 
-                return messages;
+                const existingMessage = messages[index];
+                const updatedMessage: MessageWithAttachments = {
+                  ...existingMessage,
+                  parts: updatedParts,
+                  attachments: updatedAttachments,
+                };
+
+                return [...messages.slice(0, index), updatedMessage];
               });
 
               /**
@@ -122,13 +140,16 @@ export function MessageEditor({
                * the network roundtrip, matching the behaviour Playwright
                * expects during the edit flow.
                */
-              regenerationPromise = regenerate();
+              regenerationPromise = regenerate({ messageId: message.id });
+
+              emitPlaywrightSignal("sent");
 
               setMode("view");
               switchedToViewMode = true;
 
               await regenerationPromise;
             } catch (error) {
+              emitPlaywrightSignal("error");
               console.error("Failed to resubmit edited message", error);
 
               toast({
@@ -152,4 +173,70 @@ export function MessageEditor({
       </div>
     </div>
   );
+}
+
+function cloneAttachments(message: MessageWithAttachments): Attachment[] {
+  if (Array.isArray(message.attachments)) {
+    /**
+     * Perform a shallow copy so mutations do not leak back into the existing
+     * React state. Attachments only contain primitives, therefore a shallow
+     * spread keeps the helper inexpensive while remaining safe.
+     */
+    return message.attachments.map((attachment) => ({ ...attachment }));
+  }
+
+  return [];
+}
+
+function rebuildMessageParts(
+  originalMessage: ChatMessage,
+  nextText: string
+): ChatMessage["parts"] {
+  const existingParts = Array.isArray(originalMessage.parts)
+    ? originalMessage.parts
+    : [];
+
+  let textFragmentReplaced = false;
+
+  const updatedParts = existingParts.map((part) => {
+    if (part?.type === "text" && !textFragmentReplaced) {
+      textFragmentReplaced = true;
+      return { ...part, text: nextText };
+    }
+
+    return part;
+  });
+
+  if (!textFragmentReplaced) {
+    updatedParts.push({ type: "text", text: nextText });
+  }
+
+  return updatedParts;
+}
+
+function emitPlaywrightSignal(phase: "submit" | "sent" | "error") {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const globalWindow = window as Window & {
+    __PLAYWRIGHT_CHAT_SIGNALS__?: Array<{ phase: string; timestamp: number }>;
+  };
+
+  if (!Array.isArray(globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__)) {
+    globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__ = [];
+  }
+
+  globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__!.push({
+    phase,
+    timestamp: performance.now(),
+  });
+
+  if (!isAutomationRuntime()) {
+    const maxSignals = 5;
+    const buffer = globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__!;
+    if (buffer.length > maxSignals) {
+      buffer.splice(0, buffer.length - maxSignals);
+    }
+  }
 }

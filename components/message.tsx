@@ -181,8 +181,8 @@ const PurePreviewMessage = ({
                         key={message.id}
                         message={message}
                         regenerate={regenerate}
-                        setMessages={setMessages}
                         setMode={setMode}
+                        setMessages={setMessages}
                       />
                     </div>
                   </div>

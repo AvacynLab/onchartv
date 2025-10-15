@@ -13,7 +13,7 @@ import { type RegisterActionState, register } from "../actions";
  * Extend the grace window so slower Playwright runners can observe the success
  * toast before the redirect unmounts the registration shell.
  */
-const TOAST_GRACE_PERIOD_MS = 2000;
+const TOAST_GRACE_PERIOD_MS = 4000;
 
 export default function Page() {
   const router = useRouter();

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
   type APIRequestContext,
@@ -422,7 +423,14 @@ export async function createAuthenticatedContext({
 }
 
 export function generateRandomTestUser() {
-  const email = `test-${getUnixTime(new Date())}@playwright.com`;
+  /**
+   * Combine a timestamp and UUID to avoid cross-test collisions when multiple
+   * suites provision users within the same second. Playwright previously reused
+   * the second-based slug which caused the registration toast assertion to
+   * flake as the backend rejected duplicate emails.
+   */
+  const timestamp = getUnixTime(new Date());
+  const email = `test-${timestamp}-${randomUUID()}@playwright.com`;
   const password = generateId();
 
   return {
