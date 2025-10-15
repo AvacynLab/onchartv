@@ -147,27 +147,40 @@ export function Chat({
   /**
    * En environnement de test ou lorsque le hook n'est pas initialisé, l'accès
    * aux paramètres peut échouer. Nous défendons donc l'accès au paramètre de
-   * requête.
+   * requête et ne conservons qu'une valeur non vide une fois normalisée.
    */
-  const query =
-    typeof searchParams?.get === "function" ? searchParams.get("query") : null;
+  const initialQuery = useMemo(() => {
+    if (typeof searchParams?.get !== "function") {
+      return null;
+    }
+
+    const rawValue = searchParams.get("query");
+    if (typeof rawValue !== "string") {
+      return null;
+    }
+
+    const trimmed = rawValue.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }, [searchParams]);
 
   const [hasAppendedQuery, setHasAppendedQuery] = useState(false);
 
   useEffect(() => {
-    if (query && !hasAppendedQuery) {
-      sendMessage({
-        role: "user" as const,
-        parts: [{ type: "text", text: query }],
-      });
-
-      setHasAppendedQuery(true);
-
-      if (typeof window !== "undefined") {
-        window.history.replaceState({}, "", `/chat/${id}`);
-      }
+    if (!initialQuery || hasAppendedQuery) {
+      return;
     }
-  }, [query, sendMessage, hasAppendedQuery, id]);
+
+    sendMessage({
+      role: "user" as const,
+      parts: [{ type: "text", text: initialQuery }],
+    });
+
+    setHasAppendedQuery(true);
+
+    if (typeof window !== "undefined") {
+      window.history.replaceState({}, "", `/chat/${id}`);
+    }
+  }, [initialQuery, sendMessage, hasAppendedQuery, id]);
 
   /**
    * Les flux de messages peuvent être transitoirement `undefined` pendant le

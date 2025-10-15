@@ -13,8 +13,6 @@ import {
 import type { ModelCatalog } from "tokenlens/core";
 import { fetchModels } from "tokenlens/fetch";
 import { getUsage } from "tokenlens/helpers";
-import type { Session } from "next-auth";
-
 import { auth, type UserType } from "@/app/(auth)/auth";
 import type { VisibilityType } from "@/components/visibility-selector";
 import { entitlementsByUserType } from "@/lib/ai/entitlements";
@@ -106,38 +104,22 @@ const resolveGlobalStreamContext = () => {
 
 const textDecoder = new TextDecoder();
 
-type RegularSessionValidationResult =
-  | {
-      ok: true;
-      session: Session;
-      user: Session["user"] & { type: "regular"; id: string };
-    }
-  | { ok: false; response: Response };
-
 /**
- * Validate the resolved session against the regular-user contract expected by
- * the chat API. Returning a discriminated union keeps the call sites concise
- * while still enforcing the explicit `session.user.type !== "regular"` guard
- * mandated by the brief. The helper deliberately avoids throwing so callers
- * can surface formatted JSON errors without depending on exception handling.
+ * Shared helper returning the canonical forbidden payload mandated by the
+ * regular-only chat mode. Keeping the Response factory centralised ensures the
+ * POST and DELETE handlers stay in sync with the contract asserted by the
+ * Playwright storage-state initialiser.
  */
-function validateRegularSession(
-  session: Session | null | undefined
-): RegularSessionValidationResult {
-  if (!session?.user) {
-    return { ok: false, response: new ChatSDKError("unauthorized:chat").toResponse() };
-  }
-
-  if (session.user.type !== "regular") {
-    return { ok: false, response: new ChatSDKError("forbidden:auth").toResponse() };
-  }
-
-  return {
-    ok: true,
-    session: session as Session,
-    user: session.user as Session["user"] & { type: "regular"; id: string },
-  };
-}
+const regularSessionRequiredResponse = () =>
+  Response.json(
+    {
+      error: {
+        code: "forbidden:chat",
+        message: "Regular session required",
+      },
+    },
+    { status: 403 }
+  );
 
 class InMemoryResumableStream {
   private readonly reader: ReadableStreamDefaultReader<unknown>;
@@ -400,7 +382,7 @@ const getTokenlensCatalog = tokenlensFetchEnabled
       async (): Promise<ModelCatalog | undefined> => {
         try {
           return await fetchModels();
-        } catch (err) {
+        } catch (err: unknown) {
           logWarning(
             "tokenlens.catalog",
             "Catalog fetch failed; using bundled fallback",
@@ -470,10 +452,13 @@ export function getStreamContext() {
     resolvedContext = createResumableStreamContext({
       waitUntil: after,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (
-      typeof error?.message === "string" &&
-      error.message.includes("REDIS_URL")
+      typeof error === "object" &&
+      error !== null &&
+      "message" in error &&
+      typeof (error as { message?: unknown }).message === "string" &&
+      (error as { message: string }).message.includes("REDIS_URL")
     ) {
       logWarning(
         "chat.streams",
@@ -521,18 +506,23 @@ export async function POST(request: Request) {
     const session = await auth();
 
     /**
-     * Validate the session upfront so downstream persistence only executes for
-     * fully authorised users. This keeps the API responses deterministic and
-     * avoids leaking whether a chat exists to guests while still honouring the
-     * mandated regular-user gate.
+     * Enforce the regular-session gate mandated by the product brief. Returning
+     * a deterministic JSON payload keeps the API aligned with the E2E storage
+     * state initialiser which now provisions a fully registered account.
      */
-    const sessionValidation = validateRegularSession(session);
-
-    if (!sessionValidation.ok) {
-      return sessionValidation.response;
+    if (!session || session.user?.type !== "regular") {
+      return regularSessionRequiredResponse();
     }
 
-    const { user: sessionUser, session: ensuredSession } = sessionValidation;
+    const sessionUser = session.user as typeof session.user & {
+      id: string | undefined;
+      type: "regular";
+    };
+
+    if (typeof sessionUser.id !== "string" || sessionUser.id.length === 0) {
+      return regularSessionRequiredResponse();
+    }
+    const ensuredSession = session;
 
     const userType: UserType = sessionUser.type;
 
@@ -752,7 +742,7 @@ export async function POST(request: Request) {
               const summary = getUsage({ modelId, usage, providers });
               finalMergedUsage = { ...usage, ...summary, modelId } as AppUsage;
               dataStream.write({ type: "data-usage", data: finalMergedUsage });
-            } catch (err) {
+            } catch (err: unknown) {
               logWarning(
                 "tokenlens.enrichment",
                 "TokenLens enrichment failed",
@@ -819,7 +809,7 @@ export async function POST(request: Request) {
               chatId: id,
               context: finalMergedUsage,
             });
-          } catch (err) {
+          } catch (err: unknown) {
             logWarning(
               "chat.persistence",
               "Unable to persist last usage for chat",
@@ -851,7 +841,7 @@ export async function POST(request: Request) {
     }
 
     return new Response(stream.pipeThrough(new JsonToSseTransformStream()));
-  } catch (error) {
+  } catch (error: unknown) {
     const vercelId = request.headers.get("x-vercel-id");
 
     if (error instanceof ChatSDKError) {
@@ -877,13 +867,19 @@ export async function DELETE(request: Request) {
   }
 
   const session = await auth();
-  const sessionValidation = validateRegularSession(session);
 
-  if (!sessionValidation.ok) {
-    return sessionValidation.response;
+  if (!session || session.user?.type !== "regular") {
+    return regularSessionRequiredResponse();
   }
 
-  const { user: sessionUser } = sessionValidation;
+  const sessionUser = session.user as typeof session.user & {
+    id: string | undefined;
+    type: "regular";
+  };
+
+  if (typeof sessionUser.id !== "string" || sessionUser.id.length === 0) {
+    return regularSessionRequiredResponse();
+  }
 
   const chat = await getChatById({ id });
 

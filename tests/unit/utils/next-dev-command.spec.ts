@@ -19,9 +19,9 @@ describe("resolveNextDevCommand", () => {
 
     expect(result).toEqual({
       command: "pnpm",
-      args: ["exec", "next", "dev"],
+      args: ["exec", "next", "dev", "--no-turbo"],
       rationale:
-        "Playwright hermetic flags detected; launching Next.js with the classic webpack dev server to avoid Turbopack cold-start delays.",
+        "Playwright hermetic flags detected; launching Next.js with the classic webpack dev server via --no-turbo to avoid Turbopack cold-start delays and ESM resolution issues.",
     });
   });
 
@@ -30,9 +30,9 @@ describe("resolveNextDevCommand", () => {
 
     expect(result).toEqual({
       command: "pnpm",
-      args: ["exec", "next", "dev"],
+      args: ["exec", "next", "dev", "--no-turbo"],
       rationale:
-        "Playwright hermetic flags detected; launching Next.js with the classic webpack dev server to avoid Turbopack cold-start delays.",
+        "Playwright hermetic flags detected; launching Next.js with the classic webpack dev server via --no-turbo to avoid Turbopack cold-start delays and ESM resolution issues.",
     });
   });
 

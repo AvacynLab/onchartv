@@ -245,9 +245,11 @@ function loadPersistedUsers(store: InMemoryStore) {
       store.userPlaintextByEmail.set(normalisedEmail, plaintext);
     }
   } catch (error) {
-    console.warn(
+    // Surface the failure without leaking raw stack traces or secrets to shared logs.
+    logWarning(
+      "db:queries",
       "Failed to hydrate Playwright users from persisted store",
-      error
+      { error }
     );
   }
 }
@@ -280,7 +282,8 @@ function persistUsers(store: InMemoryStore) {
       "utf-8"
     );
   } catch (error) {
-    console.warn("Failed to persist Playwright users", error);
+    // Persisting the hermetic credentials is best-effort; warn while redacting sensitive payloads.
+    logWarning("db:queries", "Failed to persist Playwright users", { error });
   }
 }
 
@@ -348,7 +351,8 @@ export function __resetInMemoryDbForTests(): void {
       fs.rmSync(PLAYWRIGHT_USERS_PATH);
     }
   } catch (error) {
-    console.warn("Failed to reset persisted Playwright users", error);
+    // Cleaning up the cached credentials is non-fatal; log the sanitised failure for debugging.
+    logWarning("db:queries", "Failed to reset persisted Playwright users", { error });
   }
 }
 

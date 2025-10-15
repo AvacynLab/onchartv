@@ -7,10 +7,100 @@ import type {
 import { type ClassValue, clsx } from 'clsx';
 import { formatISO } from 'date-fns';
 import { twMerge } from 'tailwind-merge';
+import { z } from 'zod';
 import type { DBMessage, Document, MessageArtifact } from '@/lib/db/schema';
-import { financeArtifactSchema, type FinanceArtifact } from '@/lib/finance/types';
+import {
+  financeArtifactSchema,
+  type FinanceArtifact,
+} from '@/lib/finance/types';
+import { logError, logWarning } from './logging';
 import { ChatSDKError, type ErrorCode } from './errors';
 import type { ChatMessage, ChatTools, CustomUIDataTypes } from './types';
+
+/**
+ * Zod schema describing the standardised API error envelope returned by server
+ * routes. Client helpers reuse the schema to avoid unchecked `{ any }` casts
+ * and to surface useful diagnostics when responses are malformed.
+ */
+const apiErrorEnvelopeSchema = z.object({
+  error: z.object({
+    code: z
+      .string({ required_error: "error.code is required" })
+      .refine((value) => value.includes(':'), {
+        message:
+          "error.code must follow the `<type>:<surface>` convention used by ChatSDKError.",
+      }),
+    message: z.string().optional(),
+    cause: z.unknown().optional(),
+  }),
+});
+
+type ApiErrorEnvelope = z.infer<typeof apiErrorEnvelopeSchema>;
+
+const FALLBACK_PARSE_ERROR_MESSAGE =
+  'Unexpected error response received from the server. Please retry later.';
+const FALLBACK_READ_ERROR_MESSAGE =
+  'Unable to read the error response returned by the server.';
+
+function toChatSdkErrorFromEnvelope(
+  envelope: ApiErrorEnvelope['error']
+): ChatSDKError {
+  const error = new ChatSDKError(envelope.code as ErrorCode);
+
+  if (typeof envelope.message === 'string' && envelope.message.trim().length > 0) {
+    error.message = envelope.message;
+  }
+
+  if (typeof envelope.cause !== 'undefined') {
+    (error as Error & { cause?: unknown }).cause = envelope.cause;
+  }
+
+  return error;
+}
+
+async function readErrorResponse(response: Response): Promise<ApiErrorEnvelope> {
+  try {
+    const payload = await response.json();
+    const parsed = apiErrorEnvelopeSchema.safeParse(payload);
+
+    if (parsed.success) {
+      return parsed.data;
+    }
+
+    logError('fetcher', 'Failed to parse API error envelope', {
+      issues: parsed.error.issues.map((issue) => issue.message),
+      status: response.status,
+    });
+
+    const parseError = new ChatSDKError(
+      'bad_request:api',
+      FALLBACK_PARSE_ERROR_MESSAGE,
+    );
+    parseError.message = FALLBACK_PARSE_ERROR_MESSAGE;
+    throw parseError;
+  } catch (error) {
+    if (error instanceof ChatSDKError) {
+      throw error;
+    }
+
+    logError('fetcher', 'Failed to read API error response', {
+      status: response.status,
+      cause: error,
+    });
+
+    const readError = new ChatSDKError(
+      'bad_request:api',
+      FALLBACK_READ_ERROR_MESSAGE,
+    );
+    readError.message = FALLBACK_READ_ERROR_MESSAGE;
+    throw readError;
+  }
+}
+
+async function throwForErrorResponse(response: Response): Promise<never> {
+  const envelope = await readErrorResponse(response);
+  throw toChatSdkErrorFromEnvelope(envelope.error);
+}
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -20,8 +110,7 @@ export const fetcher = async (url: string) => {
   const response = await fetch(url);
 
   if (!response.ok) {
-    const { code, cause } = await response.json();
-    throw new ChatSDKError(code as ErrorCode, cause);
+    await throwForErrorResponse(response);
   }
 
   return response.json();
@@ -35,8 +124,7 @@ export async function fetchWithErrorHandlers(
     const response = await fetch(input, init);
 
     if (!response.ok) {
-      const { code, cause } = await response.json();
-      throw new ChatSDKError(code as ErrorCode, cause);
+      await throwForErrorResponse(response);
     }
 
     return response;
@@ -110,20 +198,28 @@ const artifactToDataPart = (
   const parsed = financeArtifactSchema.safeParse(artifact.payload);
 
   if (!parsed.success) {
-    console.warn('[convertToUIMessages] skipped malformed finance artifact', {
-      artifactType: artifact.type,
-      issues: parsed.error.issues.map((issue) => issue.message),
-    });
+    logWarning(
+      'chat:convertToUIMessages',
+      '[convertToUIMessages] skipped malformed finance artifact',
+      {
+        artifactType: artifact.type,
+        issues: parsed.error.issues.map((issue) => issue.message),
+      },
+    );
     return null;
   }
 
   const payload = parsed.data;
 
   if (payload.type !== artifact.type) {
-    console.warn('[convertToUIMessages] artifact type mismatch', {
-      expected: artifact.type,
-      actual: payload.type,
-    });
+    logWarning(
+      'chat:convertToUIMessages',
+      '[convertToUIMessages] artifact type mismatch',
+      {
+        expected: artifact.type,
+        actual: payload.type,
+      },
+    );
     return null;
   }
 

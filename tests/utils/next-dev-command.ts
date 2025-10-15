@@ -37,8 +37,10 @@ export type NextDevEnvironment =
 /**
  * Determine which command the Playwright helper should use to start the Next.js
  * development server. Hermetic test environments (Playwright/Vitest) struggle
- * with Turbopack's cold-start latency which previously caused `/chat` requests
- * to time out. Falling back to the classic webpack dev server when the
+ * with Turbopack's cold-start latency and module resolution quirks (e.g.
+ * `@tanstack/react-query` being hidden behind pnpm's symlinks) which
+ * previously caused `/chat` requests to time out or crash during warmup.
+ * Falling back to the classic webpack dev server via `--no-turbo` when the
  * Playwright flags are present keeps the suite reliable while leaving the
  * default `pnpm dev --turbo` experience untouched for local developers.
  */
@@ -62,9 +64,9 @@ export function resolveNextDevCommand(env: NextDevEnvironment): NextDevCommand {
   if (isPlaywrightEnabled) {
     return {
       command: "pnpm",
-      args: ["exec", "next", "dev"],
+      args: ["exec", "next", "dev", "--no-turbo"],
       rationale:
-        "Playwright hermetic flags detected; launching Next.js with the classic webpack dev server to avoid Turbopack cold-start delays.",
+        "Playwright hermetic flags detected; launching Next.js with the classic webpack dev server via --no-turbo to avoid Turbopack cold-start delays and ESM resolution issues.",
     };
   }
 

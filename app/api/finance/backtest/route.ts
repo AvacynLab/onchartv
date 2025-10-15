@@ -93,6 +93,13 @@ export async function POST(request: Request): Promise<Response> {
       windowMs: 60_000,
     });
 
+    if (!rateLimit.allowed) {
+      throw new ChatSDKError(
+        "rate_limit:api",
+        "Finance backtest quota exceeded for this client."
+      );
+    }
+
     let json: unknown;
 
     try {

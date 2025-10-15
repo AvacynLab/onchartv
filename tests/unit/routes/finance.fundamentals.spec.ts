@@ -54,8 +54,10 @@ describe("/api/finance/fundamentals", () => {
     );
     expect(payload.rateLimit).toEqual(
       expect.objectContaining({
+        allowed: true,
         remaining: expect.any(Number),
         reset: expect.any(Number),
+        resetInMs: expect.any(Number),
       })
     );
   });

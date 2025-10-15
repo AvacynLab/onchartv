@@ -78,6 +78,13 @@ export async function POST(request: Request): Promise<Response> {
       windowMs: 60_000,
     });
 
+    if (!rateLimit.allowed) {
+      throw new ChatSDKError(
+        "rate_limit:api",
+        "Finance screener quota exceeded for this client."
+      );
+    }
+
     const raw = await request.text();
     let json: unknown = {};
 

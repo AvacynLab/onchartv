@@ -105,7 +105,7 @@ describe("DELETE /api/chat", () => {
     await expect(response.json()).resolves.toEqual({ id: "chat-123" });
   });
 
-  it("returns an unauthorized error when the session is missing", async () => {
+  it("returns a forbidden error when the session is missing", async () => {
     authMock.mockResolvedValue(null);
 
     const { DELETE } = await import("@/app/(chat)/api/chat/route");
@@ -114,9 +114,12 @@ describe("DELETE /api/chat", () => {
       new Request("https://example.com/api/chat?id=chat-999")
     );
 
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(403);
     await expect(response.json()).resolves.toMatchObject({
-      error: { code: "unauthorized:chat" },
+      error: {
+        code: "forbidden:chat",
+        message: "Regular session required",
+      },
     });
     expect(deleteChatByIdMock).not.toHaveBeenCalled();
     expect(getChatByIdMock).not.toHaveBeenCalled();
@@ -133,7 +136,10 @@ describe("DELETE /api/chat", () => {
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toMatchObject({
-      error: { code: "forbidden:auth" },
+      error: {
+        code: "forbidden:chat",
+        message: "Regular session required",
+      },
     });
     expect(deleteChatByIdMock).not.toHaveBeenCalled();
     expect(getChatByIdMock).not.toHaveBeenCalled();

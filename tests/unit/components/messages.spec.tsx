@@ -2,10 +2,21 @@ import React from "react";
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { SWRConfig } from "swr";
-import { describe, expect, it, beforeAll, afterAll, beforeEach, vi } from "vitest";
+import {
+  describe,
+  expect,
+  it,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  vi,
+} from "vitest";
+import * as logging from "@/lib/logging";
+import type { StructuredLogEntry } from "@/lib/logging";
 
 import { DataStreamProvider } from "@/components/data-stream-provider";
 import type { ChatMessage } from "@/lib/types";
+import type { FinanceChartArtifact } from "@/lib/finance/types";
 
 const noop = () => {};
 
@@ -140,7 +151,15 @@ describe("Messages", () => {
   });
 
   it("rend un fallback lorsque le message est malformé", () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(noop);
+    const warnSpy = vi
+      .spyOn(logging, "logWarning")
+      .mockImplementation((context, message, extra) => ({
+        context,
+        level: "warn",
+        message: typeof message === "string" ? message : undefined,
+        timestamp: new Date().toISOString(),
+        extra,
+      }) satisfies StructuredLogEntry);
 
     render(
       <Messages
@@ -225,6 +244,119 @@ describe("Messages", () => {
     expect(previewMessageSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         message: expect.objectContaining({ artifacts: [] }),
+      })
+    );
+  });
+
+  it("affiche un fallback lorsque des artefacts sont malformés", () => {
+    const warnSpy = vi
+      .spyOn(logging, "logWarning")
+      .mockImplementation((context, message, extra) => ({
+        context,
+        level: "warn",
+        message: typeof message === "string" ? message : undefined,
+        timestamp: new Date().toISOString(),
+        extra,
+      }) satisfies StructuredLogEntry);
+
+    const assistantMessage = {
+      id: "msg-3",
+      role: "assistant",
+      parts: [{ type: "text", text: "Artefacts multiples" }],
+      metadata: { createdAt: new Date().toISOString() },
+      artifacts: [null, { type: "finance.chart", payload: { foo: "bar" } }, 42],
+    } as unknown as ChatMessage;
+
+    render(
+      <Messages
+        chatId="chat-1"
+        isArtifactVisible={false}
+        isReadonly={false}
+        messages={[assistantMessage]}
+        regenerate={noop as any}
+        selectedModelId="model"
+        setMessages={noop as any}
+        status="idle"
+        votes={[]}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    expect(previewMessageSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.objectContaining({ artifacts: [] }),
+      })
+    );
+
+    const fallback = screen.getByTestId("chat-artifact-fallback");
+    expect(fallback).toHaveTextContent(/Impossible d’afficher/);
+
+    expect(warnSpy).toHaveBeenCalled();
+
+    const payloads = warnSpy.mock.calls.map(([, , details]) => details);
+    expect(payloads).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          issues: expect.arrayContaining([expect.any(String)]),
+        }),
+      ])
+    );
+
+    warnSpy.mockRestore();
+  });
+
+  it("propage les artefacts finance valides aux enfants", () => {
+    const chartArtifact: FinanceChartArtifact = {
+      type: "finance.chart",
+      symbol: "AAPL",
+      timeframe: "1D",
+      range: { from: "2024-01-01", to: "2024-01-31" },
+      ohlcv: [
+        {
+          t: 1_704_065_600,
+          o: 150,
+          h: 155,
+          l: 148,
+          c: 154,
+          v: 1_200_000,
+        },
+      ],
+      overlays: [],
+    };
+
+    const assistantMessage = {
+      id: "msg-4",
+      role: "assistant",
+      parts: [{ type: "text", text: "Artefact valide" }],
+      metadata: { createdAt: new Date().toISOString() },
+      artifacts: [chartArtifact],
+    } as unknown as ChatMessage;
+
+    render(
+      <Messages
+        chatId="chat-2"
+        isArtifactVisible={false}
+        isReadonly={false}
+        messages={[assistantMessage]}
+        regenerate={noop as any}
+        selectedModelId="model"
+        setMessages={noop as any}
+        status="idle"
+        votes={[]}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    expect(previewMessageSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          artifacts: [
+            expect.objectContaining({
+              type: "finance.chart",
+              symbol: "AAPL",
+            }),
+          ],
+        }),
       })
     );
   });

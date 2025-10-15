@@ -1,4 +1,5 @@
 import { expect, test } from "../fixtures";
+import { setupFinanceApiMocks } from "../helpers/finance-mocks";
 import { ChatPage } from "../pages/chat";
 
 /**
@@ -12,6 +13,7 @@ test.describe("Finance artefacts accessibility", () => {
 
   test.beforeEach(async ({ page }) => {
     chatPage = new ChatPage(page);
+    await setupFinanceApiMocks(page);
     await chatPage.createNewChat();
   });
 

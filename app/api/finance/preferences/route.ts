@@ -70,6 +70,13 @@ export async function GET(request: Request): Promise<Response> {
       windowMs: 60_000,
     });
 
+    if (!rateLimit.allowed) {
+      throw new ChatSDKError(
+        "rate_limit:api",
+        "Finance preferences read quota exceeded for this client."
+      );
+    }
+
     const session = await auth();
 
     if (!session?.user) {
@@ -127,6 +134,13 @@ export async function PATCH(request: Request): Promise<Response> {
       limit: 30,
       windowMs: 60_000,
     });
+
+    if (!rateLimit.allowed) {
+      throw new ChatSDKError(
+        "rate_limit:api",
+        "Finance preferences write quota exceeded for this client."
+      );
+    }
 
     const session = await auth();
 

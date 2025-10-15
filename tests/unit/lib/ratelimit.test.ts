@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { ChatSDKError } from "@/lib/errors";
 import {
   __resetRateLimitStateForTests,
   enforceRateLimit,
@@ -25,13 +24,22 @@ describe("enforceRateLimit", () => {
     process.env.PLAYWRIGHT = originalPlaywrightFlag;
   });
 
-  it("throws once the configured quota is exceeded in normal environments", () => {
+  it("returns a denial once the configured quota is exceeded in normal environments", () => {
     const options = { key: "user-1", limit: 2, windowMs: 1_000 } as const;
 
-    enforceRateLimit(options);
-    enforceRateLimit(options);
+    const first = enforceRateLimit(options);
+    const second = enforceRateLimit(options);
+    const third = enforceRateLimit(options);
 
-    expect(() => enforceRateLimit(options)).toThrow(ChatSDKError);
+    expect(first).toEqual(
+      expect.objectContaining({ allowed: true, remaining: 1 })
+    );
+    expect(second).toEqual(
+      expect.objectContaining({ allowed: true, remaining: 0 })
+    );
+    expect(third).toEqual(
+      expect.objectContaining({ allowed: false, remaining: 0 })
+    );
   });
 
   it("relaxes the limiter when PLAYWRIGHT mode is active", () => {
@@ -39,12 +47,14 @@ describe("enforceRateLimit", () => {
 
     const options = { key: "user-2", limit: 2, windowMs: 1_000 } as const;
 
-    // The third request would normally fail but the bypass keeps tests flowing.
-    expect(() => {
-      enforceRateLimit(options);
-      enforceRateLimit(options);
-      enforceRateLimit(options);
-    }).not.toThrow();
+    const first = enforceRateLimit(options);
+    const second = enforceRateLimit(options);
+    const third = enforceRateLimit(options);
+
+    expect(first.allowed).toBe(true);
+    expect(second.allowed).toBe(true);
+    expect(third.allowed).toBe(true);
+    expect(first.resetInMs).toBe(0);
   });
 
   it("still tracks remaining quota for callers", () => {
@@ -53,7 +63,11 @@ describe("enforceRateLimit", () => {
     const first = enforceRateLimit(options);
     const second = enforceRateLimit(options);
 
-    expect(first.remaining).toBe(4);
-    expect(second.remaining).toBe(3);
+    expect(first).toEqual(
+      expect.objectContaining({ allowed: true, remaining: 4 })
+    );
+    expect(second).toEqual(
+      expect.objectContaining({ allowed: true, remaining: 3 })
+    );
   });
 });

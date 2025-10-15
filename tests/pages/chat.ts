@@ -4,8 +4,11 @@ import {
   expect,
   type Page,
   type Locator,
+  type Response as PlaywrightResponse,
+  type Request as PlaywrightRequest,
   errors as playwrightErrors,
 } from "@playwright/test";
+import { z } from "zod";
 import { chatModels, type ChatModel } from "@/lib/ai/models";
 import { DEFAULT_ONBOARDING_SUGGESTION } from "@/lib/constants";
 
@@ -34,6 +37,19 @@ const CHAT_STREAM_PATH_REGEX = /^\/api\/chat\/[\w-]+\/stream$/;
 const TOAST_LOCATOR = '[data-testid="toast"], #automation-toast-bridge';
 
 /**
+ * Hostnames that are considered internal to the application when Playwright is
+ * driving the Next.js dev server. Restricting network assertions to this
+ * safelist guarantees that helpers never wait on third-party requests (for
+ * example calls to OpenAI) during hermetic test runs.
+ */
+const INTERNAL_HOSTNAME_WHITELIST = new Set([
+  "localhost",
+  "127.0.0.1",
+  "0.0.0.0",
+  "::1",
+]);
+
+/**
  * Snapshot of the assistant timeline captured right before triggering a new
  * generation. Defining the shape up front allows helper methods to reference
  * the type without relying on the `this` context — a pattern that keeps the
@@ -45,6 +61,24 @@ type AssistantSnapshot = {
   latestMessageText: string;
   latestArtifactCount: number;
 };
+
+/**
+ * Zod schema capturing the standard API error envelope returned by the chat
+ * routes. Parsing the body through this schema keeps the toast assertions type
+ * safe without sprinkling manual `any` casts across the helper.
+ */
+const chatErrorEnvelopeSchema = z
+  .object({
+    error: z
+      .object({
+        code: z.string().optional(),
+        message: z.string().optional(),
+      })
+      .optional(),
+  })
+  .passthrough();
+
+type ChatErrorEnvelope = z.infer<typeof chatErrorEnvelopeSchema>;
 
 export class ChatPage {
   /**
@@ -1106,28 +1140,36 @@ export class ChatPage {
    * by the `requestfailed` event) and `Response.request()` handles so the
    * matching logic stays centralised and less error-prone.
    */
-  private matchesChatApiRequest(
-    candidate:
-      | { url: () => string; method: () => string }
-      | undefined
-      | null
-  ): candidate is { url: () => string; method: () => string } {
-    if (!candidate) {
+  private matchesChatApiRequest(candidate: unknown): boolean {
+    if (!candidate || typeof candidate !== "object") {
       return false;
     }
 
-    if (typeof candidate.url !== "function") {
+    const maybeRequest = candidate as {
+      url?: unknown;
+      method?: unknown;
+    };
+
+    if (typeof maybeRequest.url !== "function") {
       return false;
     }
 
     const method =
-      typeof candidate.method === "function" ? candidate.method() : null;
+      typeof maybeRequest.method === "function"
+        ? maybeRequest.method()
+        : null;
     const normalizedMethod = method?.toUpperCase() ?? null;
 
-    const rawUrl = candidate.url();
-    
+    const rawUrl = maybeRequest.url();
+
     try {
-      const { pathname } = new URL(rawUrl);
+      const parsedUrl = new URL(rawUrl);
+
+      if (!this.isInternalApiUrl(parsedUrl)) {
+        return false;
+      }
+
+      const { pathname } = parsedUrl;
 
       const isStreamPath = CHAT_STREAM_PATH_REGEX.test(pathname);
       // Accept nested chat endpoints (for example, edit or follow-up routes)
@@ -1189,6 +1231,38 @@ export class ChatPage {
     }
   }
 
+  /**
+   * Determine whether the provided absolute URL points to the locally hosted
+   * Next.js application. Playwright tests run against a dev server bound to a
+   * loopback interface, so any other hostname would represent an external API
+   * call that should be ignored in hermetic assertions.
+   */
+  private isInternalApiUrl(url: URL): boolean {
+    if (INTERNAL_HOSTNAME_WHITELIST.has(url.hostname.toLowerCase())) {
+      return true;
+    }
+
+    const currentPageOrigin = this.safeResolveCurrentOrigin();
+    if (currentPageOrigin && currentPageOrigin.origin === url.origin) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Capture the origin of the current page URL, swallowing any parsing errors
+   * (for example `about:blank` during the initial navigation) so callers can
+   * gracefully fall back to the hostname whitelist.
+   */
+  private safeResolveCurrentOrigin(): URL | null {
+    try {
+      return new URL(this.page.url());
+    } catch {
+      return null;
+    }
+  }
+
   private async waitForChatApiResponse(): Promise<void> {
     /**
      * Prefer detecting the transport via Playwright's network events so we
@@ -1238,13 +1312,13 @@ export class ChatPage {
       typeof page.context === "function" ? page.context() : null;
 
     type NetworkEvent =
-      | { kind: "request"; request: unknown }
-      | { kind: "response"; response: unknown }
-      | { kind: "failure"; request: unknown }
+      | { kind: "request"; request: PlaywrightRequest }
+      | { kind: "response"; response: PlaywrightResponse }
+      | { kind: "failure"; request: PlaywrightRequest }
       | { kind: "signal" };
 
     const requestMatcher = (candidate: unknown) =>
-      this.matchesChatApiRequest(candidate as any);
+      this.matchesChatApiRequest(candidate);
 
     const watchers: Array<Promise<NetworkEvent>> = [];
 
@@ -1306,13 +1380,7 @@ export class ChatPage {
 
     pushWatcher(
       page
-        .waitForResponse((response) =>
-          requestMatcher(
-            typeof response?.request === "function"
-              ? response.request()
-              : response?.request ?? null
-          )
-        )
+        .waitForResponse((response) => requestMatcher(response.request()))
         .then((response) => ({ kind: "response", response }))
     );
 
@@ -1337,11 +1405,7 @@ export class ChatPage {
         browserContext
           .waitForEvent("response", {
             predicate: (response) =>
-              requestMatcher(
-                response && typeof (response as any).request === "function"
-                  ? (response as any).request()
-                  : null
-              ),
+              requestMatcher(response.request()),
           })
           .then((response) => ({ kind: "response", response }))
       );
@@ -1372,23 +1436,13 @@ export class ChatPage {
       fallbackPromise.catch(() => {});
 
       if (networkResult.kind === "response") {
-        const response = networkResult.response as any;
+        const response = networkResult.response;
         try {
-          if (!response?.ok?.()) {
-            let bodySnippet = "";
-            try {
-              bodySnippet = await response.text?.();
-            } catch {
-              bodySnippet = "";
-            }
-
-            const trimmedBody = bodySnippet.trim().slice(0, 1_000);
-            const diagnostic =
-              trimmedBody.length > 0 ? ` – ${trimmedBody}` : "";
-
-            throw new Error(
-              `Chat API request failed with ${response?.status?.()} ${response?.statusText?.()}${diagnostic}`
+          if (!response.ok()) {
+            const formattedError = await this.inspectRejectedChatResponse(
+              response
             );
+            throw new Error(formattedError);
           }
         } catch (error) {
           throw error instanceof Error
@@ -1401,29 +1455,12 @@ export class ChatPage {
       }
 
       if (networkResult.kind === "failure") {
-        const candidate = networkResult.request as any;
+        const candidate = networkResult.request;
         let diagnostic = "";
         let normalizedDiagnostic = "";
         try {
-          const failureFn =
-            candidate &&
-            typeof candidate === "object" &&
-            "failure" in candidate &&
-            typeof (candidate as { failure?: unknown }).failure === "function"
-              ? (candidate as { failure: () => unknown }).failure
-              : null;
-
-          const failureDetails = await Promise.resolve(
-            failureFn ? failureFn() : null
-          );
-          const failureText =
-            failureDetails &&
-            typeof failureDetails === "object" &&
-            "errorText" in failureDetails &&
-            typeof (failureDetails as { errorText?: unknown }).errorText ===
-              "string"
-              ? (failureDetails as { errorText: string }).errorText.trim()
-              : "";
+          const failureDetails = await Promise.resolve(candidate.failure());
+          const failureText = failureDetails?.errorText?.trim() ?? "";
           diagnostic = failureText ? ` – ${failureText}` : "";
           normalizedDiagnostic = failureText.toUpperCase();
         } catch {
@@ -1478,43 +1515,42 @@ export class ChatPage {
       }
 
       if (networkResult.kind === "request") {
-        const request = networkResult.request as any;
-        if (request && typeof request.response === "function") {
-          try {
-            const response = await Promise.race([
-              Promise.resolve(request.response()),
-              new Promise<null>((resolve) =>
-                setTimeout(() => resolve(null), 1_000)
-              ),
-            ]);
+        const request = networkResult.request;
 
-            if (response && typeof (response as any).ok === "function") {
-              if (!(response as any).ok()) {
-                let bodySnippet = "";
-                try {
-                  bodySnippet = await (response as any).text();
-                } catch {
-                  bodySnippet = "";
-                }
+        /**
+         * Playwright's `request.response()` resolves with `null` when the
+         * transport fails before a response is available. Mirror the
+         * production polling guard by racing the response promise against a
+         * short timeout so hermetic tests unblock even when the browser never
+         * surfaces a terminal payload.
+         */
+        const responsePromise =
+          typeof request.response === "function"
+            ? request.response()
+            : Promise.resolve<PlaywrightResponse | null>(null);
 
-                const trimmedBody = bodySnippet.trim().slice(0, 1_000);
-                const diagnostic =
-                  trimmedBody.length > 0 ? ` – ${trimmedBody}` : "";
+        try {
+          const response = await Promise.race<PlaywrightResponse | null>([
+            Promise.resolve(responsePromise),
+            new Promise<PlaywrightResponse | null>((resolve) =>
+              setTimeout(() => resolve(null), 1_000)
+            ),
+          ]);
 
-                throw new Error(
-                  `Chat API request failed with ${(response as any).status()} ${(response as any).statusText()}${diagnostic}`
-                );
-              }
-            }
-          } catch (error) {
-            if (error === networkTimeoutMarker) {
-              throw error;
-            }
-
-            throw error instanceof Error
-              ? error
-              : new Error("Chat API request inspection failed");
+          if (response && !response.ok()) {
+            const formattedError = await this.inspectRejectedChatResponse(
+              response
+            );
+            throw new Error(formattedError);
           }
+        } catch (error) {
+          if (error === networkTimeoutMarker) {
+            throw error;
+          }
+
+          throw error instanceof Error
+            ? error
+            : new Error("Chat API request inspection failed");
         }
 
         this.pendingComposerNeedsClear = false;
@@ -1875,6 +1911,130 @@ export class ChatPage {
       );
     }
   }
+
+  /**
+   * Inspect a rejected chat response and ensure the UI presented the
+   * corresponding feedback toast. Returning a formatted error keeps the
+   * surrounding network guard consistent between the request and response
+   * branches while avoiding duplicate JSON parsing and toast assertions.
+   */
+  private async inspectRejectedChatResponse(
+    response: PlaywrightResponse
+  ): Promise<string> {
+    const status = response.status();
+    const statusText = response.statusText();
+
+    let rawBody = "";
+
+    try {
+      rawBody = await response.text();
+    } catch {
+      rawBody = "";
+    }
+
+    const trimmedBody = rawBody.trim();
+
+    let errorCode: string | null = null;
+    let errorMessage: string | null = null;
+
+    if (trimmedBody.length > 0) {
+      let parsedBody: unknown = null;
+
+      try {
+        parsedBody = JSON.parse(trimmedBody);
+      } catch {
+        parsedBody = null;
+      }
+
+      if (parsedBody !== null) {
+        const parsedEnvelope = chatErrorEnvelopeSchema.safeParse(parsedBody);
+
+        if (parsedEnvelope.success && parsedEnvelope.data.error) {
+          const envelope: ChatErrorEnvelope = parsedEnvelope.data;
+          errorCode = envelope.error?.code ?? null;
+          errorMessage = envelope.error?.message ?? null;
+        }
+      }
+    }
+
+    if (status === 403 && errorCode === "forbidden:chat") {
+      const { toastCopy } = await this.expectForbiddenToast({
+        errorCode,
+        errorMessage,
+      });
+
+      return `Chat API rejected the request (403 Forbidden, code ${errorCode}) after surfacing a toast: "${toastCopy}"`;
+    }
+
+    const diagnosticBody = trimmedBody.slice(0, 1_000);
+    const diagnostic = diagnosticBody.length > 0 ? ` – ${diagnosticBody}` : "";
+    const resolvedStatusText = statusText || "Unknown";
+
+    return `Chat API request failed with ${status} ${resolvedStatusText}${diagnostic}`;
+  }
+
+  /**
+   * Ensure forbidden chat responses surface an actionable toast. Without this
+   * guard hermetic Playwright runs would keep polling the DOM until the
+   * timeout, hiding the real regression behind a vague "waiting for streaming"
+   * error.
+   */
+  private async expectForbiddenToast({
+    errorCode,
+    errorMessage,
+  }: {
+    errorCode: string | null;
+    errorMessage: string | null;
+  }) {
+    const toastLocator = this.page.locator(TOAST_LOCATOR).last();
+
+    try {
+      await toastLocator.waitFor({ state: "visible", timeout: 15_000 });
+    } catch (error) {
+      throw new Error(
+        `Chat API responded with ${errorCode ?? "forbidden"} but no error toast became visible within 15 seconds.`
+      );
+    }
+
+    let toastCopy = "";
+
+    if (typeof toastLocator.innerText === "function") {
+      try {
+        toastCopy = (await toastLocator.innerText()).trim();
+      } catch {
+        toastCopy = "";
+      }
+    }
+
+    if (!toastCopy) {
+      throw new Error(
+        `Chat API surfaced a forbidden response (${errorCode ?? "unknown"}) but the toast body was empty.`
+      );
+    }
+
+    const candidateMessages = [
+      errorMessage,
+      "A regular account is required to use this feature.",
+      "You need to sign in before continuing.",
+      "You need to sign in to view this chat. Please sign in and try again.",
+    ].filter((value): value is string => typeof value === "string");
+
+    const normalizedToast = toastCopy.toLowerCase();
+
+    if (
+      candidateMessages.length > 0 &&
+      !candidateMessages.some((candidate) =>
+        normalizedToast.includes(candidate.toLowerCase())
+      )
+    ) {
+      throw new Error(
+        `Chat API surfaced an unexpected forbidden toast. Received: "${toastCopy}". Expected one of: ${candidateMessages.join(", ")}`
+      );
+    }
+
+    return { toastCopy } as const;
+  }
+
   async expectToastToContain(text: string) {
     await expect(this.page.locator(TOAST_LOCATOR).first()).toContainText(text);
   }

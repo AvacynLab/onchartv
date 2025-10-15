@@ -8,8 +8,6 @@ import {
   __resetRateLimitStateForTests,
   enforceRateLimit,
 } from "@/lib/ratelimit";
-import { ChatSDKError } from "@/lib/errors";
-
 /**
  * Utility preserving the original PLAYWRIGHT flag across test cases so env
  * mutations never leak between assertions.
@@ -33,30 +31,33 @@ afterEach(() => {
 });
 
 describe("enforceRateLimit", () => {
-  it("throws when exceeding the configured quota in normal conditions", () => {
+  it("flags requests once the configured quota is exceeded in normal conditions", () => {
     // CI sets PLAYWRIGHT=true so e2e flows skip the limiter. Explicitly remove
     // the flag to exercise the baseline production behaviour in this test.
     delete process.env.PLAYWRIGHT;
 
     const options = { key: "user-1", limit: 2, windowMs: 1_000 } as const;
 
-    enforceRateLimit(options);
-    enforceRateLimit(options);
+    const first = enforceRateLimit(options);
+    const second = enforceRateLimit(options);
+    const third = enforceRateLimit(options);
 
-    expect(() => enforceRateLimit(options)).toThrowError(ChatSDKError);
+    expect(first.allowed).toBe(true);
+    expect(second.allowed).toBe(true);
+    expect(third.allowed).toBe(false);
   });
 
-  it("relaxes the quota by two orders of magnitude when PLAYWRIGHT is true", () => {
+  it("fully bypasses the quota when PLAYWRIGHT is true", () => {
     process.env.PLAYWRIGHT = "true";
     const options = { key: "user-2", limit: 2, windowMs: 1_000 } as const;
 
-    // 150 requests would exceed the baseline limit (2) but stays within the
-    // boosted ceiling of 200 that activates when PLAYWRIGHT=true.
+    // 150 requests would exceed the baseline limit (2) but hermetic mode keeps
+    // allowing them without touching the shared buckets.
     for (let attempt = 0; attempt < 150; attempt += 1) {
-      enforceRateLimit(options);
+      const verdict = enforceRateLimit(options);
+      expect(verdict.allowed).toBe(true);
+      expect(verdict.resetInMs).toBe(0);
     }
-
-    expect(() => enforceRateLimit(options)).not.toThrow();
   });
 
   it("reports remaining requests relative to the effective quota", () => {
@@ -69,9 +70,13 @@ describe("enforceRateLimit", () => {
     // The fixed-window limiter decrements the remaining quota on each call so
     // we check the monotonic decrease matches expectations.
     const first = enforceRateLimit(options);
-    expect(first.remaining).toBe(2);
+    expect(first).toEqual(
+      expect.objectContaining({ allowed: true, remaining: 2 })
+    );
 
     const second = enforceRateLimit(options);
-    expect(second.remaining).toBe(1);
+    expect(second).toEqual(
+      expect.objectContaining({ allowed: true, remaining: 1 })
+    );
   });
 });

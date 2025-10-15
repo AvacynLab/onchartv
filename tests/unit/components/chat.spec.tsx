@@ -23,6 +23,7 @@ let latestUseChatConfig: any;
 let storedStream: unknown[] = [];
 const setDataStreamMock = vi.fn();
 let shouldExposeDataStream = true;
+let searchParamsMock: { get: (key: string) => string | null } | null = null;
 
 vi.mock("@/components/toast", () => ({
   toast: (...args: unknown[]) => toastMock(...args),
@@ -145,6 +146,10 @@ vi.mock("@/components/data-stream-provider", () => ({
   },
 }));
 
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => searchParamsMock,
+}));
+
 vi.mock("@ai-sdk/react", () => ({
   useChat: (config: unknown) => {
     latestUseChatConfig = config;
@@ -189,6 +194,7 @@ beforeEach(() => {
   toastMock.mockReset();
   setDataStreamMock.mockReset();
   shouldExposeDataStream = true;
+  searchParamsMock = null;
 });
 
 afterEach(() => {
@@ -325,5 +331,59 @@ describe("Chat", () => {
     });
 
     expect(setDataStreamMock).not.toHaveBeenCalled();
+  });
+
+  it("envoie le paramètre de requête initial après normalisation", async () => {
+    searchParamsMock = {
+      get: (key: string) => (key === "query" ? "   Première requête  " : null),
+    };
+
+    render(
+      <Chat
+        autoResume={false}
+        id="chat-5"
+        initialChatModel="model"
+        initialLastContext={undefined}
+        initialMessages={[]}
+        initialVisibilityType="private"
+        isReadonly={false}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    await waitFor(() => {
+      expect(sendMessageMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          parts: [expect.objectContaining({ text: "Première requête" })],
+        })
+      );
+    });
+
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignore les paramètres de requête vides ou blancs", async () => {
+    searchParamsMock = {
+      get: (key: string) => (key === "query" ? "    " : null),
+    };
+
+    render(
+      <Chat
+        autoResume={false}
+        id="chat-6"
+        initialChatModel="model"
+        initialLastContext={undefined}
+        initialMessages={[]}
+        initialVisibilityType="private"
+        isReadonly={false}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(sendMessageMock).not.toHaveBeenCalled();
   });
 });

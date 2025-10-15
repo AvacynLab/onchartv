@@ -29,6 +29,8 @@ reliably without external network calls.
 - Le rate limit est appliqué par clé client (`IP` ou en-tête `x-forwarded-for`).
   Les réponses réussies incluent `rateLimit: { remaining, reset }` pour faciliter
   le suivi côté client.
+- Quand `PLAYWRIGHT=true`, `lib/ratelimit.ts` bypass le quota afin que les
+  suites e2e puissent intercepter les endpoints sans déclencher de 429.
 - Les erreurs retournent toujours un corps `{ "error": { "code", "message" } }`
   avec un statut HTTP cohérent :
   - `400` pour les validations échouées (`bad_request:api`).
@@ -37,11 +39,24 @@ reliably without external network calls.
   - `429` en cas de dépassement de quota.
   - `500` pour les erreurs inattendues (`internal_error:api`).
 
+```jsonc
+{
+  "error": {
+    "code": "bad_request:api",
+    "message": "Parameter 'limit' must be a positive integer when provided."
+  }
+}
+```
+
 ## `GET /api/finance/quote`
+
+### Requête
 
 | Paramètre | Type   | Description                                 |
 |-----------|--------|---------------------------------------------|
 | symbol    | string | Symbole supporté (`AAPL`, `BTCUSD`, etc.).  |
+
+### Réponse
 
 ```jsonc
 {
@@ -57,13 +72,17 @@ reliably without external network calls.
 
 ## `GET /api/finance/history`
 
-| Paramètre | Type               | Description                                                                 |
-|-----------|--------------------|-----------------------------------------------------------------------------|
-| symbol    | string             | Ticker pris en charge.                                                      |
-| timeframe | enum _(optionnel)_ | Fenêtres supportées : `1D`. Valeur par défaut : `1D`.                       |
-| from      | string _(optionnel)_ | Limite inférieure (ISO 8601 ou timestamp Unix en secondes).               |
-| to        | string _(optionnel)_ | Limite supérieure (ISO 8601 ou timestamp Unix en secondes).               |
-| limit     | string _(optionnel)_ | Nombre max de chandelles (capé à `5000`).                                  |
+### Requête
+
+| Paramètre | Type                 | Description                                                                 |
+|-----------|----------------------|-----------------------------------------------------------------------------|
+| symbol    | string               | Ticker pris en charge.                                                      |
+| timeframe | enum _(optionnel)_   | Fenêtres supportées : `1D`. Valeur par défaut : `1D`.                       |
+| from      | string _(optionnel)_ | Limite inférieure (ISO 8601 ou timestamp Unix en secondes).                |
+| to        | string _(optionnel)_ | Limite supérieure (ISO 8601 ou timestamp Unix en secondes).                |
+| limit     | string _(optionnel)_ | Nombre maximum de chandelles (positif, plafonné à `5000`).                  |
+
+### Réponse
 
 ```jsonc
 {
@@ -88,9 +107,13 @@ reliably without external network calls.
 
 ## `GET /api/finance/fundamentals`
 
+### Requête
+
 | Paramètre | Type   | Description                          |
 |-----------|--------|--------------------------------------|
 | symbol    | string | Symbole equity (`NVDA`, `AAPL`, …).  |
+
+### Réponse
 
 ```jsonc
 {
@@ -109,10 +132,14 @@ reliably without external network calls.
 
 ## `GET /api/finance/news`
 
-| Paramètre | Type               | Description                                           |
-|-----------|--------------------|-------------------------------------------------------|
-| symbol    | string             | Ticker equity ou crypto.                              |
-| limit     | string _(optionnel)_ | Nombre d’articles souhaité (défaut : `10`).         |
+### Requête
+
+| Paramètre | Type                 | Description                                                     |
+|-----------|----------------------|-----------------------------------------------------------------|
+| symbol    | string               | Ticker equity ou crypto.                                        |
+| limit     | string _(optionnel)_ | Nombre d’articles souhaité (défaut : `10`, minimum `1`).        |
+
+### Réponse
 
 ```jsonc
 {
@@ -141,6 +168,8 @@ reliably without external network calls.
 
 ## `POST /api/finance/backtest`
 
+### Requête
+
 ```jsonc
 {
   "symbol": "AAPL",
@@ -158,6 +187,8 @@ reliably without external network calls.
   }
 }
 ```
+
+### Réponse
 
 ```jsonc
 {
@@ -212,12 +243,16 @@ reliably without external network calls.
 
 ## `POST /api/finance/screen`
 
-| Paramètre           | Type            | Description                                                             |
-|---------------------|-----------------|-------------------------------------------------------------------------|
-| filters.minMarketCap | number _(opt.)_ | Capitalisation minimum (USD).                                           |
-| filters.maxPeRatio  | number _(opt.)_ | Ratio P/E maximum (les valeurs négatives sont ignorées).                |
-| filters.assetTypes  | string[] _(opt.)_ | Sous-ensemble de `equity`, `crypto`, `fx`, `etf`, `index`, `commodity`. |
-| limit               | number _(opt.)_ | Nombre de résultats (défaut `10`, maximum `25`).                        |
+### Requête
+
+| Paramètre             | Type              | Description                                                             |
+|-----------------------|-------------------|-------------------------------------------------------------------------|
+| filters.minMarketCap  | number _(opt.)_   | Capitalisation minimum (USD).                                           |
+| filters.maxPeRatio    | number _(opt.)_   | Ratio P/E maximum (les valeurs négatives sont ignorées).                |
+| filters.assetTypes    | string[] _(opt.)_ | Sous-ensemble de `equity`, `crypto`, `fx`, `etf`, `index`, `commodity`. |
+| limit                 | number _(opt.)_   | Nombre de résultats (défaut `10`, maximum `25`).                        |
+
+### Réponse
 
 ```jsonc
 {
@@ -246,10 +281,14 @@ reliably without external network calls.
 
 ## `GET /api/finance/preferences`
 
+### Méthodes
+
 | Route  | Description                                                               |
 |--------|---------------------------------------------------------------------------|
 | GET    | Retourne les préférences actuelles (`showNews`, `defaultTimeframe`, ...). |
 | PATCH  | Met à jour les préférences en respectant le schéma Zod `financePreferencesSchema`. |
+
+### Réponse
 
 ```jsonc
 {
