@@ -64,17 +64,6 @@ import {
   type FinancePreferences,
 } from "../finance/preferences";
 
-/**
- * Legacy chat records may contain a `content` payload in addition to the modern
- * structured `parts`. The runtime `ChatMessage` type used during request
- * handling no longer exposes that field, so we approximate the historic shapes
- * locally to keep database operations compatible with older data.
- */
-type MessageContent =
-  | string
-  | Array<Record<string, unknown>>
-  | Record<string, unknown>;
-
 // Optionally, if not using email/pass login, you can
 // use the Drizzle adapter for Auth.js / NextAuth
 // https://authjs.dev/reference/adapter/drizzle
@@ -1235,15 +1224,12 @@ export async function updateMessagePartsById({
   id,
   parts,
   attachments,
-  content,
 }: {
   id: string;
   parts: ChatMessage["parts"];
   attachments?: Attachment[];
-  content?: MessageContent;
 }) {
   const resolvedAttachments = Array.isArray(attachments) ? attachments : [];
-  const shouldUpdateContent = typeof content !== "undefined";
 
   if (isTestEnvironment()) {
     const store = getInMemoryStore();
@@ -1253,15 +1239,10 @@ export async function updateMessagePartsById({
       return;
     }
 
-    const normalizedContent = shouldUpdateContent
-      ? ((content ?? null) as MessageContent | null)
-      : existingMessage.content;
-
     const updatedRecord: DBMessage = {
       ...existingMessage,
       parts,
       attachments: resolvedAttachments,
-      ...(shouldUpdateContent ? { content: normalizedContent } : {}),
     };
 
     store.messages.set(id, updatedRecord);
@@ -1275,10 +1256,6 @@ export async function updateMessagePartsById({
       parts,
       attachments: resolvedAttachments,
     };
-
-    if (shouldUpdateContent) {
-      Object.assign(updatePayload, { content: content ?? null });
-    }
 
     await database
       .update(message)

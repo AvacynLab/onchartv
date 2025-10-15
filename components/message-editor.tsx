@@ -17,21 +17,8 @@ import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
 import { toast } from "./toast";
 
-/**
- * Preserve compatibility with historical message payloads that surfaced a
- * `content` field alongside structured `parts`. Modern `ChatMessage` types no
- * longer expose that field directly, so we approximate the historic shapes
- * locally (while still allowing optional attachments) to keep inline edits
- * backwards compatible.
- */
-type LegacyContent =
-  | string
-  | Array<Record<string, unknown>>
-  | Record<string, unknown>;
-
 type MessageWithAttachments = ChatMessage & {
   attachments?: Attachment[];
-  content?: LegacyContent;
 };
 
 export type MessageEditorProps = {
@@ -122,16 +109,10 @@ export function MessageEditor({
 
               const updatedParts = rebuildMessageParts(message, trimmedDraft);
               const updatedAttachments = cloneAttachments(message);
-              const updatedContent = rebuildLegacyContent(
-                message.content,
-                trimmedDraft
-              );
-
               await updateMessageParts({
                 id: message.id,
                 parts: updatedParts,
                 attachments: updatedAttachments,
-                content: updatedContent,
               });
 
               setMessages((messages) => {
@@ -147,10 +128,6 @@ export function MessageEditor({
                   parts: updatedParts,
                   attachments: updatedAttachments,
                 };
-
-                if (typeof updatedContent !== "undefined") {
-                  updatedMessage.content = updatedContent;
-                }
 
                 return [...messages.slice(0, index), updatedMessage];
               });
@@ -235,70 +212,6 @@ function rebuildMessageParts(
   }
 
   return updatedParts;
-}
-
-function rebuildLegacyContent(
-  originalContent: LegacyContent | undefined,
-  nextText: string
-): LegacyContent | undefined {
-  if (typeof originalContent === "undefined") {
-    return undefined;
-  }
-
-  if (Array.isArray(originalContent)) {
-    let textEntryReplaced = false;
-    let inputTextEntryReplaced = false;
-
-    const updatedContent = originalContent.map((fragment) => {
-      if (fragment && typeof fragment === "object") {
-        const candidate = fragment as Record<string, unknown> & {
-          type?: unknown;
-        };
-
-        if (candidate.type === "text" && typeof candidate.text === "string" && !textEntryReplaced) {
-          textEntryReplaced = true;
-          return { ...candidate, text: nextText };
-        }
-
-        if (
-          candidate.type === "input_text" &&
-          typeof candidate.input_text === "string" &&
-          !inputTextEntryReplaced
-        ) {
-          inputTextEntryReplaced = true;
-          return { ...candidate, input_text: nextText };
-        }
-      }
-
-      return fragment;
-    });
-
-    if (!textEntryReplaced && !inputTextEntryReplaced) {
-      updatedContent.push({ type: "text", text: nextText });
-    }
-
-    return updatedContent;
-  }
-
-  if (typeof originalContent === "string") {
-    return nextText;
-  }
-
-  if (originalContent && typeof originalContent === "object") {
-    const candidate = originalContent as Record<string, unknown> & {
-      type?: unknown;
-    };
-
-    if (candidate.type === "text" && typeof candidate.text === "string") {
-      return [{ ...candidate, text: nextText }];
-    }
-
-    if (candidate.type === "input_text" && typeof candidate.input_text === "string") {
-      return [{ ...candidate, input_text: nextText }];
-    }
-  }
-
-  return [{ type: "text", text: nextText }];
 }
 
 function emitPlaywrightSignal(phase: "submit" | "sent" | "error") {

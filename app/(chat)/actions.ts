@@ -49,29 +49,16 @@ export async function deleteTrailingMessages({ id }: { id: string }) {
   });
 }
 
-/**
- * Some persisted chat records include a legacy `content` payload alongside the
- * structured `parts`. The runtime `ChatMessage` type no longer exposes that
- * property, so we approximate the historical shapes to keep inline edit flows
- * compatible when they resurface older messages.
- */
-type MessageContent =
-  | string
-  | Array<Record<string, unknown>>
-  | Record<string, unknown>;
-
 export async function updateMessageParts({
   id,
   parts,
   attachments,
-  content,
 }: {
   id: string;
   parts: ChatMessage["parts"];
   attachments?: Attachment[];
-  content?: MessageContent;
 }) {
-  await updateMessagePartsById({ id, parts, attachments, content });
+  await updateMessagePartsById({ id, parts, attachments });
 }
 
 export async function updateChatVisibility({
