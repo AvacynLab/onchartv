@@ -226,27 +226,49 @@ export function MessageEditor({
                       continue;
                     }
 
-                    if (typeof entry === "string") {
-                      if (!contentTextReplaced) {
-                        rebuiltContent.push({ type: "text", text: draftContent });
-                        contentTextReplaced = true;
-                      }
-                      continue;
+                if (typeof entry === "string") {
+                  if (!contentTextReplaced) {
+                    rebuiltContent.push({ type: "text", text: draftContent });
+                    contentTextReplaced = true;
+                  }
+                  continue;
+                }
+
+                if (typeof entry === "object") {
+                  const record = entry as Record<string, unknown>;
+                  const entryType =
+                    typeof record.type === "string" ? record.type : undefined;
+                  const hasTextProperty = typeof record.text === "string";
+                  const hasInputTextProperty =
+                    typeof (record as { input_text?: unknown }).input_text ===
+                    "string";
+
+                  if (
+                    !contentTextReplaced &&
+                    (entryType === "text" ||
+                      entryType === "input_text" ||
+                      hasTextProperty ||
+                      hasInputTextProperty)
+                  ) {
+                    const nextRecord: Record<string, unknown> = { ...record };
+
+                    if (hasTextProperty || entryType === "text") {
+                      nextRecord.text = draftContent;
                     }
 
-                    if (
-                      typeof entry === "object" &&
-                      "type" in entry &&
-                      entry.type === "text"
-                    ) {
-                      if (!contentTextReplaced) {
-                        rebuiltContent.push({ type: "text", text: draftContent });
-                        contentTextReplaced = true;
-                      }
-                      continue;
+                    if (hasInputTextProperty || entryType === "input_text") {
+                      (nextRecord as { input_text?: string }).input_text =
+                        draftContent;
                     }
 
-                    rebuiltContent.push(entry as Record<string, unknown>);
+                    rebuiltContent.push(nextRecord);
+                    contentTextReplaced = true;
+                    continue;
+                  }
+
+                  rebuiltContent.push(record);
+                  continue;
+                }
                   }
 
                   if (!contentTextReplaced) {
@@ -261,6 +283,7 @@ export function MessageEditor({
                 id: message.id,
                 parts: updatedParts,
                 attachments: attachmentsForPersistence,
+                content: updatedMessage.content,
               });
 
               await deleteTrailingMessages({

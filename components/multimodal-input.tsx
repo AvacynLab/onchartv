@@ -247,7 +247,21 @@ function PureMultimodalInput({
     };
   }, [status]);
 
-  const shouldRenderStopButton = isStopButtonVisible;
+  /**
+   * Render the stop control as soon as the chat transitions into an active
+   * streaming state. We still keep the explicit `isStopButtonVisible` flag so
+   * the cooldown window after a response finishes continues to work, but we
+   * also consult the live status to hide the send button immediately when the
+   * submission kicks off (before the visibility effect runs). The helper below
+   * treats the initial/ready/error phases as "idle" so any other status —
+   * including provider-specific transitions such as "pending" — keeps the stop
+   * button visible for Playwright and keyboard users.
+   */
+  const isExplicitlyIdle =
+    status === "initial" || status === "ready" || status === "error";
+
+  const shouldRenderStopButton =
+    isStopButtonVisible || !isExplicitlyIdle || ACTIVE_CHAT_STATUSES.has(status);
 
   const statusRef = useRef(status);
 

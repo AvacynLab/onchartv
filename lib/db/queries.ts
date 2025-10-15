@@ -1152,10 +1152,12 @@ export async function updateMessagePartsById({
   id,
   parts,
   attachments,
+  content,
 }: {
   id: string;
   parts: ChatMessage["parts"];
   attachments: Attachment[];
+  content?: ChatMessage["content"];
 }) {
   if (isTestEnvironment()) {
     const store = getInMemoryStore();
@@ -1166,6 +1168,7 @@ export async function updateMessagePartsById({
         ...messageRecord,
         parts,
         attachments,
+        ...(content !== undefined ? { content } : {}),
       });
     }
 
@@ -1176,7 +1179,11 @@ export async function updateMessagePartsById({
     const database = getRequiredDatabase();
     await database
       .update(message)
-      .set({ parts, attachments })
+      .set({
+        parts,
+        attachments,
+        ...(content !== undefined ? { content } : {}),
+      })
       .where(eq(message.id, id));
   } catch (_error) {
     throw new ChatSDKError(

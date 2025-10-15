@@ -59,12 +59,14 @@ export async function updateMessageParts({
   id,
   parts,
   attachments,
+  content,
 }: {
   id: string;
   parts: ChatMessage["parts"];
   attachments: Attachment[];
+  content?: ChatMessage["content"];
 }) {
-  await updateMessagePartsById({ id, parts, attachments });
+  await updateMessagePartsById({ id, parts, attachments, content });
 }
 
 export async function updateChatVisibility({
