@@ -1,4 +1,6 @@
+import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
 import { waitForServerReady } from "./server-health";
 
@@ -11,10 +13,39 @@ import { waitForServerReady } from "./server-health";
  * immediately. This mirrors the behaviour of the `waitForServerReady` utility
  * used in the Playwright auth setup while keeping the workflow readable.
  */
+export function resolveHealthProbeBaseURL(
+  env: NodeJS.ProcessEnv,
+  fallbackHost = "127.0.0.1"
+): string {
+  /**
+   * When the workflow explicitly provides a base URL (for example via
+   * `PLAYWRIGHT_TEST_BASE_URL`) we should honour that verbatim to support
+   * bespoke reverse-proxy setups.
+   */
+  if (env.PLAYWRIGHT_TEST_BASE_URL) {
+    return env.PLAYWRIGHT_TEST_BASE_URL;
+  }
+
+  /**
+   * Developers typically run `pnpm dev` without specifying a port which binds
+   * to 3000. Conversely the hermetic Playwright pipeline uses 3100 to avoid
+   * clashing with concurrently running local servers. Mirror the
+   * `resolveNextDevCommand` heuristics so the probe targets the correct port in
+   * both environments while still respecting an explicit `PORT` override when
+   * one is provided.
+   */
+  const hermeticFlagsEnabled =
+    env.PLAYWRIGHT === "true" ||
+    env.CI_PLAYWRIGHT === "true" ||
+    env.HERMETIC_CHAT_PROVIDER === "true";
+
+  const port = env.PORT ?? (hermeticFlagsEnabled ? "3100" : "3000");
+
+  return `http://${fallbackHost}:${port}`;
+}
+
 async function main() {
-  const baseURL =
-    process.env.PLAYWRIGHT_TEST_BASE_URL ??
-    `http://127.0.0.1:${process.env.PORT ?? "3100"}`;
+  const baseURL = resolveHealthProbeBaseURL(process.env);
 
   console.log(
     `[ci-wait-for-health] Probing ${baseURL} before executing Playwright tests.`
@@ -40,4 +71,15 @@ async function main() {
   }
 }
 
-void main();
+const executedDirectly = (() => {
+  const scriptPath = process.argv[1];
+  if (!scriptPath) {
+    return false;
+  }
+
+  return fileURLToPath(import.meta.url) === path.resolve(scriptPath);
+})();
+
+if (executedDirectly) {
+  void main();
+}
