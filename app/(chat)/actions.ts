@@ -55,18 +55,21 @@ export async function deleteTrailingMessages({ id }: { id: string }) {
   });
 }
 
+/**
+ * Persist the edited message parts and attachments. Legacy `content` payloads
+ * are reconstructed client-side from the parts array, so they are deliberately
+ * excluded from this write path.
+ */
 export async function updateMessageParts({
   id,
   parts,
   attachments,
-  content,
 }: {
   id: string;
   parts: ChatMessage["parts"];
   attachments: Attachment[];
-  content?: ChatMessage["content"];
 }) {
-  await updateMessagePartsById({ id, parts, attachments, content });
+  await updateMessagePartsById({ id, parts, attachments });
 }
 
 export async function updateChatVisibility({

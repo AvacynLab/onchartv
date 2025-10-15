@@ -283,7 +283,6 @@ export function MessageEditor({
                 id: message.id,
                 parts: updatedParts,
                 attachments: attachmentsForPersistence,
-                content: updatedMessage.content,
               });
 
               await deleteTrailingMessages({

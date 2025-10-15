@@ -101,12 +101,14 @@ describe("MessageEditor", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
-    expect(updateMessagePartsMock).toHaveBeenCalledWith({
+    const updateArgs =
+      updateMessagePartsMock.mock.calls[updateMessagePartsMock.mock.calls.length - 1]?.[0];
+    expect(updateArgs).toEqual({
       id: baseMessage.id,
       attachments: [],
       parts: [{ type: "text", text: "Edited reasoning prompt" }],
-      content: [{ type: "text", text: "Edited reasoning prompt" }],
     });
+    expect(updateArgs).not.toHaveProperty("content");
     expect(deleteTrailingMessagesMock).toHaveBeenCalledWith({
       id: baseMessage.id,
     });
@@ -225,7 +227,11 @@ describe("MessageEditor", () => {
       messageId: messageWithAttachment.id,
     });
     expect(setMode).toHaveBeenCalledWith("view");
-    expect(updateMessagePartsMock).toHaveBeenCalledWith({
+    const attachmentUpdateArgs =
+      updateMessagePartsMock.mock.calls[
+        updateMessagePartsMock.mock.calls.length - 1
+      ]?.[0];
+    expect(attachmentUpdateArgs).toEqual({
       id: messageWithAttachment.id,
       attachments: [
         {
@@ -243,16 +249,8 @@ describe("MessageEditor", () => {
         },
         { type: "text", text: "Edited attachment prompt" },
       ],
-      content: [
-        {
-          type: "file",
-          url: "https://example.com/image.png",
-          name: "image.png",
-          mediaType: "image/png",
-        },
-        { type: "text", text: "Edited attachment prompt" },
-      ],
     });
+    expect(attachmentUpdateArgs).not.toHaveProperty("content");
     expect(deleteTrailingMessagesMock).toHaveBeenCalledWith({
       id: messageWithAttachment.id,
     });
@@ -345,17 +343,14 @@ describe("MessageEditor", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
-    expect(updateMessagePartsMock).toHaveBeenCalledWith({
+    const inputTextUpdateArgs =
+      updateMessagePartsMock.mock.calls[updateMessagePartsMock.mock.calls.length - 1]?.[0];
+    expect(inputTextUpdateArgs).toEqual({
       id: messageWithInputText.id,
       attachments: [],
       parts: [{ type: "text", text: "Edited green prompt" }],
-      content: [
-        {
-          type: "input_text",
-          input_text: "Edited green prompt",
-        },
-      ],
     });
+    expect(inputTextUpdateArgs).not.toHaveProperty("content");
 
     expect(messages).toEqual([
       {

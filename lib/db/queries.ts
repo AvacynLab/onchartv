@@ -1148,16 +1148,19 @@ export async function getMessageById({ id }: { id: string }) {
   }
 }
 
+/**
+ * Update the stored message parts and attachments while leaving any deprecated
+ * `content` fields untouched. Consumers reconstruct legacy payloads from the
+ * returned parts when necessary.
+ */
 export async function updateMessagePartsById({
   id,
   parts,
   attachments,
-  content,
 }: {
   id: string;
   parts: ChatMessage["parts"];
   attachments: Attachment[];
-  content?: ChatMessage["content"];
 }) {
   if (isTestEnvironment()) {
     const store = getInMemoryStore();
@@ -1168,7 +1171,6 @@ export async function updateMessagePartsById({
         ...messageRecord,
         parts,
         attachments,
-        ...(content !== undefined ? { content } : {}),
       });
     }
 
@@ -1182,7 +1184,6 @@ export async function updateMessagePartsById({
       .set({
         parts,
         attachments,
-        ...(content !== undefined ? { content } : {}),
       })
       .where(eq(message.id, id));
   } catch (_error) {
