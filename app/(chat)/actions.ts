@@ -49,9 +49,16 @@ export async function deleteTrailingMessages({ id }: { id: string }) {
   });
 }
 
-type MessageContent = ChatMessage extends { content: infer Content }
-  ? Content
-  : unknown;
+/**
+ * Some persisted chat records include a legacy `content` payload alongside the
+ * structured `parts`. The runtime `ChatMessage` type no longer exposes that
+ * property, so we approximate the historical shapes to keep inline edit flows
+ * compatible when they resurface older messages.
+ */
+type MessageContent =
+  | string
+  | Array<Record<string, unknown>>
+  | Record<string, unknown>;
 
 export async function updateMessageParts({
   id,

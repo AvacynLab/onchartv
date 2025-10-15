@@ -19,13 +19,15 @@ import { toast } from "./toast";
 
 /**
  * Preserve compatibility with historical message payloads that surfaced a
- * `content` field alongside structured `parts`. The base `ChatMessage` type
- * does not guarantee either legacy content nor attachments, so we extend the
- * shape locally to guard our updates.
+ * `content` field alongside structured `parts`. Modern `ChatMessage` types no
+ * longer expose that field directly, so we approximate the historic shapes
+ * locally (while still allowing optional attachments) to keep inline edits
+ * backwards compatible.
  */
-type LegacyContent = ChatMessage extends { content: infer Content }
-  ? Content
-  : undefined;
+type LegacyContent =
+  | string
+  | Array<Record<string, unknown>>
+  | Record<string, unknown>;
 
 type MessageWithAttachments = ChatMessage & {
   attachments?: Attachment[];

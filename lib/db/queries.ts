@@ -64,9 +64,16 @@ import {
   type FinancePreferences,
 } from "../finance/preferences";
 
-type MessageContent = ChatMessage extends { content: infer Content }
-  ? Content
-  : unknown;
+/**
+ * Legacy chat records may contain a `content` payload in addition to the modern
+ * structured `parts`. The runtime `ChatMessage` type used during request
+ * handling no longer exposes that field, so we approximate the historic shapes
+ * locally to keep database operations compatible with older data.
+ */
+type MessageContent =
+  | string
+  | Array<Record<string, unknown>>
+  | Record<string, unknown>;
 
 // Optionally, if not using email/pass login, you can
 // use the Drizzle adapter for Auth.js / NextAuth
