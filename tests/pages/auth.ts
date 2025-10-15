@@ -201,26 +201,9 @@ export class AuthPage {
     await sidebarToggleButton.click();
     await this.page.waitForFunction(
       () => {
-        const sidebarNodes = Array.from(
-          document.querySelectorAll('[data-sidebar="sidebar"]')
-        );
-
-        // Desktop sidebars expose a wrapper with data-state="expanded", whereas
-        // the mobile sheet simply toggles the Radix data-state attribute on the
-        // sheet content itself. Check both patterns so the helper works across
-        // responsive breakpoints.
-        return sidebarNodes.some((element) => {
-          const container = element.closest('[data-state]');
-          if (container?.getAttribute("data-state") === "expanded") {
-            return true;
-          }
-
-          if ((element as HTMLElement).dataset.mobile === "true") {
-            return element.getAttribute("data-state") === "open";
-          }
-
-          return false;
-        });
+        const sidebar = document.querySelector('[data-sidebar="sidebar"]');
+        const container = sidebar?.closest('[data-state]');
+        return container?.getAttribute("data-state") === "expanded";
       },
       undefined,
       { timeout: 30_000 }

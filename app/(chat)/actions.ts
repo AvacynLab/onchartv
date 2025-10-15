@@ -8,9 +8,7 @@ import {
   deleteMessagesByChatIdAfterTimestamp,
   getMessageById,
   updateChatVisiblityById,
-  updateMessagePartsById,
 } from "@/lib/db/queries";
-import type { Attachment, ChatMessage } from "@/lib/types";
 
 export async function saveChatModelAsCookie(model: string) {
   const cookieStore = await cookies();
@@ -38,38 +36,10 @@ export async function generateTitleFromUserMessage({
 export async function deleteTrailingMessages({ id }: { id: string }) {
   const [message] = await getMessageById({ id });
 
-  if (!message) {
-    return;
-  }
-
   await deleteMessagesByChatIdAfterTimestamp({
     chatId: message.chatId,
     timestamp: message.createdAt,
-    /**
-     * Ensure regenerated responses do not reuse the previous assistant output
-     * even when both messages share the same millisecond-level timestamp. The
-     * optional guard keeps the edited user prompt intact while pruning any
-     * sibling entries created during the original generation cycle.
-     */
-    excludeMessageId: message.id,
   });
-}
-
-/**
- * Persist the edited message parts and attachments. Legacy `content` payloads
- * are reconstructed client-side from the parts array, so they are deliberately
- * excluded from this write path.
- */
-export async function updateMessageParts({
-  id,
-  parts,
-  attachments,
-}: {
-  id: string;
-  parts: ChatMessage["parts"];
-  attachments: Attachment[];
-}) {
-  await updateMessagePartsById({ id, parts, attachments });
 }
 
 export async function updateChatVisibility({

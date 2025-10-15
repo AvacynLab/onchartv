@@ -319,7 +319,6 @@ export function BacktestReportArtifact({
         <Button
           aria-controls={retestFormId}
           aria-expanded={isRetestOpen}
-          aria-label={RETEST_TOGGLE_LABEL}
           /**
            * Stable hook for Playwright. Using a test id avoids brittle text-based
            * lookups when the copy changes while still exposing a readable label
@@ -332,6 +331,7 @@ export function BacktestReportArtifact({
           variant="outline"
         >
           <Repeat2 className="mr-2 size-4" />
+          {/* Visible copy doubles as the accessible name for Playwright */}
           {RETEST_TOGGLE_LABEL}
         </Button>
       </header>

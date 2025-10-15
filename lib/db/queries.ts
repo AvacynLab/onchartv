@@ -13,8 +13,6 @@ import {
   gte,
   inArray,
   lt,
-  ne,
-  or,
   type SQL,
 } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -26,7 +24,6 @@ import { ChatSDKError } from "../errors";
 import { logWarning } from "../logging";
 import type { AppUsage } from "../usage";
 import { generateUUID } from "../utils";
-import type { Attachment, ChatMessage } from "@/lib/types";
 import {
   type Chat,
   chat,
@@ -1148,84 +1145,19 @@ export async function getMessageById({ id }: { id: string }) {
   }
 }
 
-/**
- * Update the stored message parts and attachments while leaving any deprecated
- * `content` fields untouched. Consumers reconstruct legacy payloads from the
- * returned parts when necessary.
- */
-export async function updateMessagePartsById({
-  id,
-  parts,
-  attachments,
-}: {
-  id: string;
-  parts: ChatMessage["parts"];
-  attachments: Attachment[];
-}) {
-  if (isTestEnvironment()) {
-    const store = getInMemoryStore();
-    const messageRecord = store.messages.get(id);
-
-    if (messageRecord) {
-      store.messages.set(id, {
-        ...messageRecord,
-        parts,
-        attachments,
-      });
-    }
-
-    return;
-  }
-
-  try {
-    const database = getRequiredDatabase();
-    await database
-      .update(message)
-      .set({
-        parts,
-        attachments,
-      })
-      .where(eq(message.id, id));
-  } catch (_error) {
-    throw new ChatSDKError(
-      "bad_request:database",
-      "Failed to update message parts by id"
-    );
-  }
-}
-
 export async function deleteMessagesByChatIdAfterTimestamp({
   chatId,
   timestamp,
-  excludeMessageId,
 }: {
   chatId: string;
   timestamp: Date;
-  /**
-   * Preserve the anchor message while purging siblings created at the exact
-   * same millisecond – a scenario observed during mocked streaming where both
-   * the user prompt and assistant reply share the same `createdAt` value.
-   */
-  excludeMessageId?: string;
 }) {
   if (isTestEnvironment()) {
     const store = getInMemoryStore();
-    const cutoffTime = timestamp.getTime();
     const messagesToDelete = Array.from(store.messages.values()).filter(
-      (messageRecord) => {
-        if (messageRecord.chatId !== chatId) {
-          return false;
-        }
-
-        const createdAtMs = new Date(messageRecord.createdAt).getTime();
-        const strictlyAfter = createdAtMs > cutoffTime;
-        const sharesTimestamp =
-          excludeMessageId !== undefined &&
-          createdAtMs === cutoffTime &&
-          messageRecord.id !== excludeMessageId;
-
-        return strictlyAfter || sharesTimestamp;
-      }
+      (messageRecord) =>
+        messageRecord.chatId === chatId &&
+        new Date(messageRecord.createdAt) >= timestamp
     );
 
     for (const messageRecord of messagesToDelete) {
@@ -1238,17 +1170,12 @@ export async function deleteMessagesByChatIdAfterTimestamp({
 
   try {
     const database = getRequiredDatabase();
-    const cutoffCondition = excludeMessageId
-      ? or(
-          gt(message.createdAt, timestamp),
-          and(eq(message.createdAt, timestamp), ne(message.id, excludeMessageId))
-        )
-      : gt(message.createdAt, timestamp);
-
     const messagesToDelete = await database
       .select({ id: message.id })
       .from(message)
-      .where(and(eq(message.chatId, chatId), cutoffCondition));
+      .where(
+        and(eq(message.chatId, chatId), gte(message.createdAt, timestamp))
+      );
 
     const messageIds = messagesToDelete.map(
       (currentMessage) => currentMessage.id
