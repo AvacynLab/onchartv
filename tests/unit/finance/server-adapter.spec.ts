@@ -30,6 +30,9 @@ describe("getMarketDataAdapter", () => {
 
   it("falls back to mocks when the feature flag lacks configuration", async () => {
     process.env.FEATURE_USE_REAL_DATA = "true";
+    // Ensure credentials are absent so the factory exercises the fallback branch
+    delete process.env.MARKET_DATA_API_BASE_URL;
+    delete process.env.MARKET_DATA_API_KEY;
     const logging = await import("@/lib/logging");
     const warnSpy = vi
       .spyOn(logging, "logWarning")
