@@ -145,16 +145,30 @@ export function MessageEditor({
             try {
               emitPlaywrightSignal("submit");
 
-              const preservedNonTextParts = (message.parts ?? []).filter(
-                (part): part is NonTextPart => part.type !== "text"
-              );
+              const existingParts = Array.isArray(message.parts)
+                ? message.parts
+                : [];
 
-              const updatedParts = [
-                ...preservedNonTextParts,
-                { type: "text", text: draftContent },
-              ] as ChatMessage["parts"];
+              const updatedParts: ChatMessage["parts"] = [];
+              let textPartReplaced = false;
 
-              const attachmentsForPersistence: Attachment[] = preservedNonTextParts
+              for (const part of existingParts) {
+                if (part.type === "text") {
+                  if (!textPartReplaced) {
+                    updatedParts.push({ type: "text", text: draftContent });
+                    textPartReplaced = true;
+                  }
+                  continue;
+                }
+
+                updatedParts.push(part as NonTextPart);
+              }
+
+              if (!textPartReplaced) {
+                updatedParts.push({ type: "text", text: draftContent });
+              }
+
+              const attachmentsForPersistence: Attachment[] = updatedParts
                 .filter((part): part is FilePart => part.type === "file")
                 .map((part) => {
                   const namedPart = part as {
@@ -204,32 +218,42 @@ export function MessageEditor({
                 if (typeof existingContent === "string") {
                   updatedMessage.content = draftContent;
                 } else if (Array.isArray(existingContent)) {
-                  const preservedContentEntries = existingContent.filter(
-                    (entry) => {
-                      if (entry == null) {
-                        return false;
-                      }
+                  const rebuiltContent: Array<Record<string, unknown>> = [];
+                  let contentTextReplaced = false;
 
-                      if (typeof entry === "string") {
-                        return false;
-                      }
-
-                      if (
-                        typeof entry === "object" &&
-                        "type" in entry &&
-                        entry.type === "text"
-                      ) {
-                        return false;
-                      }
-
-                      return true;
+                  for (const entry of existingContent) {
+                    if (entry == null) {
+                      continue;
                     }
-                  );
 
-                  updatedMessage.content = [
-                    ...preservedContentEntries,
-                    { type: "text", text: draftContent },
-                  ];
+                    if (typeof entry === "string") {
+                      if (!contentTextReplaced) {
+                        rebuiltContent.push({ type: "text", text: draftContent });
+                        contentTextReplaced = true;
+                      }
+                      continue;
+                    }
+
+                    if (
+                      typeof entry === "object" &&
+                      "type" in entry &&
+                      entry.type === "text"
+                    ) {
+                      if (!contentTextReplaced) {
+                        rebuiltContent.push({ type: "text", text: draftContent });
+                        contentTextReplaced = true;
+                      }
+                      continue;
+                    }
+
+                    rebuiltContent.push(entry as Record<string, unknown>);
+                  }
+
+                  if (!contentTextReplaced) {
+                    rebuiltContent.push({ type: "text", text: draftContent });
+                  }
+
+                  updatedMessage.content = rebuiltContent as typeof updatedMessage.content;
                 }
               }
 
