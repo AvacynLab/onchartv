@@ -205,7 +205,9 @@ export async function setupFinanceApiMocks(
     const OriginalDate = Date;
     class FixedDate extends OriginalDate {
       constructor(...args: ConstructorParameters<typeof OriginalDate>) {
-        if (args.length === 0) {
+        // When Playwright instantiates the mocked Date without arguments we must return the
+        // frozen timestamp; relying on args[0] keeps TypeScript happy with the variadic overloads.
+        if (args[0] === undefined) {
           super(fixed);
         } else {
           super(...args);
@@ -297,7 +299,8 @@ export async function setupFinanceApiMocks(
       if (!upstreamResponse.ok) {
         const body = await upstreamResponse.text();
         await route.fulfill({
-          status: upstreamResponse.status,
+          // Playwright exposes status as a function; call it to obtain the numeric code.
+          status: upstreamResponse.status(),
           headers: upstreamResponse.headers(),
           body,
         });
