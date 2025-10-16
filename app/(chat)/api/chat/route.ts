@@ -617,6 +617,26 @@ export async function POST(request: Request) {
         );
         resolvedParts = persistedParts;
       }
+    } else if (
+      /**
+       * Legacy clients (or in-flight edits triggered before the UI applies the
+       * metadata patch) might omit the `clientTextSignature`. In that case we
+       * conservatively compare the raw text fragments and prefer the incoming
+       * prompt when it clearly differs from the persisted record.
+       */
+      incomingSignature.length > 0 &&
+      persistedSignature.length > 0 &&
+      incomingSignature !== persistedSignature
+    ) {
+      logWarning(
+        "chat:message",
+        "No client signature provided; using incoming parts because the persisted text diverges",
+        {
+          incomingSignature,
+          persistedSignature,
+        }
+      );
+      resolvedParts = incomingParts;
     } else if (incomingSignature.length > 0 && persistedSignature.length === 0) {
       resolvedParts = incomingParts;
     } else {

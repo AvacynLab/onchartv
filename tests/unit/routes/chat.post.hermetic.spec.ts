@@ -434,4 +434,93 @@ describe("POST /api/chat hermetic finance flow", () => {
       convertSpy.mockRestore();
     }
   });
+
+  it("accepte les fragments entrants quand la signature client est absente mais le texte diverge", async () => {
+    const convertModule = await import(
+      "@/lib/ai/messages/convert-to-model-messages"
+    );
+    const convertSpy = vi.spyOn(convertModule, "convertToModelMessages");
+
+    const loggingModule = await import("@/lib/logging");
+    const warnSpy = vi.spyOn(loggingModule, "logWarning");
+
+    const { POST } = await import("@/app/(chat)/api/chat/route");
+    const { saveChat, saveMessages } = await import("@/lib/db/queries");
+
+    const chatId = "cccccccc-cccc-4ccc-accc-cccccccccccc";
+    const messageId = "dddddddd-dddd-4ddd-addd-dddddddddddd";
+    const stalePrompt = "Why is grass green?";
+    const freshPrompt = "Why is the sky blue?";
+
+    await saveChat({
+      id: chatId,
+      userId: "regular-user-1",
+      title: "Edited chat without signature",
+      visibility: "private",
+    });
+
+    await saveMessages({
+      messages: [
+        {
+          chatId,
+          id: messageId,
+          role: "user",
+          parts: [{ type: "text", text: stalePrompt }],
+          attachments: [],
+          artifacts: [],
+          createdAt: new Date("2024-01-01T00:00:00.000Z"),
+        },
+      ],
+    });
+
+    const request = new Request("https://example.com/api/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        id: chatId,
+        message: {
+          id: messageId,
+          role: "user" as const,
+          parts: [{ type: "text" as const, text: freshPrompt }],
+          metadata: {},
+        },
+        selectedChatModel: "chat-model" as const,
+        selectedVisibilityType: "private" as const,
+      }),
+    });
+
+    try {
+      const response = await POST(request);
+      expect(response.status).toBe(200);
+
+      const lastCall = convertSpy.mock.calls.at(-1);
+      const streamedTexts = Array.isArray(lastCall?.[0])
+        ? lastCall![0].flatMap((chatMessage) =>
+            Array.isArray(chatMessage.parts)
+              ? chatMessage.parts
+                  .filter(
+                    (part): part is { type: "text"; text: string } =>
+                      part?.type === "text"
+                  )
+                  .map((part) => part.text)
+              : []
+          )
+        : [];
+
+      expect(streamedTexts).toContain(freshPrompt);
+      expect(streamedTexts).not.toContain(stalePrompt);
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        "chat:message",
+        expect.stringContaining("No client signature provided"),
+        expect.objectContaining({
+          incomingSignature: freshPrompt,
+          persistedSignature: stalePrompt,
+        })
+      );
+    } finally {
+      convertSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
 });
