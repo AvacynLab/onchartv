@@ -248,6 +248,12 @@ function rebuildMessageParts(
   let textFragmentReplaced = false;
 
   for (const part of existingParts) {
+    /**
+     * The AI SDK emits both `text` parts (with a `type` discriminator) and
+     * legacy fragments that surface the edited prompt through an
+     * `input_text` property without an accompanying `type`. We branch on both
+     * shapes while keeping the guards type-safe for the UIMessagePart union.
+     */
     if (part?.type === "text") {
       if (!textFragmentReplaced) {
         updatedParts.push({ ...part, text: nextText });
@@ -257,9 +263,28 @@ function rebuildMessageParts(
       continue;
     }
 
-    if (part?.type === "input_text") {
+    const hasInputText =
+      typeof part === "object" &&
+      part !== null &&
+      "input_text" in part &&
+      typeof (part as { input_text?: unknown }).input_text === "string";
+
+    if (hasInputText) {
       if (!textFragmentReplaced) {
-        updatedParts.push({ ...part, input_text: nextText });
+        /**
+         * The discriminated union exposed by the AI SDK does not formally
+         * define the legacy `input_text` fragment, therefore we clone the
+         * original part as a generic record and cast it back to a
+         * UIMessagePart after injecting the edited payload.
+         */
+        const updatedInputTextPart = {
+          ...(part as Record<string, unknown>),
+          input_text: nextText,
+        } as Record<string, unknown>;
+
+        updatedParts.push(
+          updatedInputTextPart as unknown as ChatMessage["parts"][number]
+        );
         textFragmentReplaced = true;
       }
 
