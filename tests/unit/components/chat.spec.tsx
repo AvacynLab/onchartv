@@ -224,6 +224,68 @@ describe("Chat", () => {
     expect(latestArtifactMessages).toHaveLength(0);
   });
 
+  it("privilégie le message fourni lors de la préparation de la requête", () => {
+    render(
+      <Chat
+        autoResume={false}
+        id="chat-prepare"
+        initialChatModel="model"
+        initialLastContext={undefined}
+        initialMessages={[]}
+        initialVisibilityType="private"
+        isReadonly={false}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    const transportInstance = latestUseChatConfig?.transport as
+      | { options?: { prepareSendMessagesRequest?: Function } }
+      | undefined;
+
+    expect(typeof transportInstance?.options?.prepareSendMessagesRequest).toBe(
+      "function"
+    );
+
+    const prepareSendMessagesRequest =
+      transportInstance?.options?.prepareSendMessagesRequest;
+
+    const prepared = prepareSendMessagesRequest?.({
+      id: "chat-prepare",
+      messages: [
+        {
+          id: "message-1",
+          role: "user",
+          parts: [{ type: "text", text: "Stale prompt" }],
+        },
+      ],
+      body: {
+        message: {
+          id: "message-1",
+          role: "user",
+          metadata: { createdAt: "2024-01-01T00:00:00.000Z" },
+          parts: [{ type: "text", text: "  Freshly trimmed prompt  " }],
+        },
+      },
+    });
+
+    expect(prepared).toEqual({
+      body: expect.objectContaining({
+        id: "chat-prepare",
+        selectedChatModel: "model",
+        selectedVisibilityType: "private",
+        message: {
+          id: "message-1",
+          role: "user",
+          metadata: {
+            createdAt: "2024-01-01T00:00:00.000Z",
+            clientTextSignature: "Freshly trimmed prompt",
+          },
+          parts: [{ type: "text", text: "  Freshly trimmed prompt  " }],
+        },
+      }),
+    });
+  });
+
   it("transmet le gestionnaire d'envoi sans lever d'exception", () => {
     mockMessages = [];
 

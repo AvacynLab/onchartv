@@ -10,6 +10,7 @@ import {
   useState,
 } from "react";
 import { deleteTrailingMessages, updateMessageParts } from "@/app/(chat)/actions";
+import { buildMessageTextSignature } from "@/lib/ai/messages/signature";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import { cn, getTextFromMessage } from "@/lib/utils";
 import { isAutomationRuntime } from "./utils/automation";
@@ -109,6 +110,21 @@ export function MessageEditor({
 
               const updatedParts = rebuildMessageParts(message, trimmedDraft);
               const updatedAttachments = cloneAttachments(message);
+
+              const updatedMetadata =
+                typeof message.metadata === "object" && message.metadata !== null
+                  ? { ...message.metadata }
+                  : {};
+
+              const updatedMessage: MessageWithAttachments = {
+                ...message,
+                parts: updatedParts,
+                attachments: updatedAttachments,
+                metadata: {
+                  ...updatedMetadata,
+                  clientTextSignature: buildMessageTextSignature(updatedParts),
+                },
+              };
               await updateMessageParts({
                 id: message.id,
                 parts: updatedParts,
@@ -123,12 +139,6 @@ export function MessageEditor({
                 }
 
                 const existingMessage = messages[index];
-                const updatedMessage: MessageWithAttachments = {
-                  ...existingMessage,
-                  parts: updatedParts,
-                  attachments: updatedAttachments,
-                };
-
                 return [...messages.slice(0, index), updatedMessage];
               });
 
@@ -140,7 +150,10 @@ export function MessageEditor({
                * the network roundtrip, matching the behaviour Playwright
                * expects during the edit flow.
                */
-              regenerationPromise = regenerate({ messageId: message.id });
+              regenerationPromise = regenerate({
+                messageId: message.id,
+                body: { message: updatedMessage },
+              });
 
               emitPlaywrightSignal("sent");
 

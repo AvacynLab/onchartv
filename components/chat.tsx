@@ -101,31 +101,53 @@ export function Chat({
       api: "/api/chat",
       fetch: fetchWithErrorHandlers,
       prepareSendMessagesRequest(request) {
-        const lastMessage = request.messages.at(-1);
-        const signature = buildMessageTextSignature(
-          Array.isArray(lastMessage?.parts) ? lastMessage.parts : []
-        );
+        const baseBody =
+          typeof request.body === "object" && request.body !== null
+            ? { ...(request.body as Record<string, unknown>) }
+            : {};
 
-        const messageWithSignature = lastMessage
-          ? {
-              ...lastMessage,
-              metadata: {
-                ...(typeof lastMessage.metadata === "object" && lastMessage.metadata
-                  ? lastMessage.metadata
-                  : {}),
-                clientTextSignature: signature,
-              },
-            }
-          : lastMessage;
+        const providedMessage =
+          typeof baseBody.message === "object" && baseBody.message !== null
+            ? (baseBody.message as ChatMessage)
+            : undefined;
+
+        const lastMessage = providedMessage ?? request.messages.at(-1);
+
+        let messageWithSignature: ChatMessage | undefined;
+
+        if (lastMessage) {
+          const parts = Array.isArray(lastMessage.parts)
+            ? lastMessage.parts
+            : [];
+
+          const signature = buildMessageTextSignature(parts);
+          const existingMetadata =
+            typeof lastMessage.metadata === "object" && lastMessage.metadata !== null
+              ? { ...lastMessage.metadata }
+              : {};
+
+          messageWithSignature = {
+            ...lastMessage,
+            metadata: {
+              ...existingMetadata,
+              clientTextSignature: signature,
+            },
+          };
+        }
+
+        const bodyPayload: Record<string, unknown> = {
+          ...baseBody,
+          id: request.id,
+          selectedChatModel: currentModelIdRef.current,
+          selectedVisibilityType: visibilityType,
+        };
+
+        if (messageWithSignature) {
+          bodyPayload.message = messageWithSignature;
+        }
 
         return {
-          body: {
-            id: request.id,
-            message: messageWithSignature,
-            selectedChatModel: currentModelIdRef.current,
-            selectedVisibilityType: visibilityType,
-            ...request.body,
-          },
+          body: bodyPayload,
         };
       },
     }),

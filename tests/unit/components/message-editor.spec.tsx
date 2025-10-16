@@ -113,12 +113,22 @@ describe("MessageEditor", () => {
     expect(regenerate).toHaveBeenCalledTimes(1);
     expect(regenerate).toHaveBeenCalledWith({
       messageId: baseMessage.id,
+      body: {
+        message: {
+          ...baseMessage,
+          attachments: [],
+          parts: [{ type: "text", text: "Edited reasoning prompt" }],
+          metadata: { clientTextSignature: "Edited reasoning prompt" },
+        },
+      },
     });
     expect(setMode).toHaveBeenCalledWith("view");
 
     expect(messages).toEqual([
       {
         ...baseMessage,
+        attachments: [],
+        metadata: { clientTextSignature: "Edited reasoning prompt" },
         parts: [{ type: "text", text: "Edited reasoning prompt" }],
       },
     ]);
@@ -213,6 +223,27 @@ describe("MessageEditor", () => {
     expect(regenerate).toHaveBeenCalledTimes(1);
     expect(regenerate).toHaveBeenCalledWith({
       messageId: messageWithAttachment.id,
+      body: {
+        message: {
+          ...messageWithAttachment,
+          attachments: [
+            { name: "image.png", url: "https://example.com/image.png", contentType: "image/png" },
+          ],
+          parts: [
+            {
+              type: "file",
+              url: "https://example.com/image.png",
+              name: "image.png",
+              mediaType: "image/png",
+            },
+            { type: "text", text: "Edited attachment prompt" },
+          ],
+          metadata: {
+            ...(messageWithAttachment.metadata ?? {}),
+            clientTextSignature: "Edited attachment prompt",
+          },
+        },
+      },
     });
     expect(setMode).toHaveBeenCalledWith("view");
     const attachmentUpdateArgs =
@@ -254,6 +285,10 @@ describe("MessageEditor", () => {
           },
           { type: "text", text: "Edited attachment prompt" },
         ],
+        metadata: {
+          ...(messageWithAttachment.metadata ?? {}),
+          clientTextSignature: "Edited attachment prompt",
+        },
       },
     ]);
   });
