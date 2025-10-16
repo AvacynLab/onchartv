@@ -158,8 +158,15 @@ export function MessageEditor({
                   return messages;
                 }
 
-                const existingMessage = messages[index];
-                return [...messages.slice(0, index), updatedMessage];
+                const leadingMessages = messages.slice(0, index);
+
+                /**
+                 * Drop any trailing messages so the UI mirrors the database
+                 * state after `deleteTrailingMessages` removes stale assistant
+                 * responses. Keeping only the edited user prompt ensures the
+                 * upcoming regeneration starts from a clean slate.
+                 */
+                return [...leadingMessages, updatedMessage];
               });
 
               /**

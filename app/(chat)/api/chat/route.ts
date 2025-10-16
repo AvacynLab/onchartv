@@ -596,74 +596,54 @@ export async function POST(request: Request) {
       return typeof signature === "string" ? signature.trim() : null;
     })();
 
+    const incomingHasText = incomingSignature.length > 0;
+    const persistedHasText = persistedSignature.length > 0;
+    const signaturesMatch =
+      incomingHasText &&
+      persistedHasText &&
+      incomingSignature === persistedSignature;
+
     let resolvedParts: ChatMessage["parts"];
 
-    if (!persistedParts || persistedParts.length === 0 || persistedSignature.length === 0) {
-      resolvedParts = incomingParts;
-    } else if (clientSignature) {
-      if (clientSignature === persistedSignature) {
-        if (
-          incomingSignature.length > 0 &&
-          incomingSignature !== persistedSignature
-        ) {
-          /**
-           * Guard against stale metadata. Older clients (or UI race conditions
-           * when regenerating immediately after editing) may reuse the
-           * previous signature even though the text payload already diverged.
-           * Prefer the incoming fragments so the provider always sees the
-           * latest prompt and surface a warning to help diagnose the mismatch.
-           */
+    if (incomingHasText) {
+      const clientMatchesPersisted =
+        typeof clientSignature === "string" && clientSignature === persistedSignature;
+
+      if (
+        signaturesMatch &&
+        persistedParts &&
+        (clientSignature == null || clientMatchesPersisted)
+      ) {
+        resolvedParts = persistedParts;
+      } else {
+        if (persistedHasText && !signaturesMatch) {
           logWarning(
             "chat:message",
-            "Client signature matched persisted text but the incoming payload diverged; using incoming parts",
+            "Incoming text signature diverged from the persisted record; using incoming parts",
             {
               clientSignature,
-              persistedSignature,
               incomingSignature,
+              persistedSignature,
             }
           );
-          resolvedParts = incomingParts;
-        } else {
-          resolvedParts = persistedParts;
+        } else if (signaturesMatch && clientSignature && !clientMatchesPersisted) {
+          logWarning(
+            "chat:message",
+            "Client signature disagrees with the persisted record despite matching payload; using incoming parts",
+            {
+              clientSignature,
+              incomingSignature,
+              persistedSignature,
+            }
+          );
         }
-      } else if (clientSignature === incomingSignature) {
+
         resolvedParts = incomingParts;
-      } else {
-        logWarning(
-          "chat:message",
-          "Client and persisted text signatures diverge; defaulting to persisted parts",
-          {
-            clientSignature,
-            persistedSignature,
-            incomingSignature,
-          }
-        );
-        resolvedParts = persistedParts;
       }
-    } else if (
-      /**
-       * Legacy clients (or in-flight edits triggered before the UI applies the
-       * metadata patch) might omit the `clientTextSignature`. In that case we
-       * conservatively compare the raw text fragments and prefer the incoming
-       * prompt when it clearly differs from the persisted record.
-       */
-      incomingSignature.length > 0 &&
-      persistedSignature.length > 0 &&
-      incomingSignature !== persistedSignature
-    ) {
-      logWarning(
-        "chat:message",
-        "No client signature provided; using incoming parts because the persisted text diverges",
-        {
-          incomingSignature,
-          persistedSignature,
-        }
-      );
-      resolvedParts = incomingParts;
-    } else if (incomingSignature.length > 0 && persistedSignature.length === 0) {
-      resolvedParts = incomingParts;
-    } else {
+    } else if (persistedParts) {
       resolvedParts = persistedParts;
+    } else {
+      resolvedParts = incomingParts;
     }
 
     const resolvedAttachments: Attachment[] = Array.isArray(

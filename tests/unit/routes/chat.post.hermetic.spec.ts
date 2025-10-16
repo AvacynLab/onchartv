@@ -435,7 +435,7 @@ describe("POST /api/chat hermetic finance flow", () => {
 
       expect(warnSpy).toHaveBeenCalledWith(
         "chat:message",
-        expect.stringContaining("Client signature matched persisted text"),
+        expect.stringContaining("Incoming text signature diverged"),
         expect.objectContaining({
           clientSignature: persistedPrompt,
           persistedSignature: persistedPrompt,
@@ -601,7 +601,7 @@ describe("POST /api/chat hermetic finance flow", () => {
 
       expect(warnSpy).toHaveBeenCalledWith(
         "chat:message",
-        expect.stringContaining("No client signature provided"),
+        expect.stringContaining("Incoming text signature diverged"),
         expect.objectContaining({
           incomingSignature: freshPrompt,
           persistedSignature: stalePrompt,
