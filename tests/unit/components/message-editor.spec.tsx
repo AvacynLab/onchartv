@@ -52,6 +52,16 @@ describe("MessageEditor", () => {
     }).__PLAYWRIGHT_CHAT_SIGNALS__;
   });
 
+  const flushAsyncUpdates = async () => {
+    await act(async () => {
+      if (typeof vi.isFakeTimers === "function" && vi.isFakeTimers()) {
+        vi.runAllTimers();
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    });
+  };
+
   it("flushes the edited prompt before triggering a regeneration", async () => {
     const setMode = vi.fn();
     let messages: ChatMessage[] = [
@@ -100,9 +110,7 @@ describe("MessageEditor", () => {
       fireEvent.click(submit);
     });
 
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
+    await flushAsyncUpdates();
 
     const updateArgs =
       updateMessagePartsMock.mock.calls[updateMessagePartsMock.mock.calls.length - 1]?.[0];
@@ -226,9 +234,7 @@ describe("MessageEditor", () => {
       fireEvent.click(submit);
     });
 
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
+    await flushAsyncUpdates();
 
     expect(regenerate).toHaveBeenCalledTimes(1);
     expect(regenerate).toHaveBeenCalledWith({
@@ -354,9 +360,7 @@ describe("MessageEditor", () => {
       fireEvent.click(submit);
     });
 
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
+    await flushAsyncUpdates();
 
     expect(updateMessagePartsMock).toHaveBeenCalledWith({
       id: inputTextMessage.id,
@@ -447,9 +451,7 @@ describe("MessageEditor", () => {
       fireEvent.click(submit);
     });
 
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
+    await flushAsyncUpdates();
 
     expect(messages).toEqual([
       {

@@ -296,6 +296,17 @@ function PureMessages({
 
 export const Messages = memo(PureMessages, (prevProps, nextProps) => {
   /**
+   * Some chat updates (notably finance artefacts and inline edit regenerations)
+   * mutate the existing messages array in place while streaming new parts.
+   * When React receives the same reference we cannot safely assume the payload
+   * stayed identical, so opt-out of memoisation to force a re-render and surface
+   * the refreshed assistant content/artifacts.
+   */
+  if (prevProps.messages === nextProps.messages) {
+    return false;
+  }
+
+  /**
    * When the finance artefact modal is open we still need to surface new
    * assistant replies (for example follow-up prompts or edits). Only skip the
    * render when the visibility flag itself changed; otherwise fall back to the
