@@ -19,7 +19,7 @@ const AUTOMATION_BRIDGE_ID = "automation-toast-bridge";
  * successful action. Eight seconds keeps the helper generous without delaying
  * real users because the bridge only renders in automation contexts.
  */
-const AUTOMATION_TOAST_LIFETIME_MS = 8_000;
+export const AUTOMATION_TOAST_LIFETIME_MS = 8_000;
 const automationTimers = new WeakMap<HTMLElement, number>();
 
 function clearAutomationTimer(element: HTMLElement | null) {

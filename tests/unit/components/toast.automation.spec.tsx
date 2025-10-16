@@ -13,10 +13,9 @@ vi.mock("sonner", () => ({
   },
 }));
 
-import { toast } from "@/components/toast";
+import { toast, AUTOMATION_TOAST_LIFETIME_MS } from "@/components/toast";
 
 const AUTOMATION_BRIDGE_ID = "automation-toast-bridge";
-const AUTOMATION_TOAST_LIFETIME_MS = 4_000;
 
 describe("toast automation bridge", () => {
   let originalWebdriver: boolean | undefined;
