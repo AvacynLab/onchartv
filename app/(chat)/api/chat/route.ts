@@ -595,10 +595,13 @@ export async function POST(request: Request) {
       ? (persistedMessage!.attachments as Attachment[])
       : extractAttachments(resolvedParts);
 
+    // Attachments are persisted alongside the chat record but the UI message
+    // contract mirrors `UIMessage` which does not expose an attachments field.
+    // Returning the pared-down shape keeps the in-flight stream compatible
+    // while the saved database row still retains the uploaded assets.
     const resolvedMessage: ChatMessage = {
       ...message,
       parts: resolvedParts,
-      attachments: resolvedAttachments,
     };
 
     const updatedMessagesFromDb = persistedMessage
