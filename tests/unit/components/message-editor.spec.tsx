@@ -60,6 +60,11 @@ describe("MessageEditor", () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
       }
     });
+
+    // Ensure any remaining microtasks (e.g. resolved Promises scheduled by the
+    // async event handler) complete before the assertions run. This keeps the
+    // helper compatible with both real and mocked timers.
+    await Promise.resolve();
   };
 
   it("flushes the edited prompt before triggering a regeneration", async () => {
@@ -96,7 +101,7 @@ describe("MessageEditor", () => {
       />
     );
 
-    const editor = await screen.findByTestId("message-editor");
+    const editor = screen.getByTestId("message-editor");
 
     await act(async () => {
       fireEvent.change(editor, {
@@ -220,7 +225,7 @@ describe("MessageEditor", () => {
       />
     );
 
-    const editor = await screen.findByTestId("message-editor");
+    const editor = screen.getByTestId("message-editor");
 
     await act(async () => {
       fireEvent.change(editor, {
@@ -346,7 +351,7 @@ describe("MessageEditor", () => {
       />
     );
 
-    const editor = await screen.findByTestId("message-editor");
+    const editor = screen.getByTestId("message-editor");
 
     await act(async () => {
       fireEvent.change(editor, {
