@@ -295,29 +295,41 @@ function PureMessages({
 }
 
 export const Messages = memo(PureMessages, (prevProps, nextProps) => {
-  if (prevProps.isArtifactVisible && nextProps.isArtifactVisible) {
-    return true;
+  /**
+   * When the finance artefact modal is open we still need to surface new
+   * assistant replies (for example follow-up prompts or edits). Only skip the
+   * render when the visibility flag itself changed; otherwise fall back to the
+   * granular comparisons below so fresh messages are not accidentally dropped.
+   */
+  if (prevProps.isArtifactVisible !== nextProps.isArtifactVisible) {
+    return false;
   }
 
   if (prevProps.status !== nextProps.status) {
     return false;
   }
+
   if (prevProps.selectedModelId !== nextProps.selectedModelId) {
     return false;
   }
+
   const prevMessages = prevProps.messages ?? [];
   const nextMessages = nextProps.messages ?? [];
+
   if (prevMessages.length !== nextMessages.length) {
     return false;
   }
+
   if (!equal(prevMessages, nextMessages)) {
     return false;
   }
+
   const prevVotes = prevProps.votes ?? [];
   const nextVotes = nextProps.votes ?? [];
+
   if (!equal(prevVotes, nextVotes)) {
     return false;
   }
 
-  return false;
+  return true;
 });
