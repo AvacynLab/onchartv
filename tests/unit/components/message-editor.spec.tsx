@@ -34,7 +34,10 @@ describe("MessageEditor", () => {
   const baseMessage: EditableChatMessage = {
     id: "message-id",
     role: "user",
-    parts: [{ type: "text", text: "Original prompt" }],
+    parts: [
+      { type: "text", text: "Original prompt" },
+      { type: "text", text: "Duplicate prompt fragment" },
+    ],
     attachments: [],
     metadata: { createdAt: "2024-01-01T00:00:00.000Z" },
   };

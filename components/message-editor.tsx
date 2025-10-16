@@ -236,16 +236,28 @@ function rebuildMessageParts(
     ? originalMessage.parts
     : [];
 
+  /**
+   * Replace the first textual fragment with the freshly edited prompt while
+   * discarding any additional text fragments that may linger from previous
+   * submissions. This guarantees the server receives a single authoritative
+   * prompt and prevents stale copies of the original text from skewing the
+   * signature comparison logic.
+   */
+  const updatedParts: ChatMessage["parts"] = [];
   let textFragmentReplaced = false;
 
-  const updatedParts = existingParts.map((part) => {
-    if (part?.type === "text" && !textFragmentReplaced) {
-      textFragmentReplaced = true;
-      return { ...part, text: nextText };
+  for (const part of existingParts) {
+    if (part?.type === "text") {
+      if (!textFragmentReplaced) {
+        updatedParts.push({ ...part, text: nextText });
+        textFragmentReplaced = true;
+      }
+
+      continue;
     }
 
-    return part;
-  });
+    updatedParts.push(part);
+  }
 
   if (!textFragmentReplaced) {
     updatedParts.push({ type: "text", text: nextText });
