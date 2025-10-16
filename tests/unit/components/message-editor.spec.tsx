@@ -36,6 +36,7 @@ describe("MessageEditor", () => {
     role: "user",
     parts: [{ type: "text", text: "Original prompt" }],
     attachments: [],
+    metadata: { createdAt: "2024-01-01T00:00:00.000Z" },
   };
 
   beforeEach(() => {
@@ -118,7 +119,10 @@ describe("MessageEditor", () => {
           ...baseMessage,
           attachments: [],
           parts: [{ type: "text", text: "Edited reasoning prompt" }],
-          metadata: { clientTextSignature: "Edited reasoning prompt" },
+          metadata: {
+            createdAt: baseMessage.metadata?.createdAt,
+            clientTextSignature: "Edited reasoning prompt",
+          },
         },
       },
     });
@@ -128,7 +132,10 @@ describe("MessageEditor", () => {
       {
         ...baseMessage,
         attachments: [],
-        metadata: { clientTextSignature: "Edited reasoning prompt" },
+        metadata: {
+          createdAt: baseMessage.metadata?.createdAt,
+          clientTextSignature: "Edited reasoning prompt",
+        },
         parts: [{ type: "text", text: "Edited reasoning prompt" }],
       },
     ]);

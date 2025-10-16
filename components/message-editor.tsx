@@ -11,7 +11,8 @@ import {
 } from "react";
 import { deleteTrailingMessages, updateMessageParts } from "@/app/(chat)/actions";
 import { buildMessageTextSignature } from "@/lib/ai/messages/signature";
-import type { Attachment, ChatMessage } from "@/lib/types";
+import type { Attachment, ChatMessage, MessageMetadata } from "@/lib/types";
+import { messageMetadataSchema } from "@/lib/types";
 import { cn, getTextFromMessage } from "@/lib/utils";
 import { isAutomationRuntime } from "./utils/automation";
 import { Button } from "./ui/button";
@@ -111,19 +112,38 @@ export function MessageEditor({
               const updatedParts = rebuildMessageParts(message, trimmedDraft);
               const updatedAttachments = cloneAttachments(message);
 
-              const updatedMetadata =
+              const signature = buildMessageTextSignature(updatedParts);
+
+              const rawMetadata =
                 typeof message.metadata === "object" && message.metadata !== null
-                  ? { ...message.metadata }
+                  ? message.metadata
                   : {};
+
+              const metadataCandidate = {
+                ...rawMetadata,
+                createdAt:
+                  typeof (rawMetadata as { createdAt?: unknown }).createdAt === "string"
+                    ? (rawMetadata as { createdAt: string }).createdAt
+                    : new Date().toISOString(),
+              };
+
+              const metadataResult = messageMetadataSchema.safeParse(metadataCandidate);
+
+              const updatedMetadata: MessageMetadata = metadataResult.success
+                ? {
+                    ...metadataResult.data,
+                    clientTextSignature: signature,
+                  }
+                : {
+                    createdAt: new Date().toISOString(),
+                    clientTextSignature: signature,
+                  };
 
               const updatedMessage: MessageWithAttachments = {
                 ...message,
                 parts: updatedParts,
                 attachments: updatedAttachments,
-                metadata: {
-                  ...updatedMetadata,
-                  clientTextSignature: buildMessageTextSignature(updatedParts),
-                },
+                metadata: updatedMetadata,
               };
               await updateMessageParts({
                 id: message.id,

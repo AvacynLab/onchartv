@@ -13,7 +13,8 @@ import { useChatVisibility } from "@/hooks/use-chat-visibility";
 import type { Vote } from "@/lib/db/schema";
 import { buildMessageTextSignature } from "@/lib/ai/messages/signature";
 import { ChatSDKError } from "@/lib/errors";
-import type { Attachment, ChatMessage } from "@/lib/types";
+import type { Attachment, ChatMessage, MessageMetadata } from "@/lib/types";
+import { messageMetadataSchema } from "@/lib/types";
 import type { AppUsage } from "@/lib/usage";
 import { fetcher, fetchWithErrorHandlers, generateUUID } from "@/lib/utils";
 import {
@@ -121,17 +122,41 @@ export function Chat({
             : [];
 
           const signature = buildMessageTextSignature(parts);
-          const existingMetadata =
+          const rawMetadata =
             typeof lastMessage.metadata === "object" && lastMessage.metadata !== null
-              ? { ...lastMessage.metadata }
+              ? lastMessage.metadata
               : {};
+
+          /**
+           * Nous nous assurons que les métadonnées disposent toujours d'un
+           * horodatage valide afin de satisfaire le schéma partagé
+           * `messageMetadataSchema`. Les prompts édités peuvent ne fournir
+           * qu'une empreinte client : nous reconstruisons donc un objet
+           * complet avant de lui adjoindre la nouvelle signature.
+           */
+          const metadataCandidate = {
+            ...rawMetadata,
+            createdAt:
+              typeof (rawMetadata as { createdAt?: unknown }).createdAt === "string"
+                ? (rawMetadata as { createdAt: string }).createdAt
+                : new Date().toISOString(),
+          };
+
+          const metadataResult = messageMetadataSchema.safeParse(metadataCandidate);
+
+          const metadataWithSignature: MessageMetadata = metadataResult.success
+            ? {
+                ...metadataResult.data,
+                clientTextSignature: signature,
+              }
+            : {
+                createdAt: new Date().toISOString(),
+                clientTextSignature: signature,
+              };
 
           messageWithSignature = {
             ...lastMessage,
-            metadata: {
-              ...existingMetadata,
-              clientTextSignature: signature,
-            },
+            metadata: metadataWithSignature,
           };
         }
 
