@@ -105,6 +105,7 @@ export function MessageEditor({
             let regenerationPromise: Promise<unknown> | undefined;
 
             try {
+              const removalCutoffIso = new Date().toISOString();
               await deleteTrailingMessages({
                 id: message.id,
               });
@@ -159,14 +160,35 @@ export function MessageEditor({
                 }
 
                 const leadingMessages = messages.slice(0, index);
+                const trailingMessages = messages.slice(index + 1);
+
+                /**
+                 * Preserve any trailing messages that were appended after the edit
+                 * sequence began (for example, when the provider streams a fresh
+                 * assistant reply before the reducer runs). Comparing the
+                 * `createdAt` metadata against the cutoff keeps newly generated
+                 * responses intact while still pruning the stale assistant reply
+                 * that belongs to the previous prompt.
+                 */
+                const preservedTrailing = trailingMessages.filter((trailing) => {
+                  const createdAt = extractCreatedAt(trailing);
+
+                  if (!createdAt) {
+                    return false;
+                  }
+
+                  return createdAt > removalCutoffIso;
+                });
 
                 /**
                  * Drop any trailing messages so the UI mirrors the database
                  * state after `deleteTrailingMessages` removes stale assistant
                  * responses. Keeping only the edited user prompt ensures the
-                 * upcoming regeneration starts from a clean slate.
+                 * upcoming regeneration starts from a clean slate. Newer
+                 * trailing entries (for example already-streamed assistant
+                 * replies) are re-appended so concurrent updates are not lost.
                  */
-                return [...leadingMessages, updatedMessage];
+                return [...leadingMessages, updatedMessage, ...preservedTrailing];
               });
 
               /**
@@ -299,6 +321,18 @@ function rebuildMessageParts(
   }
 
   return updatedParts;
+}
+
+function extractCreatedAt(message: ChatMessage): string | null {
+  if (typeof message.metadata !== "object" || message.metadata === null) {
+    return null;
+  }
+
+  const candidate = (message.metadata as { createdAt?: unknown }).createdAt;
+
+  return typeof candidate === "string" && candidate.length > 0
+    ? candidate
+    : null;
 }
 
 function emitPlaywrightSignal(phase: "submit" | "sent" | "error") {
