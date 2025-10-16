@@ -169,6 +169,23 @@ export class ChatPage {
   private pendingComposerPrefill: string | null = null;
 
   /**
+   * Track the in-flight chat response watcher so flows that skip the immediate
+   * await (for example stop-button assertions) can still surface transport
+   * failures once the UI polling completes. Any rejection captured here is
+   * rethrown the next time `isGenerationComplete` runs to keep diagnostics
+   * deterministic across delayed awaits.
+   */
+  private pendingChatResponseWatcher: Promise<void> | null = null;
+
+  /**
+   * Buffer any error emitted by the deferred chat response watcher so the next
+   * completion check can surface the failure even if the original submission
+   * returned control early (for example when tests intentionally avoid waiting
+   * for the full stream to exercise the stop button).
+   */
+  private pendingChatResponseError: Error | null = null;
+
+  /**
    * Remember whether the suggested actions panel was visible before dispatching
    * the next submission. Suggested quick actions hide the grid immediately
    * after a selection, so tracking the baseline visibility gives the polling
@@ -249,7 +266,11 @@ export class ChatPage {
     return this.page.url();
   }
 
-  async sendUserMessage(message: string) {
+  async sendUserMessage(
+    message: string,
+    options?: { waitForResponse?: boolean }
+  ) {
+    const waitForResponse = options?.waitForResponse ?? true;
     const { sendButtonEnabled } = await this.waitForComposerReady(message);
 
     await this.prepareForGeneration({ composerValueOverride: message });
@@ -287,11 +308,74 @@ export class ChatPage {
           form.requestSubmit();
         });
 
-    await Promise.all([this.waitForChatApiResponse(), submission]);
+    const responseWatcher = this.waitForChatApiResponse();
+    this.pendingChatResponseError = null;
+    this.pendingChatResponseWatcher = responseWatcher;
+
+    responseWatcher.catch((error) => {
+      this.pendingChatResponseError =
+        error instanceof Error
+          ? error
+          : new Error(
+              error == null
+                ? "Chat API request failed"
+                : String(error)
+            );
+    });
+
+    responseWatcher.finally(() => {
+      if (this.pendingChatResponseWatcher === responseWatcher) {
+        this.pendingChatResponseWatcher = null;
+      }
+    });
+
+    if (waitForResponse) {
+      await Promise.all([responseWatcher, submission]);
+      this.pendingChatResponseWatcher = null;
+      return;
+    }
+
+    await submission;
+
+    await this.page.waitForSelector('[data-testid="stop-button"]', {
+      state: "visible",
+      timeout: 10_000,
+    });
   }
 
   async isGenerationComplete() {
     const assistantMessages = this.page.getByTestId("message-assistant");
+
+    if (this.pendingChatResponseError) {
+      const error = this.pendingChatResponseError;
+      this.pendingChatResponseError = null;
+      this.pendingChatResponseWatcher = null;
+      throw error;
+    }
+
+    if (this.pendingChatResponseWatcher) {
+      try {
+        await this.pendingChatResponseWatcher;
+      } catch (error) {
+        this.pendingChatResponseError =
+          error instanceof Error
+            ? error
+            : new Error(
+                error == null
+                  ? "Chat API request failed"
+                  : String(error)
+              );
+      } finally {
+        this.pendingChatResponseWatcher = null;
+      }
+
+      if (this.pendingChatResponseError) {
+        const error = this.pendingChatResponseError;
+        this.pendingChatResponseError = null;
+        throw error;
+      }
+    }
+
     const {
       count: initialAssistantCount,
       latestMessageId: initialLatestMessageId,

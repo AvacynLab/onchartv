@@ -2451,6 +2451,90 @@ describe("ChatPage generation helpers", () => {
     waitSpy.mockRestore();
   });
 
+  it("waits for the stop button when skipping the response await", async () => {
+    const assistantLocator = {
+      count: vi.fn().mockResolvedValue(0),
+      nth: vi.fn(),
+    };
+    const userLocator = {
+      count: vi.fn().mockResolvedValue(0),
+    };
+    const stopButtonLocator = {
+      isVisible: vi.fn().mockResolvedValue(false),
+    };
+    const sendButtonLocator = {
+      click: vi.fn().mockResolvedValue(undefined),
+      isVisible: vi.fn().mockResolvedValue(true),
+      isEnabled: vi.fn().mockResolvedValue(true),
+    };
+    const composerLocator = {
+      click: vi.fn(),
+      fill: vi.fn(),
+      type: vi.fn(),
+      inputValue: vi.fn().mockResolvedValue(""),
+    };
+    const suggestedActionsLocator = {
+      isVisible: vi.fn().mockResolvedValue(false),
+    };
+    const waitForSelector = vi.fn().mockResolvedValue(undefined);
+
+    const page = {
+      getByTestId: vi.fn((testId: string) => {
+        switch (testId) {
+          case "message-assistant":
+            return assistantLocator as unknown as ReturnType<Page["getByTestId"]>;
+          case "message-user":
+            return userLocator as unknown as ReturnType<Page["getByTestId"]>;
+          case "stop-button":
+            return stopButtonLocator as unknown as ReturnType<Page["getByTestId"]>;
+          case "send-button":
+            return sendButtonLocator as unknown as ReturnType<Page["getByTestId"]>;
+          case "multimodal-input":
+            return composerLocator as unknown as ReturnType<Page["getByTestId"]>;
+          case "suggested-actions":
+            return suggestedActionsLocator as unknown as ReturnType<Page["getByTestId"]>;
+          default:
+            throw new Error(`Unexpected test id: ${testId}`);
+        }
+      }),
+      evaluate: vi.fn().mockResolvedValue(0),
+      waitForSelector,
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+    const captureSpy = vi
+      .spyOn(chatPage as any, "captureAssistantSnapshot")
+      .mockResolvedValue({
+        count: 0,
+        latestArtifactCount: 0,
+        latestMessageId: null,
+        latestMessageText: "",
+      });
+    const prepareSpy = vi.spyOn(chatPage as any, "prepareForGeneration");
+    const composerSpy = vi
+      .spyOn(chatPage as any, "waitForComposerReady")
+      .mockResolvedValue({
+        sendButtonEnabled: true,
+      });
+    const waitSpy = vi
+      .spyOn(chatPage as any, "waitForChatApiResponse")
+      .mockResolvedValue(undefined);
+
+    await chatPage.sendUserMessage("Hello", { waitForResponse: false });
+
+    expect(prepareSpy).toHaveBeenCalledWith({ composerValueOverride: "Hello" });
+    expect(waitSpy).toHaveBeenCalledOnce();
+    expect(waitForSelector).toHaveBeenCalledWith(
+      '[data-testid="stop-button"]',
+      expect.objectContaining({ state: "visible", timeout: 10_000 })
+    );
+
+    captureSpy.mockRestore();
+    prepareSpy.mockRestore();
+    composerSpy.mockRestore();
+    waitSpy.mockRestore();
+  });
+
   it("records a snapshot before sending a suggestion message", async () => {
     const order: string[] = [];
     const assistantLocator = {

@@ -38,6 +38,7 @@ import {
   getFinancePreferencesByUserId,
   deleteChatById,
   getChatById,
+  getMessageById,
   getMessageCountByUserId,
   getMessagesByChatId,
   saveChat,
@@ -52,7 +53,7 @@ import {
 } from "@/lib/finance/preferences";
 import { ChatSDKError } from "@/lib/errors";
 import { logError, logWarning } from "@/lib/logging";
-import type { ChatMessage } from "@/lib/types";
+import type { Attachment, ChatMessage } from "@/lib/types";
 import type { AppUsage } from "@/lib/usage";
 import type { UIDataTypes, UIMessagePart, UITools } from "ai";
 import { normaliseAssistantMessage } from "@/lib/chat/stream-fallback";
@@ -570,7 +571,53 @@ export async function POST(request: Request) {
       : DEFAULT_FINANCE_PREFERENCES;
 
     const messagesFromDb = await getMessagesByChatId({ id });
-    const uiMessages = [...convertToUIMessages(messagesFromDb), message];
+    const [persistedMessage] = await getMessageById({ id: message.id });
+
+    const incomingParts = message.parts as ChatMessage["parts"];
+    const persistedParts = Array.isArray(persistedMessage?.parts)
+      ? (persistedMessage!.parts as ChatMessage["parts"])
+      : null;
+
+    const resolvedParts =
+      persistedParts && persistedParts.length > 0
+        ? /**
+           * Inline edits update the stored parts via `updateMessageParts` before the
+           * regeneration request fires. Prefer the persisted fragments so the
+           * provider receives the most recent prompt even when the client sends
+           * stale message content.
+           */
+          persistedParts
+        : incomingParts;
+
+    const resolvedAttachments: Attachment[] = Array.isArray(
+      persistedMessage?.attachments
+    )
+      ? (persistedMessage!.attachments as Attachment[])
+      : extractAttachments(resolvedParts);
+
+    const resolvedMessage: ChatMessage = {
+      ...message,
+      parts: resolvedParts,
+      attachments: resolvedAttachments,
+    };
+
+    const updatedMessagesFromDb = persistedMessage
+      ? messagesFromDb.map((messageRecord) =>
+          messageRecord.id === resolvedMessage.id
+            ? {
+                ...messageRecord,
+                parts: resolvedParts as typeof messageRecord.parts,
+                attachments: resolvedAttachments.map((attachment) => ({
+                  ...attachment,
+                })) as typeof messageRecord.attachments,
+              }
+            : messageRecord
+        )
+      : messagesFromDb;
+
+    const uiMessages = persistedMessage
+      ? convertToUIMessages(updatedMessagesFromDb)
+      : [...convertToUIMessages(updatedMessagesFromDb), resolvedMessage];
 
     // Resolve coarse location data without triggering network calls during
     // hermetic Playwright runs. The helper gracefully falls back to an empty
@@ -590,19 +637,21 @@ export async function POST(request: Request) {
       country,
     };
 
-    await saveMessages({
-      messages: [
-        {
-          chatId: id,
-          id: message.id,
-          role: "user",
-          parts: message.parts,
-          attachments: extractAttachments(message.parts),
-          artifacts: [],
-          createdAt: new Date(),
-        },
-      ],
-    });
+    if (!persistedMessage) {
+      await saveMessages({
+        messages: [
+          {
+            chatId: id,
+            id: resolvedMessage.id,
+            role: "user",
+            parts: resolvedMessage.parts,
+            attachments: resolvedAttachments,
+            artifacts: [],
+            createdAt: new Date(),
+          },
+        ],
+      });
+    }
 
     const streamId = generateUUID();
     await createStreamId({ streamId, chatId: id });
