@@ -602,7 +602,30 @@ export async function POST(request: Request) {
       resolvedParts = incomingParts;
     } else if (clientSignature) {
       if (clientSignature === persistedSignature) {
-        resolvedParts = persistedParts;
+        if (
+          incomingSignature.length > 0 &&
+          incomingSignature !== persistedSignature
+        ) {
+          /**
+           * Guard against stale metadata. Older clients (or UI race conditions
+           * when regenerating immediately after editing) may reuse the
+           * previous signature even though the text payload already diverged.
+           * Prefer the incoming fragments so the provider always sees the
+           * latest prompt and surface a warning to help diagnose the mismatch.
+           */
+          logWarning(
+            "chat:message",
+            "Client signature matched persisted text but the incoming payload diverged; using incoming parts",
+            {
+              clientSignature,
+              persistedSignature,
+              incomingSignature,
+            }
+          );
+          resolvedParts = incomingParts;
+        } else {
+          resolvedParts = persistedParts;
+        }
       } else if (clientSignature === incomingSignature) {
         resolvedParts = incomingParts;
       } else {
