@@ -19,9 +19,17 @@ import type {
 
 export type DataPart = { type: "append-message"; message: string };
 
-export const messageMetadataSchema = z.object({
-  createdAt: z.string(),
-});
+export const messageMetadataSchema = z
+  .object({
+    createdAt: z.string(),
+    /**
+     * Optional fingerprint supplied by the client when resubmitting an edited
+     * prompt. Keeping the field in the shared schema ensures downstream code
+     * can safely access it without widening the metadata type everywhere.
+     */
+    clientTextSignature: z.string().optional(),
+  })
+  .passthrough();
 
 export type MessageMetadata = z.infer<typeof messageMetadataSchema>;
 

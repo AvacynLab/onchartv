@@ -497,14 +497,9 @@ export async function POST(request: Request) {
   try {
     const {
       id,
-      message,
+      message: incomingMessage,
       selectedChatModel,
       selectedVisibilityType,
-    }: {
-      id: string;
-      message: ChatMessage;
-      selectedChatModel: ChatModel["id"];
-      selectedVisibilityType: VisibilityType;
     } = requestBody;
 
     chatIdForLogs = id;
@@ -549,7 +544,7 @@ export async function POST(request: Request) {
       }
     } else {
       const title = await generateTitleFromUserMessage({
-        message,
+        message: incomingMessage,
       });
 
       await saveChat({
@@ -576,10 +571,10 @@ export async function POST(request: Request) {
       : DEFAULT_FINANCE_PREFERENCES;
 
     const messagesFromDb = await getMessagesByChatId({ id });
-    const [persistedMessage] = await getMessageById({ id: message.id });
+    const [persistedMessage] = await getMessageById({ id: incomingMessage.id });
 
-    const incomingParts = Array.isArray(message.parts)
-      ? (message.parts as ChatMessage["parts"])
+    const incomingParts = Array.isArray(incomingMessage.parts)
+      ? (incomingMessage.parts as ChatMessage["parts"])
       : [];
     const persistedParts = Array.isArray(persistedMessage?.parts)
       ? (persistedMessage!.parts as ChatMessage["parts"])
@@ -589,7 +584,7 @@ export async function POST(request: Request) {
     const persistedSignature = buildMessageTextSignature(persistedParts);
 
     const clientSignature = (() => {
-      const metadata = message.metadata;
+      const metadata = incomingMessage.metadata;
 
       if (!metadata || typeof metadata !== "object") {
         return null;
@@ -638,9 +633,47 @@ export async function POST(request: Request) {
     // contract mirrors `UIMessage` which does not expose an attachments field.
     // Returning the pared-down shape keeps the in-flight stream compatible
     // while the saved database row still retains the uploaded assets.
+    const resolvedMessageMetadata: ChatMessage["metadata"] = (() => {
+      /**
+       * Prefer the persisted timestamp so edited prompts retain their original
+       * creation date. When the client emits a fresh message (no persisted
+       * record yet), fall back to either the provided metadata timestamp or
+       * generate one on the fly to keep the UI payload consistent.
+       */
+      const persistedCreatedAt =
+        persistedMessage?.createdAt instanceof Date
+          ? persistedMessage.createdAt.toISOString()
+          : null;
+
+      let createdAt = persistedCreatedAt;
+
+      if (!createdAt) {
+        const candidate =
+          typeof incomingMessage.metadata === "object" &&
+          incomingMessage.metadata !== null &&
+          "createdAt" in incomingMessage.metadata
+            ? (incomingMessage.metadata as { createdAt?: unknown }).createdAt
+            : undefined;
+
+        createdAt = typeof candidate === "string" && candidate.length > 0 ? candidate : new Date().toISOString();
+      }
+
+      const metadata: ChatMessage["metadata"] = {
+        createdAt,
+      };
+
+      if (clientSignature) {
+        metadata.clientTextSignature = clientSignature;
+      }
+
+      return metadata;
+    })();
+
     const resolvedMessage: ChatMessage = {
-      ...message,
+      id: incomingMessage.id,
+      role: incomingMessage.role,
       parts: resolvedParts,
+      metadata: resolvedMessageMetadata,
     };
 
     const updatedMessagesFromDb = persistedMessage

@@ -85,6 +85,11 @@ describe("POST /api/chat hermetic finance flow", () => {
   });
 
   it("streams finance artefacts without requiring network access", async () => {
+    const convertModule = await import(
+      "@/lib/ai/messages/convert-to-model-messages"
+    );
+    const convertSpy = vi.spyOn(convertModule, "convertToModelMessages");
+
     const { POST } = await import("@/app/(chat)/api/chat/route");
     const { myProvider } = await import("@/lib/ai/providers");
     const modelPreview = myProvider.languageModel("chat-model");
@@ -114,81 +119,160 @@ describe("POST /api/chat hermetic finance flow", () => {
 
     const response = await POST(request);
 
-    if (response.status !== 200) {
-      const diagnosticPayload = await response
-        .clone()
-        .json()
-        .catch(async () => response.clone().text().catch(() => null));
-      const lastLogErrorCall = logErrorSpy?.mock.calls.at(-1) ?? null;
-      const serializedError = (() => {
-        if (!lastLogErrorCall) {
-          return null;
-        }
+    try {
+      if (response.status !== 200) {
+        const diagnosticPayload = await response
+          .clone()
+          .json()
+          .catch(async () => response.clone().text().catch(() => null));
+        const lastLogErrorCall = logErrorSpy?.mock.calls.at(-1) ?? null;
+        const serializedError = (() => {
+          if (!lastLogErrorCall) {
+            return null;
+          }
 
-        const [, error, extra] = lastLogErrorCall;
-        if (error instanceof AggregateError) {
-          return {
-            name: error.name,
-            message: error.message,
-            code: (error as { code?: unknown }).code ?? null,
-            errors: Array.isArray(error.errors)
-              ? error.errors.map((inner) => ({
-                  name: (inner as { name?: unknown }).name ?? null,
-                  code: (inner as { code?: unknown }).code ?? null,
-                  message: (inner as { message?: unknown }).message ?? null,
-                  stack: (inner as { stack?: unknown }).stack ?? null,
-                  raw: String(inner),
-                }))
-              : null,
-            extra,
-          };
-        }
+          const [, error, extra] = lastLogErrorCall;
+          if (error instanceof AggregateError) {
+            return {
+              name: error.name,
+              message: error.message,
+              code: (error as { code?: unknown }).code ?? null,
+              errors: Array.isArray(error.errors)
+                ? error.errors.map((inner) => ({
+                    name: (inner as { name?: unknown }).name ?? null,
+                    code: (inner as { code?: unknown }).code ?? null,
+                    message: (inner as { message?: unknown }).message ?? null,
+                    stack: (inner as { stack?: unknown }).stack ?? null,
+                    raw: String(inner),
+                  }))
+                : null,
+              extra,
+            };
+          }
 
-        return { error, extra };
-      })();
-      // eslint-disable-next-line no-console -- surfaced only during failing diagnostics.
-      console.error("hermetic chat diagnostics", {
-        status: response.status,
-        payload: diagnosticPayload,
-      });
-      if (serializedError) {
+          return { error, extra };
+        })();
         // eslint-disable-next-line no-console -- surfaced only during failing diagnostics.
-        console.dir(serializedError, { depth: 6 });
+        console.error("hermetic chat diagnostics", {
+          status: response.status,
+          payload: diagnosticPayload,
+        });
+        if (serializedError) {
+          // eslint-disable-next-line no-console -- surfaced only during failing diagnostics.
+          console.dir(serializedError, { depth: 6 });
+        }
       }
+
+      expect(response.status).toBe(200);
+      const reader = response.body?.getReader();
+      expect(reader).toBeDefined();
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      if (reader) {
+        // Drain the stream to capture the finance artefacts emitted by the hermetic provider.
+        // eslint-disable-next-line no-constant-condition -- loop exits via explicit break when the stream ends.
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            buffer += decoder.decode();
+            break;
+          }
+
+          if (typeof value === "string") {
+            buffer += value;
+          } else if (value) {
+            buffer += decoder.decode(value, { stream: true });
+          }
+        }
+      }
+
+      expect(buffer).toContain("financeChart");
+      expect(buffer).toContain("BTCUSD");
+
+      const convertArgs = convertSpy.mock.calls.at(-1);
+      const streamedMessages = Array.isArray(convertArgs?.[0])
+        ? (convertArgs?.[0] as Array<{ metadata?: { createdAt?: string } }>)
+        : [];
+      const latestMessage = streamedMessages.at(-1);
+
+      expect(latestMessage?.metadata?.createdAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+
+      expect(authMock).toHaveBeenCalled();
+      expect(generateTitleFromUserMessageMock).toHaveBeenCalled();
+
+      expect(logErrorSpy?.mock.calls.length ?? 0).toBe(0);
+    } finally {
+      convertSpy.mockRestore();
     }
+  });
 
-    expect(response.status).toBe(200);
-    const reader = response.body?.getReader();
-    expect(reader).toBeDefined();
+  it("propagates client text signatures when streaming a new user message", async () => {
+    const convertModule = await import(
+      "@/lib/ai/messages/convert-to-model-messages"
+    );
+    const convertSpy = vi.spyOn(convertModule, "convertToModelMessages");
 
-    const decoder = new TextDecoder();
-    let buffer = "";
+    const { POST } = await import("@/app/(chat)/api/chat/route");
 
-    if (reader) {
-      // Drain the stream to capture the finance artefacts emitted by the hermetic provider.
-      // eslint-disable-next-line no-constant-condition -- loop exits via explicit break when the stream ends.
+    const payload = {
+      id: "11111111-2222-4333-8444-555555555555",
+      message: {
+        id: "11111111-aaaa-4bbb-9ccc-222222222222",
+        role: "user" as const,
+        parts: [
+          {
+            type: "text" as const,
+            text: "Peux-tu expliquer pourquoi le ciel est bleu ?",
+          },
+        ],
+        metadata: { clientTextSignature: "  Peux-tu expliquer pourquoi le ciel est bleu ?  " },
+      },
+      selectedChatModel: "chat-model" as const,
+      selectedVisibilityType: "private" as const,
+    };
+
+    const request = new Request("https://example.com/api/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    const response = await POST(request);
+
+    try {
+      expect(response.status).toBe(200);
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error("Streamed response did not expose a readable body");
+      }
+
+      // Drain the stream to completion so all route side effects (title
+      // generation, finance mocks, etc.) settle before we inspect the
+      // provider-facing messages.
+      // eslint-disable-next-line no-constant-condition -- exits when `done` is true.
       while (true) {
-        const { done, value } = await reader.read();
+        const { done } = await reader.read();
         if (done) {
-          buffer += decoder.decode();
           break;
         }
-
-        if (typeof value === "string") {
-          buffer += value;
-        } else if (value) {
-          buffer += decoder.decode(value, { stream: true });
-        }
       }
+
+      const convertArgs = convertSpy.mock.calls.at(-1);
+      const streamedMessages = Array.isArray(convertArgs?.[0])
+        ? (convertArgs?.[0] as Array<{ metadata?: { createdAt?: string; clientTextSignature?: string } }>)
+        : [];
+      const latestMessage = streamedMessages.at(-1);
+
+      expect(latestMessage?.metadata?.createdAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+      expect(latestMessage?.metadata?.clientTextSignature).toBe(
+        "Peux-tu expliquer pourquoi le ciel est bleu ?"
+      );
+    } finally {
+      convertSpy.mockRestore();
     }
-
-    expect(buffer).toContain("financeChart");
-    expect(buffer).toContain("BTCUSD");
-
-    expect(authMock).toHaveBeenCalled();
-    expect(generateTitleFromUserMessageMock).toHaveBeenCalled();
-
-    expect(logErrorSpy?.mock.calls.length ?? 0).toBe(0);
   });
 
   it("reuses persisted user message content when regenerating", async () => {
