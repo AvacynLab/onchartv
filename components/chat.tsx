@@ -11,6 +11,7 @@ import { useArtifactSelector } from "@/hooks/use-artifact";
 import { useAutoResume } from "@/hooks/use-auto-resume";
 import { useChatVisibility } from "@/hooks/use-chat-visibility";
 import type { Vote } from "@/lib/db/schema";
+import { buildMessageTextSignature } from "@/lib/ai/messages/signature";
 import { ChatSDKError } from "@/lib/errors";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import type { AppUsage } from "@/lib/usage";
@@ -100,10 +101,27 @@ export function Chat({
       api: "/api/chat",
       fetch: fetchWithErrorHandlers,
       prepareSendMessagesRequest(request) {
+        const lastMessage = request.messages.at(-1);
+        const signature = buildMessageTextSignature(
+          Array.isArray(lastMessage?.parts) ? lastMessage.parts : []
+        );
+
+        const messageWithSignature = lastMessage
+          ? {
+              ...lastMessage,
+              metadata: {
+                ...(typeof lastMessage.metadata === "object" && lastMessage.metadata
+                  ? lastMessage.metadata
+                  : {}),
+                clientTextSignature: signature,
+              },
+            }
+          : lastMessage;
+
         return {
           body: {
             id: request.id,
-            message: request.messages.at(-1),
+            message: messageWithSignature,
             selectedChatModel: currentModelIdRef.current,
             selectedVisibilityType: visibilityType,
             ...request.body,

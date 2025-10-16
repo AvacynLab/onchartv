@@ -102,11 +102,15 @@ describe("BacktestReportArtifact", () => {
   it("expose le bouton de re-test via un nom accessible stable", () => {
     render(<BacktestReportArtifact artifact={makeArtifact()} />);
 
-    expect(
-      screen.getByRole("button", {
-        name: /Re-tester avec ces paramètres/,
-      })
-    ).toBeVisible();
+    const retestToggle = screen.getByRole("button", {
+      name: /Re-tester avec ces paramètres/,
+    });
+
+    expect(retestToggle).toBeVisible();
+    expect(retestToggle).toHaveAttribute(
+      "aria-label",
+      "Re-tester avec ces paramètres"
+    );
   });
 
   it("transmet un payload normalisé lors d'un re-test valide", async () => {

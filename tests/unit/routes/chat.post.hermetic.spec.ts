@@ -236,6 +236,7 @@ describe("POST /api/chat hermetic finance flow", () => {
           id: messageId,
           role: "user" as const,
           parts: [{ type: "text" as const, text: "Why is the sky blue?" }],
+          metadata: { clientTextSignature: editedPrompt },
         },
         selectedChatModel: "chat-model" as const,
         selectedVisibilityType: "private" as const,
@@ -269,6 +270,82 @@ describe("POST /api/chat hermetic finance flow", () => {
 
       expect(streamedTexts).toContain(editedPrompt);
       expect(streamedTexts).not.toContain("Why is the sky blue?");
+    } finally {
+      convertSpy.mockRestore();
+    }
+  });
+
+  it("utilise les fragments envoyés par le client lorsque la base contient encore l'ancienne version", async () => {
+    const convertModule = await import(
+      "@/lib/ai/messages/convert-to-model-messages"
+    );
+    const convertSpy = vi.spyOn(convertModule, "convertToModelMessages");
+
+    const { POST } = await import("@/app/(chat)/api/chat/route");
+    const { saveChat, saveMessages } = await import("@/lib/db/queries");
+
+    const chatId = "eeeeeeee-eeee-4eee-beee-eeeeeeeeeeee";
+    const messageId = "ffffffff-ffff-4fff-afff-ffffffffffff";
+    const stalePrompt = "Why is grass green?";
+    const freshPrompt = "Why is the sky blue?";
+
+    await saveChat({
+      id: chatId,
+      userId: "regular-user-1",
+      title: "Edited chat with race",
+      visibility: "private",
+    });
+
+    await saveMessages({
+      messages: [
+        {
+          chatId,
+          id: messageId,
+          role: "user",
+          parts: [{ type: "text", text: stalePrompt }],
+          attachments: [],
+          artifacts: [],
+          createdAt: new Date("2024-01-01T00:00:00.000Z"),
+        },
+      ],
+    });
+
+    const request = new Request("https://example.com/api/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        id: chatId,
+        message: {
+          id: messageId,
+          role: "user" as const,
+          parts: [{ type: "text" as const, text: freshPrompt }],
+          metadata: { clientTextSignature: freshPrompt },
+        },
+        selectedChatModel: "chat-model" as const,
+        selectedVisibilityType: "private" as const,
+      }),
+    });
+
+    try {
+      const response = await POST(request);
+      expect(response.status).toBe(200);
+
+      const lastCall = convertSpy.mock.calls.at(-1);
+      const streamedTexts = Array.isArray(lastCall?.[0])
+        ? lastCall![0].flatMap((chatMessage) =>
+            Array.isArray(chatMessage.parts)
+              ? chatMessage.parts
+                  .filter(
+                    (part): part is { type: "text"; text: string } =>
+                      part?.type === "text"
+                  )
+                  .map((part) => part.text)
+              : []
+          )
+        : [];
+
+      expect(streamedTexts).toContain(freshPrompt);
+      expect(streamedTexts).not.toContain(stalePrompt);
     } finally {
       convertSpy.mockRestore();
     }

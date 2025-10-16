@@ -56,6 +56,10 @@ import { logError, logWarning } from "@/lib/logging";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import type { AppUsage } from "@/lib/usage";
 import type { UIDataTypes, UIMessagePart, UITools } from "ai";
+import {
+  buildMessageTextSignature,
+  type MessagePartCandidate,
+} from "@/lib/ai/messages/signature";
 import { normaliseAssistantMessage } from "@/lib/chat/stream-fallback";
 
 import { convertToUIMessages, generateUUID } from "@/lib/utils";
@@ -402,14 +406,15 @@ const getTokenlensCatalog = tokenlensFetchEnabled
  * narrower `ChatMessage` structure. The extractor handles both so it can
  * serialise attachments during streaming as well as on final persistence.
  */
-type AttachmentCandidate =
-  | ChatMessage["parts"][number]
-  | UIMessagePart<UIDataTypes, UITools>;
+type AttachmentCandidate = Exclude<MessagePartCandidate, string>;
 type FilePart = Extract<AttachmentCandidate, { type: "file" }>;
 
 const extractAttachments = (parts: ReadonlyArray<AttachmentCandidate>) => {
   return parts
-    .filter((part): part is FilePart => part.type === "file")
+    .filter(
+      (part): part is FilePart =>
+        typeof part === "object" && part !== null && part.type === "file"
+    )
     .map((filePart) => {
       /**
        * `streamText` reuses the same shape for both end-user uploads and tool
@@ -573,21 +578,55 @@ export async function POST(request: Request) {
     const messagesFromDb = await getMessagesByChatId({ id });
     const [persistedMessage] = await getMessageById({ id: message.id });
 
-    const incomingParts = message.parts as ChatMessage["parts"];
+    const incomingParts = Array.isArray(message.parts)
+      ? (message.parts as ChatMessage["parts"])
+      : [];
     const persistedParts = Array.isArray(persistedMessage?.parts)
       ? (persistedMessage!.parts as ChatMessage["parts"])
       : null;
 
-    const resolvedParts =
-      persistedParts && persistedParts.length > 0
-        ? /**
-           * Inline edits update the stored parts via `updateMessageParts` before the
-           * regeneration request fires. Prefer the persisted fragments so the
-           * provider receives the most recent prompt even when the client sends
-           * stale message content.
-           */
-          persistedParts
-        : incomingParts;
+    const incomingSignature = buildMessageTextSignature(incomingParts);
+    const persistedSignature = buildMessageTextSignature(persistedParts);
+
+    const clientSignature = (() => {
+      const metadata = message.metadata;
+
+      if (!metadata || typeof metadata !== "object") {
+        return null;
+      }
+
+      const signature = (metadata as { clientTextSignature?: unknown })
+        .clientTextSignature;
+
+      return typeof signature === "string" ? signature.trim() : null;
+    })();
+
+    let resolvedParts: ChatMessage["parts"];
+
+    if (!persistedParts || persistedParts.length === 0 || persistedSignature.length === 0) {
+      resolvedParts = incomingParts;
+    } else if (clientSignature) {
+      if (clientSignature === persistedSignature) {
+        resolvedParts = persistedParts;
+      } else if (clientSignature === incomingSignature) {
+        resolvedParts = incomingParts;
+      } else {
+        logWarning(
+          "chat:message",
+          "Client and persisted text signatures diverge; defaulting to persisted parts",
+          {
+            clientSignature,
+            persistedSignature,
+            incomingSignature,
+          }
+        );
+        resolvedParts = persistedParts;
+      }
+    } else if (incomingSignature.length > 0 && persistedSignature.length === 0) {
+      resolvedParts = incomingParts;
+    } else {
+      resolvedParts = persistedParts;
+    }
 
     const resolvedAttachments: Attachment[] = Array.isArray(
       persistedMessage?.attachments
