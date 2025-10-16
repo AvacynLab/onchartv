@@ -34,7 +34,12 @@ test.describe("Finance artefacts accessibility", () => {
     await chatPage.sendUserMessage("Backteste SMA 50/200 sur AAPL 2018-01-01 → 2020-12-31");
     await chatPage.isGenerationComplete();
 
-    const retestButton = page.getByTestId("finance-backtest-retest-toggle");
+    const backtestArtifact = page.getByTestId("finance-backtest-artifact");
+    await expect(backtestArtifact).toBeVisible();
+
+    const retestButton = backtestArtifact.getByTestId(
+      "finance-backtest-retest-toggle"
+    );
     await expect(retestButton).toBeVisible();
     await expect(retestButton).toHaveAccessibleName(
       /Re-tester avec ces paramètres/

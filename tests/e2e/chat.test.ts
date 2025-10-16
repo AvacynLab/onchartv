@@ -92,6 +92,13 @@ test.describe("Chat activity", () => {
 
     await chatPage.isGenerationComplete();
 
+    await expect
+      .poll(async () => {
+        const latest = await chatPage.getRecentAssistantMessage();
+        return latest.content;
+      }, { timeout: 15_000 })
+      .toContain("It's just blue duh!");
+
     const updatedAssistantMessage = await chatPage.getRecentAssistantMessage();
     expect(updatedAssistantMessage.content).toContain("It's just blue duh!");
   });
