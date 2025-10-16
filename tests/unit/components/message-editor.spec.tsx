@@ -391,90 +391,92 @@ describe("MessageEditor", () => {
     const fixedNow = new Date("2024-01-01T00:00:00.000Z");
     vi.setSystemTime(fixedNow);
 
-    const setMode = vi.fn();
-    const message: EditableChatMessage = {
-      id: "message-with-trailing",
-      role: "user",
-      metadata: { createdAt: "2024-01-01T00:00:00.000Z" },
-      parts: [{ type: "text", text: "Why is grass green?" }],
-    };
+    try {
+      const setMode = vi.fn();
+      const message: EditableChatMessage = {
+        id: "message-with-trailing",
+        role: "user",
+        metadata: { createdAt: "2024-01-01T00:00:00.000Z" },
+        parts: [{ type: "text", text: "Why is grass green?" }],
+      };
 
-    let messages: ChatMessage[] = [
-      message,
-      {
-        id: "assistant-old",
-        role: "assistant",
-        parts: [{ type: "text", text: "Old response" }],
-        metadata: { createdAt: "2023-12-31T23:59:59.000Z" },
-      },
-    ];
-
-    const setMessages = vi.fn(
-      (
-        updater:
-          | ChatMessage[]
-          | ((currentMessages: ChatMessage[]) => ChatMessage[])
-      ) => {
-        if (typeof updater === "function") {
-          messages = updater([
-            ...messages,
-            {
-              id: "assistant-new",
-              role: "assistant",
-              parts: [{ type: "text", text: "New response" }],
-              metadata: { createdAt: "2024-01-01T00:00:05.000Z" },
-            },
-          ]);
-        } else {
-          messages = updater;
-        }
-      }
-    );
-
-    const regenerate = vi.fn().mockResolvedValue(undefined);
-
-    render(
-      <MessageEditor
-        message={message}
-        regenerate={regenerate}
-        setMode={setMode}
-        setMessages={setMessages}
-      />
-    );
-
-    const editor = await screen.findByTestId("message-editor");
-
-    await act(async () => {
-      fireEvent.change(editor, {
-        target: { value: "Why is the sky blue?" },
-      });
-    });
-
-    const submit = screen.getByTestId("message-editor-send-button");
-
-    await act(async () => {
-      fireEvent.click(submit);
-    });
-
-    await flushAsyncUpdates();
-
-    expect(messages).toEqual([
-      {
-        ...message,
-        parts: [{ type: "text", text: "Why is the sky blue?" }],
-        metadata: {
-          ...(message.metadata ?? {}),
-          clientTextSignature: "Why is the sky blue?",
+      let messages: ChatMessage[] = [
+        message,
+        {
+          id: "assistant-old",
+          role: "assistant",
+          parts: [{ type: "text", text: "Old response" }],
+          metadata: { createdAt: "2023-12-31T23:59:59.000Z" },
         },
-      },
-      {
-        id: "assistant-new",
-        role: "assistant",
-        parts: [{ type: "text", text: "New response" }],
-        metadata: { createdAt: "2024-01-01T00:00:05.000Z" },
-      },
-    ]);
+      ];
 
-    vi.useRealTimers();
+      const setMessages = vi.fn(
+        (
+          updater:
+            | ChatMessage[]
+            | ((currentMessages: ChatMessage[]) => ChatMessage[])
+        ) => {
+          if (typeof updater === "function") {
+            messages = updater([
+              ...messages,
+              {
+                id: "assistant-new",
+                role: "assistant",
+                parts: [{ type: "text", text: "New response" }],
+                metadata: { createdAt: "2024-01-01T00:00:05.000Z" },
+              },
+            ]);
+          } else {
+            messages = updater;
+          }
+        }
+      );
+
+      const regenerate = vi.fn().mockResolvedValue(undefined);
+
+      render(
+        <MessageEditor
+          message={message}
+          regenerate={regenerate}
+          setMode={setMode}
+          setMessages={setMessages}
+        />
+      );
+
+      const editor = screen.getByTestId("message-editor");
+
+      await act(async () => {
+        fireEvent.change(editor, {
+          target: { value: "Why is the sky blue?" },
+        });
+      });
+
+      const submit = screen.getByTestId("message-editor-send-button");
+
+      await act(async () => {
+        fireEvent.click(submit);
+      });
+
+      await flushAsyncUpdates();
+
+      expect(messages).toEqual([
+        {
+          ...message,
+          parts: [{ type: "text", text: "Why is the sky blue?" }],
+          metadata: {
+            ...(message.metadata ?? {}),
+            clientTextSignature: "Why is the sky blue?",
+          },
+        },
+        {
+          id: "assistant-new",
+          role: "assistant",
+          parts: [{ type: "text", text: "New response" }],
+          metadata: { createdAt: "2024-01-01T00:00:05.000Z" },
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
