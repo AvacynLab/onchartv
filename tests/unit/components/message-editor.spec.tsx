@@ -302,4 +302,78 @@ describe("MessageEditor", () => {
       },
     ]);
   });
+
+  it("overwrites input_text fragments when editing inline prompts", async () => {
+    const setMode = vi.fn();
+    const inputTextMessage: EditableChatMessage = {
+      id: "message-input-text",
+      role: "user",
+      metadata: { createdAt: "2024-01-01T00:00:00.000Z" },
+      parts: [
+        {
+          type: "input_text",
+          input_text: "Why is grass green?",
+        },
+      ],
+    };
+
+    let messages: ChatMessage[] = [inputTextMessage];
+    const setMessages = vi.fn(
+      (
+        updater:
+          | ChatMessage[]
+          | ((currentMessages: ChatMessage[]) => ChatMessage[])
+      ) => {
+        messages =
+          typeof updater === "function" ? updater(messages) : updater;
+      }
+    );
+
+    const regenerate = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <MessageEditor
+        message={inputTextMessage}
+        regenerate={regenerate}
+        setMode={setMode}
+        setMessages={setMessages}
+      />
+    );
+
+    const editor = await screen.findByTestId("message-editor");
+
+    await act(async () => {
+      fireEvent.change(editor, {
+        target: { value: "Why is the sky blue?" },
+      });
+    });
+
+    const submit = screen.getByTestId("message-editor-send-button");
+
+    await act(async () => {
+      fireEvent.click(submit);
+    });
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(updateMessagePartsMock).toHaveBeenCalledWith({
+      id: inputTextMessage.id,
+      parts: [{ type: "input_text", input_text: "Why is the sky blue?" }],
+      attachments: [],
+    });
+
+    expect(messages).toEqual([
+      {
+        ...inputTextMessage,
+        attachments: [],
+        parts: [{ type: "input_text", input_text: "Why is the sky blue?" }],
+        metadata: {
+          ...(inputTextMessage.metadata ?? {}),
+          clientTextSignature: "Why is the sky blue?",
+        },
+      },
+    ]);
+  });
 });

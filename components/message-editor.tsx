@@ -237,7 +237,8 @@ function rebuildMessageParts(
     : [];
 
   /**
-   * Replace the first textual fragment with the freshly edited prompt while
+   * Replace the first textual fragment (either the standard `text` part or the
+   * AI SDK's `input_text` variant) with the freshly edited prompt while
    * discarding any additional text fragments that may linger from previous
    * submissions. This guarantees the server receives a single authoritative
    * prompt and prevents stale copies of the original text from skewing the
@@ -250,6 +251,15 @@ function rebuildMessageParts(
     if (part?.type === "text") {
       if (!textFragmentReplaced) {
         updatedParts.push({ ...part, text: nextText });
+        textFragmentReplaced = true;
+      }
+
+      continue;
+    }
+
+    if (part?.type === "input_text") {
+      if (!textFragmentReplaced) {
+        updatedParts.push({ ...part, input_text: nextText });
         textFragmentReplaced = true;
       }
 
