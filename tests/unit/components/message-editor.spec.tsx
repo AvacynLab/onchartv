@@ -459,6 +459,9 @@ describe("MessageEditor", () => {
 
       await flushAsyncUpdates();
 
+      // The regenerated user message should preserve the updated text, keep the
+      // existing timestamp metadata, and normalise the attachments array so the
+      // downstream reducer always receives a consistent shape.
       expect(messages).toEqual([
         {
           ...message,
@@ -467,6 +470,7 @@ describe("MessageEditor", () => {
             ...(message.metadata ?? {}),
             clientTextSignature: "Why is the sky blue?",
           },
+          attachments: [],
         },
         {
           id: "assistant-new",
