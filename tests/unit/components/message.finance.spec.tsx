@@ -14,6 +14,7 @@ import {
 import type { ChatMessage } from "@/lib/types";
 import type { ArtifactRendererProps } from "@/components/ArtifactRenderer";
 import type { FinanceBacktestArtifact } from "@/lib/finance/types";
+import { wrapFinanceArtifact } from "@/lib/artifacts/types";
 
 vi.mock("katex/dist/katex.min.css", () => ({}), { virtual: true });
 vi.mock("server-only", () => ({}), { virtual: true });
@@ -220,7 +221,7 @@ describe("PreviewMessage finance feature flag", () => {
     );
   });
 
-  it("fallback sur message.artifacts lorsque les data parts sont absentes", () => {
+  it("fallback sur message.artifacts persistés (wrappés) lorsque les data parts sont absentes", () => {
     vi.stubEnv("NEXT_PUBLIC_FEATURE_FINANCE", "true");
 
     const backtestArtifact: FinanceBacktestArtifact = {
@@ -266,7 +267,7 @@ describe("PreviewMessage finance feature flag", () => {
       parts: [
         { id: "text-1", type: "text", text: "Résultats du backtest" },
       ],
-      artifacts: [backtestArtifact],
+      artifacts: [wrapFinanceArtifact(backtestArtifact)],
     } as unknown as ChatMessage;
 
     render(
@@ -276,6 +277,73 @@ describe("PreviewMessage finance feature flag", () => {
           isLoading={false}
           isReadonly={true}
           message={streamingMessage}
+          regenerate={noop as any}
+          requiresScrollPadding={false}
+          setMessages={noop as any}
+          vote={undefined}
+        />
+      </DataStreamProvider>
+    );
+
+    expect(screen.getByTestId("artifact-renderer-mock")).toBeInTheDocument();
+    expect(artifactRendererSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ artifact: backtestArtifact })
+    );
+  });
+
+  it("supporte les artefacts legacy non wrappés pour les anciennes conversations", () => {
+    vi.stubEnv("NEXT_PUBLIC_FEATURE_FINANCE", "true");
+
+    const backtestArtifact: FinanceBacktestArtifact = {
+      type: "finance.backtest",
+      runId: "run-legacy",
+      symbol: "NVDA",
+      timeframe: "1D",
+      period: { from: "2017-01-01", to: "2018-12-31" },
+      strategy: { type: "sma-crossover", params: { fastPeriod: 20, slowPeriod: 50 } },
+      metrics: {
+        totalReturn: 0.32,
+        cagr: 0.14,
+        maxDrawdown: 0.09,
+        winRate: 0.58,
+        averageWin: 900,
+        averageLoss: -450,
+        sharpe: 1.4,
+        profitFactor: 1.9,
+        trades: 7,
+      },
+      equityCurve: [{ t: 1483228800, e: 12_000 }],
+      trades: [
+        {
+          entryTimestamp: 1483228800,
+          entryPrice: 100,
+          exitTimestamp: 1485907200,
+          exitPrice: 112,
+          quantity: 12,
+          grossPnl: 144,
+          netPnl: 138,
+        },
+      ],
+      commentary: "Legacy artifact payload",
+    };
+
+    const legacyMessage = {
+      id: "assistant-legacy-artifact",
+      role: "assistant",
+      metadata: { createdAt: new Date().toISOString() },
+      parts: [
+        { id: "text-1", type: "text", text: "Backtest historique" },
+      ],
+      artifacts: [backtestArtifact],
+    } as unknown as ChatMessage;
+
+    render(
+      <DataStreamProvider>
+        <PreviewMessage
+          chatId="chat-legacy"
+          isLoading={false}
+          isReadonly={true}
+          message={legacyMessage}
           regenerate={noop as any}
           requiresScrollPadding={false}
           setMessages={noop as any}

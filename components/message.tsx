@@ -38,12 +38,53 @@ import {
   type FinanceBacktestArtifact,
   type FinanceChartArtifact,
 } from "@/lib/finance/types";
+import {
+  financeMessageArtifactSchema,
+  unwrapFinanceArtifact,
+} from "@/lib/artifacts/types";
 import { logWarning } from "@/lib/logging";
 import { useChatComposer } from "./chat-composer-context";
 import { isFinanceFeatureEnabledClient } from "@/lib/feature-flags";
 
 const isFinanceArtifact = (value: unknown): value is FinanceArtifact => {
   return financeArtifactSchema.safeParse(value).success;
+};
+
+/**
+ * Attempt to coerce legacy `message.artifacts` entries into the unified
+ * `FinanceArtifact` shape. Persisted records now store a discriminated wrapper,
+ * yet historic messages – and some streaming fallbacks – may still expose the
+ * bare finance payload. Centralising the parsing logic ensures we recover both
+ * formats without crashing the UI while emitting structured warnings for
+ * payloads that drift away from the documented schema.
+ */
+const coercePersistedFinanceArtifact = (
+  candidate: unknown,
+  artifactIndex: number,
+  messageId: string
+): FinanceArtifact | null => {
+  const wrappedResult = financeMessageArtifactSchema.safeParse(candidate);
+
+  if (wrappedResult.success) {
+    return unwrapFinanceArtifact(wrappedResult.data);
+  }
+
+  const legacyResult = financeArtifactSchema.safeParse(candidate);
+
+  if (legacyResult.success) {
+    return legacyResult.data;
+  }
+
+  logWarning("chat:message", "[finance] ignored malformed persisted artifact", {
+    artifactIndex,
+    artifactType:
+      typeof (candidate as { type?: unknown })?.type === "string"
+        ? (candidate as { type: string }).type
+        : undefined,
+    messageId,
+  });
+
+  return null;
 };
 
 const PurePreviewMessage = ({
@@ -93,23 +134,11 @@ const PurePreviewMessage = ({
   const financeArtifactsFromMessage =
     financeFeatureEnabled && Array.isArray(rawArtifacts)
       ? rawArtifacts.reduce<FinanceArtifact[]>((accumulator, candidate, index) => {
-          if (isFinanceArtifact(candidate)) {
-            accumulator.push(candidate);
-            return accumulator;
-          }
+          const parsed = coercePersistedFinanceArtifact(candidate, index, message.id);
 
-          logWarning(
-            "chat:message",
-            "[finance] ignored malformed legacy artifact payload",
-            {
-              artifactIndex: index,
-              artifactType:
-                typeof (candidate as { type?: unknown })?.type === "string"
-                  ? (candidate as { type: string }).type
-                  : undefined,
-              messageId: message.id,
-            }
-          );
+          if (parsed) {
+            accumulator.push(parsed);
+          }
 
           return accumulator;
         }, [])
