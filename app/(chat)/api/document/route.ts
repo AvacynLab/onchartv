@@ -12,10 +12,13 @@ export async function GET(request: Request) {
   const id = searchParams.get("id");
 
   if (!id) {
-    return new ChatSDKError(
-      "bad_request:api",
-      "Parameter id is missing"
-    ).toResponse();
+    /**
+     * Mirror the public API contract by surfacing the standard bad request
+     * message instead of leaking an implementation-specific detail.  The
+     * Playwright and route tests assert against the shared `ChatSDKError`
+     * catalogue to keep user-facing copy consistent across surfaces.
+     */
+    return new ChatSDKError("bad_request:api").toResponse();
   }
 
   const session = await auth();
@@ -48,10 +51,7 @@ export async function POST(request: Request) {
   const id = searchParams.get("id");
 
   if (!id) {
-    return new ChatSDKError(
-      "bad_request:api",
-      "Parameter id is required."
-    ).toResponse();
+    return new ChatSDKError("bad_request:api").toResponse();
   }
 
   const session = await auth();
@@ -98,17 +98,11 @@ export async function DELETE(request: Request) {
   const timestamp = searchParams.get("timestamp");
 
   if (!id) {
-    return new ChatSDKError(
-      "bad_request:api",
-      "Parameter id is required."
-    ).toResponse();
+    return new ChatSDKError("bad_request:api").toResponse();
   }
 
   if (!timestamp) {
-    return new ChatSDKError(
-      "bad_request:api",
-      "Parameter timestamp is required."
-    ).toResponse();
+    return new ChatSDKError("bad_request:api").toResponse();
   }
 
   const session = await auth();
