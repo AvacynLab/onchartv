@@ -1,7 +1,6 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
-import type { PageProps } from "next";
 
 import { Chat } from "@/components/chat";
 import { DataStreamHandler } from "@/components/data-stream-handler";
@@ -10,7 +9,9 @@ import { generateUUID } from "@/lib/utils";
 
 import { auth } from "../../(auth)/auth";
 
-type ChatPageProps = PageProps & {
+type ChatPageProps = {
+  readonly params?: Record<string, string | string[] | undefined>;
+  readonly searchParams?: Record<string, string | string[] | undefined>;
   /**
    * Optional session prefetched by a parent segment. When provided we reuse it
    * to avoid hitting the auth provider twice for the same navigation.
