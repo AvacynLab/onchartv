@@ -8,13 +8,21 @@ import { generateUUID } from "@/lib/utils";
 
 import { auth } from "../../(auth)/auth";
 
+type ChatPageProps = {
+  /**
+   * Optional session prefetched by a parent segment. When provided we reuse it
+   * to avoid hitting the auth provider twice for the same navigation.
+   */
+  readonly prefetchedSession?: Awaited<ReturnType<typeof auth>>;
+};
+
 /**
  * Server component responsible for provisioning a brand new chat surface.
  * Regular sessions land here after authentication; guests are bounced back to
  * `/login` where the Playwright harness provisions credentials.
  */
-export default async function Page() {
-  const session = await auth();
+export default async function Page(props?: ChatPageProps) {
+  const session = props?.prefetchedSession ?? (await auth());
 
   if (!session || session.user.type !== "regular") {
     // Regular accounts are required for the chat surface; guests are routed to

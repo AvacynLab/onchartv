@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { FinanceBacktestArtifact } from "@/lib/finance/types";
+import { z } from "zod";
 
 /** Nombre d'entrées affichées par page dans le journal des trades. */
 const TRADES_PER_PAGE = 8;
@@ -108,6 +109,94 @@ const TIMEFRAME_OPTIONS = ["1D", "4H", "1H", "30m", "15m"] as const;
 const RETEST_TOGGLE_LABEL = "Re-tester avec ces paramètres";
 
 type TimeframeOption = (typeof TIMEFRAME_OPTIONS)[number];
+
+/**
+ * Zod schema validating the inline retest form. Transformations trim user
+ * inputs, coerce the SMA windows into integers, and enforce chronological date
+ * ranges. Error messages intentionally mirror the legacy imperative checks so
+ * the test suite and UX remain stable while benefiting from structured parsing.
+ */
+const retestFormSchema = z
+  .object({
+    symbol: z
+      .string()
+      .transform((value) => value.trim().toUpperCase())
+      .refine((value) => value.length > 0, {
+        message: "Le symbole est requis pour relancer le backtest.",
+      }),
+    timeframe: z.enum(TIMEFRAME_OPTIONS),
+    from: z
+      .string()
+      .transform((value) => value.trim())
+      .refine((value) => value.length > 0, {
+        message: "Merci de renseigner les dates de début et de fin.",
+      }),
+    to: z
+      .string()
+      .transform((value) => value.trim())
+      .refine((value) => value.length > 0, {
+        message: "Merci de renseigner les dates de début et de fin.",
+      }),
+    fastPeriod: z
+      .string()
+      .transform((value) => value.trim())
+      .refine((value) => /^\d+$/.test(value), {
+        message: "La période rapide doit être un entier positif.",
+      })
+      .transform((value) => Number.parseInt(value, 10))
+      .refine((value) => Number.isInteger(value) && value >= 1, {
+        message: "La période rapide doit être un entier positif.",
+      }),
+    slowPeriod: z
+      .string()
+      .transform((value) => value.trim())
+      .refine((value) => /^\d+$/.test(value), {
+        message: "La période lente doit être un entier supérieur à la période rapide.",
+      })
+      .transform((value) => Number.parseInt(value, 10))
+      .refine((value) => Number.isInteger(value) && value >= 1, {
+        message: "La période lente doit être un entier supérieur à la période rapide.",
+      }),
+  })
+  .superRefine((data, ctx) => {
+    if (data.slowPeriod <= data.fastPeriod) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["slowPeriod"],
+        message:
+          "La période lente doit être un entier supérieur à la période rapide.",
+      });
+    }
+
+    if (!data.from || !data.to) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["from"],
+        message: "Merci de renseigner les dates de début et de fin.",
+      });
+      return;
+    }
+
+    const fromDate = new Date(data.from);
+    const toDate = new Date(data.to);
+
+    if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["from"],
+        message: "Merci de renseigner les dates de début et de fin.",
+      });
+      return;
+    }
+
+    if (fromDate > toDate) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["to"],
+        message: "La date de fin doit être postérieure à la date de début.",
+      });
+    }
+  });
 
 export interface BacktestReportArtifactProps {
   readonly artifact: FinanceBacktestArtifact;
@@ -240,46 +329,33 @@ export function BacktestReportArtifact({
   const handleRetestSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
-    const trimmedSymbol = formValues.symbol.trim().toUpperCase();
-    const from = formValues.from.trim();
-    const to = formValues.to.trim();
-    const fastPeriod = Number.parseInt(formValues.fastPeriod, 10);
-    const slowPeriod = Number.parseInt(formValues.slowPeriod, 10);
+    const validation = retestFormSchema.safeParse({
+      symbol: formValues.symbol,
+      timeframe: formValues.timeframe,
+      from: formValues.from,
+      to: formValues.to,
+      fastPeriod: formValues.fastPeriod,
+      slowPeriod: formValues.slowPeriod,
+    });
 
-    if (!trimmedSymbol) {
-      setFormError("Le symbole est requis pour relancer le backtest.");
-      return;
-    }
-
-    if (!Number.isInteger(fastPeriod) || fastPeriod < 1) {
-      setFormError("La période rapide doit être un entier positif.");
-      return;
-    }
-
-    if (!Number.isInteger(slowPeriod) || slowPeriod <= fastPeriod) {
+    if (!validation.success) {
+      const [issue] = validation.error.issues;
       setFormError(
-        "La période lente doit être un entier supérieur à la période rapide."
+        issue?.message ?? "Les paramètres de re-test sont invalides."
       );
-      return;
-    }
-
-    if (!from || !to) {
-      setFormError("Merci de renseigner les dates de début et de fin.");
-      return;
-    }
-
-    if (new Date(from) > new Date(to)) {
-      setFormError("La date de fin doit être postérieure à la date de début.");
       return;
     }
 
     setFormError(null);
 
+    const { symbol, timeframe, from, to, fastPeriod, slowPeriod } =
+      validation.data;
+
     if (onRetest) {
       onRetest({
         ...artifact,
-        symbol: trimmedSymbol as FinanceBacktestArtifact["symbol"],
-        timeframe: formValues.timeframe,
+        symbol: symbol as FinanceBacktestArtifact["symbol"],
+        timeframe,
         period: {
           from,
           to,

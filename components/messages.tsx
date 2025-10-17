@@ -13,6 +13,7 @@ import {
   financeArtifactSchema,
   type FinanceArtifact,
 } from "@/lib/finance/types";
+import * as featureFlags from "@/lib/feature-flags";
 import { logWarning } from "@/lib/logging";
 
 type MessagesProps = {
@@ -25,6 +26,7 @@ type MessagesProps = {
   isReadonly: boolean;
   isArtifactVisible: boolean;
   selectedModelId: string;
+  financeFeatureEnabledOverride?: boolean;
 };
 
 const isRenderableMessage = (value: ChatMessage | null | undefined): value is ChatMessage => {
@@ -110,6 +112,7 @@ function PureMessages({
   regenerate,
   isReadonly,
   selectedModelId,
+  financeFeatureEnabledOverride,
 }: MessagesProps) {
   const {
     containerRef: messagesContainerRef,
@@ -129,6 +132,16 @@ function PureMessages({
    */
   const safeMessages = Array.isArray(messages) ? messages : messages ?? [];
   const safeVotes = Array.isArray(votes) ? votes : votes ?? [];
+
+  /**
+   * Evaluate the finance flag once per render. Tests can inject
+   * `financeFeatureEnabledOverride` to force the disabled branch without
+   * mutating global process state.
+   */
+  const financeFeatureEnabled =
+    typeof financeFeatureEnabledOverride === "boolean"
+      ? financeFeatureEnabledOverride
+      : featureFlags.isFinanceFeatureEnabledClient();
 
   /**
    * Track the previous message count and the viewport stickiness so we can
@@ -214,29 +227,46 @@ function PureMessages({
             ).artifacts;
 
             const invalidArtifacts: InvalidArtifactLog[] = [];
-            const sanitizedArtifacts: FinanceArtifact[] = Array.isArray(rawArtifacts)
-              ? rawArtifacts.reduce<FinanceArtifact[]>((acc, artifact, artifactIndex) => {
-                  const parsed = parseFinanceArtifact(
-                    artifact,
-                    artifactIndex,
-                    message.id,
-                    invalidArtifacts
-                  );
+            const sanitizedArtifacts: FinanceArtifact[] =
+              financeFeatureEnabled && Array.isArray(rawArtifacts)
+                ? rawArtifacts.reduce<FinanceArtifact[]>(
+                    (acc, artifact, artifactIndex) => {
+                      const parsed = parseFinanceArtifact(
+                        artifact,
+                        artifactIndex,
+                        message.id,
+                        invalidArtifacts
+                      );
 
-                  if (parsed) {
-                    acc.push(parsed);
-                  }
+                      if (parsed) {
+                        acc.push(parsed);
+                      }
 
-                  return acc;
-                }, [])
-              : [];
+                      return acc;
+                    },
+                    []
+                  )
+                : [];
+
+            if (!financeFeatureEnabled && Array.isArray(rawArtifacts) && rawArtifacts.length > 0) {
+              /**
+               * When finance experiences are disabled the UI must stay silent
+               * about any related artefacts. Swallowing the payload keeps the
+               * assistant copy visible while mirroring the server-side flag
+               * behaviour (APIs emit `403` when the feature is disabled).
+               */
+              logWarning("chat:messages", "[Messages] finance artefact hidden by feature flag", {
+                artifactCount: rawArtifacts.length,
+                messageId: message.id,
+              });
+            }
 
             const normalisedMessage = {
               ...message,
               artifacts: sanitizedArtifacts,
             } as ChatMessage;
 
-            const invalidCount = invalidArtifacts.length;
+            const invalidCount = financeFeatureEnabled ? invalidArtifacts.length : 0;
 
             return (
               <Fragment key={message.id}>
@@ -321,6 +351,13 @@ export const Messages = memo(PureMessages, (prevProps, nextProps) => {
   }
 
   if (prevProps.selectedModelId !== nextProps.selectedModelId) {
+    return false;
+  }
+
+  if (
+    prevProps.financeFeatureEnabledOverride !==
+    nextProps.financeFeatureEnabledOverride
+  ) {
     return false;
   }
 

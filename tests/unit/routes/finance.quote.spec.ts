@@ -71,7 +71,7 @@ describe("/api/finance/quote", () => {
     expect(response.status).toBe(400);
     const error = await response.json();
     expect(error.error.code).toBe("bad_request:api");
-    expect(error.error.cause).toMatch(/symbol/);
+    expect(error.error.message).toMatch(/symbol/);
   });
 
   it("rejects unsupported symbols", async () => {
@@ -84,7 +84,7 @@ describe("/api/finance/quote", () => {
     expect(response.status).toBe(400);
     const error = await response.json();
     expect(error.error.code).toBe("bad_request:api");
-    expect(error.error.cause).toMatch(/Unsupported symbol/);
+    expect(error.error.message).toMatch(/Unsupported symbol/);
   });
 
   it("returns forbidden when the finance feature flag is disabled", async () => {
@@ -99,7 +99,7 @@ describe("/api/finance/quote", () => {
       expect(response.status).toBe(403);
       const error = await response.json();
       expect(error.error.code).toBe("forbidden:api");
-      expect(error.error.cause).toMatch(/Finance endpoints are disabled/i);
+      expect(error.error.message).toMatch(/Finance endpoints are disabled/i);
     } finally {
       vi.unstubAllEnvs();
     }

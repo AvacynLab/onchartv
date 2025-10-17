@@ -49,17 +49,42 @@ test.describe("Finance end-to-end journeys", () => {
       name: /Graphique en chandeliers/i,
     });
     await chartContainer.focus();
+
+    // Navigate to a different candle via keyboard so the baseline snapshot captures a deterministic transition.
     await page.keyboard.press("ArrowLeft");
-    await expect(detailHeading).not.toHaveText(baselineHeading);
+    await expect
+      .poll(async () => (await detailHeading.innerText()).trim())
+      .not.toBe(baselineHeading);
+    const arrowHeading = (await detailHeading.innerText()).trim();
+
+    // Confirm clicking a distant area of the chart updates the selection just like keyboard navigation does.
+    const chartBoundingBox = await chartContainer.boundingBox();
+    if (!chartBoundingBox) {
+      throw new Error("Unable to resolve the finance chart bounding box for click interactions.");
+    }
+    await page.mouse.click(
+      chartBoundingBox.x + chartBoundingBox.width * 0.1,
+      chartBoundingBox.y + chartBoundingBox.height * 0.5
+    );
+    await expect
+      .poll(async () => (await detailHeading.innerText()).trim())
+      .not.toBe(arrowHeading);
+
     await expect(details).toContainText("Ouverture");
     await expect(details).toContainText("BTCUSD");
 
-    const overlayToggle = page.getByTestId("finance-overlay-toggle-sma-50");
-    await expect(overlayToggle).toHaveAttribute("aria-pressed", "true");
-    await overlayToggle.click();
-    await expect(overlayToggle).toHaveAttribute("aria-pressed", "false");
-    await overlayToggle.click();
-    await expect(overlayToggle).toHaveAttribute("aria-pressed", "true");
+    const overlayToggles = chart.locator('[data-testid^="finance-overlay-toggle-"]');
+    const overlayToggleCount = await overlayToggles.count();
+    expect(overlayToggleCount).toBeGreaterThan(0);
+
+    for (let index = 0; index < overlayToggleCount; index += 1) {
+      const toggle = overlayToggles.nth(index);
+      await expect(toggle).toHaveAttribute("aria-pressed", "true");
+      await toggle.click();
+      await expect(toggle).toHaveAttribute("aria-pressed", "false");
+      await toggle.click();
+      await expect(toggle).toHaveAttribute("aria-pressed", "true");
+    }
 
     const historyCheck = await page.evaluate(async () => {
       const response = await fetch("/api/finance/history?symbol=BTCUSD");

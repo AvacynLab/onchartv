@@ -15,6 +15,8 @@ export function detectCandlestickPatterns(
 ): PatternDetection[] {
   const detections: PatternDetection[] = [];
 
+  const trendWindow = 3;
+
   for (let index = 1; index < candles.length; index += 1) {
     const previous = candles[index - 1];
     const current = candles[index];
@@ -32,7 +34,8 @@ export function detectCandlestickPatterns(
       body / range <= 0.3 &&
       lowerShadow / range >= 0.5 &&
       upperShadow / range <= 0.2 &&
-      current.close > current.open;
+      current.close > current.open &&
+      hasDowntrend(candles, index, trendWindow);
 
     if (isHammer) {
       detections.push({
@@ -52,7 +55,8 @@ export function detectCandlestickPatterns(
       current.close > current.open &&
       current.open <= previous.close &&
       current.close >= previous.open &&
-      body >= previousBody;
+      body >= previousBody &&
+      hasDowntrend(candles, index, trendWindow);
 
     if (isBullishEngulfing) {
       detections.push({
@@ -71,7 +75,8 @@ export function detectCandlestickPatterns(
       current.close < current.open &&
       current.open >= previous.close &&
       current.close <= previous.open &&
-      body >= previousBody;
+      body >= previousBody &&
+      hasUptrend(candles, index, trendWindow);
 
     if (isBearishEngulfing) {
       detections.push({
@@ -206,4 +211,95 @@ function mergeLevel(
   }
 
   levels.push({ ...candidate });
+}
+
+/**
+ * Confirms that the candles leading into the potential reversal formed a
+ * persistent downtrend. The helper combines a simple slope check with a vote on
+ * individual candle moves so noisy oscillations do not trigger patterns.
+ */
+function hasDowntrend(
+  candles: CandleSeries,
+  pivotIndex: number,
+  window: number
+): boolean {
+  if (pivotIndex < 1) {
+    return false;
+  }
+
+  const startIndex = Math.max(0, pivotIndex - window);
+  if (pivotIndex - startIndex < 1) {
+    return false;
+  }
+
+  const startClose = candles[startIndex].close;
+  const endClose = candles[pivotIndex - 1].close;
+
+  if (!Number.isFinite(startClose) || startClose === 0) {
+    return false;
+  }
+
+  const change = (endClose - startClose) / Math.abs(startClose);
+  if (change >= -0.003) {
+    return false;
+  }
+
+  let decreases = 0;
+  let increases = 0;
+  for (let index = startIndex + 1; index <= pivotIndex - 1; index += 1) {
+    const current = candles[index].close;
+    const previous = candles[index - 1].close;
+    if (current < previous) {
+      decreases += 1;
+    } else if (current > previous) {
+      increases += 1;
+    }
+  }
+
+  return decreases > 0 && decreases >= increases;
+}
+
+/**
+ * Symmetric helper validating that a sequence of rising closes preceded the
+ * candidate reversal candle.
+ */
+function hasUptrend(
+  candles: CandleSeries,
+  pivotIndex: number,
+  window: number
+): boolean {
+  if (pivotIndex < 1) {
+    return false;
+  }
+
+  const startIndex = Math.max(0, pivotIndex - window);
+  if (pivotIndex - startIndex < 1) {
+    return false;
+  }
+
+  const startClose = candles[startIndex].close;
+  const endClose = candles[pivotIndex - 1].close;
+
+  if (!Number.isFinite(startClose) || startClose === 0) {
+    return false;
+  }
+
+  const change = (endClose - startClose) / Math.abs(startClose);
+  if (change <= 0.003) {
+    return false;
+  }
+
+  let increases = 0;
+  let decreases = 0;
+  for (let index = startIndex + 1; index <= pivotIndex - 1; index += 1) {
+    const current = candles[index].close;
+    const previous = candles[index - 1].close;
+    if (current > previous) {
+      increases += 1;
+    } else if (current < previous) {
+      decreases += 1;
+    }
+  }
+
+  return increases > 0 && increases >= decreases;
 }

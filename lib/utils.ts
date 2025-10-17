@@ -9,10 +9,7 @@ import { formatISO } from 'date-fns';
 import { twMerge } from 'tailwind-merge';
 import { z } from 'zod';
 import type { DBMessage, Document, MessageArtifact } from '@/lib/db/schema';
-import {
-  financeArtifactSchema,
-  type FinanceArtifact,
-} from '@/lib/finance/types';
+import { financeMessageArtifactSchema } from '@/lib/artifacts/types';
 import { logError, logWarning } from './logging';
 import { ChatSDKError, type ErrorCode } from './errors';
 import type { ChatMessage, ChatTools, CustomUIDataTypes } from './types';
@@ -195,35 +192,25 @@ export function sanitizeText(text: string) {
 const artifactToDataPart = (
   artifact: MessageArtifact
 ): UIMessagePart<CustomUIDataTypes, ChatTools> | null => {
-  const parsed = financeArtifactSchema.safeParse(artifact.payload);
+  const parsed = financeMessageArtifactSchema.safeParse(artifact);
 
   if (!parsed.success) {
+    const candidate = artifact as { type?: unknown };
     logWarning(
       'chat:convertToUIMessages',
       '[convertToUIMessages] skipped malformed finance artifact',
       {
-        artifactType: artifact.type,
+        artifactType:
+          typeof candidate?.type === 'string' ? candidate.type : 'unknown',
         issues: parsed.error.issues.map((issue) => issue.message),
       },
     );
     return null;
   }
 
-  const payload = parsed.data;
+  const { payload, type } = parsed.data;
 
-  if (payload.type !== artifact.type) {
-    logWarning(
-      'chat:convertToUIMessages',
-      '[convertToUIMessages] artifact type mismatch',
-      {
-        expected: artifact.type,
-        actual: payload.type,
-      },
-    );
-    return null;
-  }
-
-  switch (payload.type) {
+  switch (type) {
     case 'finance.chart':
       return {
         type: 'data-financeChart',

@@ -16,7 +16,8 @@ import { logError } from "@/lib/logging";
 const querySchema = z.object({
   symbol: z
     .string({ required_error: "symbol is required" })
-    .min(1, "symbol must not be empty"),
+    .transform((value) => value.trim())
+    .refine((value) => value.length > 0, "symbol must not be empty"),
 });
 
 /**

@@ -272,6 +272,13 @@ function calculateMetrics(context: MetricComputationContext): BacktestMetrics {
     initialCapital === 0 ? 0 : (finalEquity - initialCapital) / initialCapital;
   const totalReturn = roundToFourDecimals(normaliseTiny(rawTotalReturn));
 
+  const baselineEquity = equityCurve.length
+    ? equityCurve[0].equity
+    : initialCapital;
+  const isFlatEquityCurve = equityCurve.every((point) =>
+    Math.abs(point.equity - baselineEquity) <= 1e-6
+  );
+
   const durationSeconds = Math.max(lastTimestamp - firstTimestamp, 0);
   const years = durationSeconds / (365 * 24 * 60 * 60);
   const rawCagr =
@@ -308,10 +315,14 @@ function calculateMetrics(context: MetricComputationContext): BacktestMetrics {
         : winningSum
       : winningSum / losingSum;
 
+  const sanitisedMaxDrawdown = isFlatEquityCurve
+    ? 0
+    : Math.max(0, normaliseTiny(maxDrawdown));
+
   return {
     totalReturn,
     cagr,
-    maxDrawdown: roundToFourDecimals(Math.max(0, normaliseTiny(maxDrawdown))),
+    maxDrawdown: roundToFourDecimals(sanitisedMaxDrawdown),
     winRate: roundToFourDecimals(winRate),
     averageWin: roundToTwoDecimals(averageWin),
     averageLoss: roundToTwoDecimals(averageLoss),

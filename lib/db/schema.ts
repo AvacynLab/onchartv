@@ -19,6 +19,7 @@ import type {
   FinanceIndicatorPreference,
   FinancePreferences,
 } from "../finance/preferences";
+import type { MessageArtifact } from "@/lib/artifacts/types";
 
 export const user = pgTable("User", {
   id: uuid("id").primaryKey().notNull().defaultRandom(),
@@ -57,18 +58,6 @@ export const messageDeprecated = pgTable("Message", {
 
 export type MessageDeprecated = InferSelectModel<typeof messageDeprecated>;
 
-/**
- * Structured payload describing artefacts persisted alongside assistant
- * messages. Artefacts cover finance charts, backtests, fundamentals, and other
- * rich visualisations streamed through the agent pipeline.
- */
-export interface MessageArtifact {
-  /** Identifier consumed by the UI renderer (e.g. `finance.chart`). */
-  readonly type: string;
-  /** JSON-serialisable payload containing the artefact data. */
-  readonly payload: unknown;
-}
-
 export const message = pgTable("Message_v2", {
   id: uuid("id").primaryKey().notNull().defaultRandom(),
   chatId: uuid("chatId")
@@ -85,6 +74,8 @@ export const message = pgTable("Message_v2", {
 });
 
 export type DBMessage = InferSelectModel<typeof message>;
+
+export type { MessageArtifact } from "@/lib/artifacts/types";
 
 // DEPRECATED: The following schema is deprecated and will be removed in the future.
 // Read the migration guide at https://chat-sdk.dev/docs/migration-guides/message-parts
@@ -319,12 +310,17 @@ export const backtestRun = pgTable(
     createdAt: timestamp("createdAt").notNull().defaultNow(),
   },
   (table) => ({
-    // Maintain the composite index used by the API when deduplicating recent
-    // runs. The name mirrors the requirement in the shared checklist so future
-    // migrations stay aligned with the documented contract.
-    assetTimeframePeriodIdx: index(
-      "BacktestRun_asset_timeframe_period_idx",
-    ).on(table.assetId, table.timeframe, table.periodStart),
+    // Maintain a deterministic window guard so duplicate results for the same
+    // asset/timeframe/window are rejected while keeping query plans efficient.
+    assetTimeframePeriodUnique: uniqueIndex(
+      "BacktestRun_asset_timeframe_period_unique",
+    ).on(
+      table.assetId,
+      table.timeframe,
+      table.periodStart,
+      table.strategyVersionId,
+      table.periodEnd,
+    ),
     strategyVersionIdx: index("BacktestRun_strategyVersion_idx").on(
       table.strategyVersionId,
     ),

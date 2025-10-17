@@ -72,12 +72,13 @@ export class ChatSDKError extends Error {
       );
     }
 
+    const publicMessage = typeof cause === "string" && cause.length > 0 ? cause : message;
+
     return Response.json(
       {
         error: {
           code,
-          message,
-          ...(cause ? { cause } : {}),
+          message: publicMessage,
         },
       },
       { status: statusCode }

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { logError, logWarning, sanitizeForLogging } from "@/lib/logging";
+import { logError, logInfo, logWarning, sanitizeForLogging } from "@/lib/logging";
 
 describe("logging helpers", () => {
   beforeEach(() => {
@@ -63,6 +63,19 @@ describe("logging helpers", () => {
     expect(entry.message).toBe("Heads up");
     expect(entry.extra).toEqual({ cookie: "[redacted]" });
     expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0]?.[1]).toEqual(entry);
+  });
+
+  it("emits structured info logs with redacted extras", () => {
+    const spy = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    const entry = logInfo("tests", "Ready", { userId: "123" });
+
+    expect(entry.level).toBe("info");
+    expect(entry.message).toBe("Ready");
+    expect(entry.extra).toEqual({ userId: "[redacted]" });
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0]?.[0]).toBe("[tests]");
     expect(spy.mock.calls[0]?.[1]).toEqual(entry);
   });
 });

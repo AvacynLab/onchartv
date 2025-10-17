@@ -9,7 +9,7 @@ import {
   type FinanceAssetMetadata,
 } from "@/lib/finance/catalog";
 import type { FinanceSymbol } from "@/lib/finance/types";
-import { logError, logWarning } from "../logging";
+import { logError, logInfo, logWarning } from "../logging";
 
 /**
  * Canonical set of assets inserted during local development and CI.
@@ -107,8 +107,9 @@ export async function seedDatabase(): Promise<void> {
       }
     });
 
-    console.info(
-      `[db:seed] Inserted ${SEED_ASSETS.length} finance assets into the catalogue.`
+    logInfo(
+      "db:seed",
+      `Inserted ${SEED_ASSETS.length} finance assets into the catalogue.`
     );
   } catch (error) {
     logError("db:seed", error, {

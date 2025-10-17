@@ -53,7 +53,20 @@ export const {
   providers: [
     Credentials({
       credentials: {},
-      async authorize({ email, password }: any) {
+      /**
+       * NextAuth passes the raw credential payload without enforcing a shape.
+       * We model the subset we actually care about (email/password) so the
+       * rest of the module can remain fully typed and avoid `any` fallbacks.
+       */
+      async authorize(credentials) {
+        const {
+          email,
+          password,
+        }: {
+          email?: string | null;
+          password?: string | null;
+        } = credentials ?? {};
+
         const normalisedEmail =
           typeof email === "string" ? email.trim() : "";
         const candidatePassword =

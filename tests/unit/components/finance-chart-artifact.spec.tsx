@@ -1,6 +1,6 @@
 import React from "react";
 import "@testing-library/jest-dom/vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, afterAll, describe, expect, it, vi } from "vitest";
 
@@ -169,7 +169,9 @@ describe("FinanceChartArtifact", () => {
   it("renders toggles, allows enabling/disabling overlays and persists the preference", async () => {
     const { unmount } = render(<FinanceChartArtifact artifact={artifact} />);
 
-    const toggle = screen.getByRole("button", { name: /sma/i });
+    const toggle = (await screen.findAllByTestId(
+      "finance-overlay-toggle-sma-20"
+    ))[0];
     expect(toggle).toHaveAttribute("aria-pressed", "true");
 
     await userEvent.click(toggle);
@@ -179,16 +181,55 @@ describe("FinanceChartArtifact", () => {
       expect.objectContaining({ visible: false })
     );
 
-    const stored = window.localStorage.getItem(storageKeyFor(artifact));
-    expect(stored).not.toBeNull();
-    expect(JSON.parse(stored as string)).toMatchObject({ "sma-20": false });
+    const storedAfterDisable = window.localStorage.getItem(
+      storageKeyFor(artifact)
+    );
+    expect(storedAfterDisable).not.toBeNull();
+    expect(JSON.parse(storedAfterDisable as string)).toMatchObject({
+      "sma-20": false,
+    });
 
     unmount();
 
     render(<FinanceChartArtifact artifact={artifact} />);
 
-    const persistedToggle = await screen.findByRole("button", { name: /sma/i });
-    expect(persistedToggle).toHaveAttribute("aria-pressed", "false");
+    const disabledToggle = (
+      await screen.findAllByTestId("finance-overlay-toggle-sma-20")
+    )[0];
+    await waitFor(() =>
+      expect(disabledToggle).toHaveAttribute("aria-pressed", "false")
+    );
+
+    await userEvent.click(disabledToggle);
+
+    await waitFor(() =>
+      expect(disabledToggle).toHaveAttribute("aria-pressed", "true")
+    );
+
+    const visibilityCalls = lineSeries.applyOptions.mock.calls.filter((call) => {
+      const [options] = call;
+      return Boolean(options && typeof options === "object" && "visible" in options);
+    });
+
+    expect(visibilityCalls.at(-1)?.[0]).toMatchObject({ visible: true });
+
+    const storedAfterEnable = window.localStorage.getItem(
+      storageKeyFor(artifact)
+    );
+    expect(JSON.parse(storedAfterEnable as string)).toMatchObject({
+      "sma-20": true,
+    });
+
+    unmount();
+
+    render(<FinanceChartArtifact artifact={artifact} />);
+
+    const persistedToggle = (
+      await screen.findAllByTestId("finance-overlay-toggle-sma-20")
+    )[0];
+    await waitFor(() =>
+      expect(persistedToggle).toHaveAttribute("aria-pressed", "true")
+    );
   });
 
   it("affiche un état vide sans initialiser le chart lorsque la série OHLCV est vide", () => {
@@ -333,6 +374,44 @@ describe("FinanceChartArtifact", () => {
       await userEvent.keyboard("{End}");
     });
     expect(detailPanel).toHaveTextContent(/174\.00/);
+  });
+
+  it("persists the clicked candle selection even after the hover signal clears", () => {
+    render(<FinanceChartArtifact artifact={artifact} />);
+
+    const clickHandler = clickHandlers.at(-1);
+    expect(clickHandler).toBeDefined();
+
+    act(() => {
+      clickHandler?.({
+        time: artifact.ohlcv[0]!.t,
+        seriesData: new Map([
+          [
+            candlestickSeries,
+            {
+              time: artifact.ohlcv[0]!.t,
+              open: artifact.ohlcv[0]!.o,
+              high: artifact.ohlcv[0]!.h,
+              low: artifact.ohlcv[0]!.l,
+              close: artifact.ohlcv[0]!.c,
+            },
+          ],
+        ]),
+      });
+    });
+
+    const detailPanel = screen.getByTestId("finance-chart-details");
+    expect(detailPanel).toHaveTextContent(/Ouverture\s*170\.00/);
+
+    const hoverHandler = crosshairHandlers.at(-1);
+    act(() => {
+      hoverHandler?.({
+        time: undefined,
+        seriesData: new Map(),
+      });
+    });
+
+    expect(detailPanel).toHaveTextContent(/Clôture\s*172\.00/);
   });
 
   it("enregistre et libère les abonnements chartistiques lors du démontage", () => {

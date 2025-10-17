@@ -71,6 +71,13 @@
       "when": 1757362775211,
       "tag": "0009_finance_preferences",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1763424000000,
+      "tag": "0010_guard_backtest_windows",
+      "breakpoints": true
     }
   ]
 }

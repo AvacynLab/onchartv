@@ -29,6 +29,7 @@ import {
   DEFAULT_FINANCE_PREFERENCES,
   type FinancePreferences,
 } from "@/lib/finance/preferences";
+import { logInfo } from "@/lib/logging";
 
 const MAX_CHART_CANDLES = 1_500;
 const MAX_OVERLAYS = 5;
@@ -254,7 +255,7 @@ function mapOverlaySeries(
 function createDefaultLogger(): FinanceToolLogger {
   return {
     info: (message, metadata) => {
-      console.info(`[finance.tools] ${message}`, metadata ?? {});
+      logInfo("finance.tools", message, metadata ?? {});
     },
   };
 }

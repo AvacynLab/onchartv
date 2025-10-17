@@ -56,18 +56,28 @@ export class InMemoryMarketDataAdapter implements MarketDataAdapter {
   }
 }
 
+const toFiniteNumber = (value: number): number =>
+  Number.isFinite(value) ? value : 0;
+
+const toFiniteTimestamp = (value: number): number => Math.floor(toFiniteNumber(value));
+
+const numericField = () =>
+  z.coerce.number().transform((value) => toFiniteNumber(value));
+
 /**
  * Zod schema describing the candle payload returned by external market data
  * providers. Using coercion ensures the adapter accepts numeric strings while
- * downstream consumers always interact with typed numbers.
+ * downstream consumers always interact with typed numbers. Any NaN or missing
+ * values are normalised to zero so charts never crash when upstream providers
+ * temporarily omit datapoints.
  */
 const candleSchema = z.object({
-  timestamp: z.coerce.number(),
-  open: z.coerce.number(),
-  high: z.coerce.number(),
-  low: z.coerce.number(),
-  close: z.coerce.number(),
-  volume: z.coerce.number(),
+  timestamp: z.coerce.number().transform((value) => toFiniteTimestamp(value)),
+  open: numericField(),
+  high: numericField(),
+  low: numericField(),
+  close: numericField(),
+  volume: numericField(),
 });
 
 const historyResponseSchema = z.object({
@@ -76,8 +86,8 @@ const historyResponseSchema = z.object({
 
 const quoteResponseSchema = z.object({
   symbol: z.string(),
-  price: z.coerce.number(),
-  timestamp: z.coerce.number(),
+  price: numericField(),
+  timestamp: z.coerce.number().transform((value) => toFiniteTimestamp(value)),
 });
 
 const DEFAULT_TIMEOUT_MS = 10_000;

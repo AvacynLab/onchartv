@@ -81,6 +81,35 @@ describe("runBacktest", () => {
     }
   });
 
+  it("remains fully in cash when the fallback quantity resolves to zero", () => {
+    const candles: OHLCV[] = [
+      candle(1, 1_000),
+      candle(2, 1_005),
+      candle(3, 1_010),
+      candle(4, 1_015),
+    ];
+
+    const result = runBacktest(candles, {
+      ...BASE_PARAMETERS,
+      risk: {
+        initialCapital: 500,
+        commissionPerTrade: 10,
+        slippageBps: 50,
+      },
+      strategy: {
+        type: "sma-crossover",
+        params: { fastPeriod: 1, slowPeriod: 2 },
+      },
+    });
+
+    expect(result.trades).toHaveLength(0);
+    expect(result.metrics.trades).toBe(0);
+    expect(result.metrics.maxDrawdown).toBe(0);
+    expect(result.metrics.totalReturn).toBe(0);
+    expect(result.metrics.profitFactor).toBe(0);
+    expect(result.equityCurve.every((point) => point.equity === 500)).toBe(true);
+  });
+
   it("applies commissions and slippage when trades are executed", () => {
     // The sequence purposely trends lower before reversing so the SMA crossover
     // strategy opens a position and later exits it once momentum fades.

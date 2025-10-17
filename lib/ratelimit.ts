@@ -51,6 +51,11 @@ export function enforceRateLimit(options: RateLimitOptions): RateLimitResult {
    * preventing spurious 429s during automation.
    */
   if (process.env.PLAYWRIGHT === "true") {
+    /**
+     * Returning early keeps the in-memory buckets untouched so subsequent calls
+     * outside Playwright runs continue to enforce the production quota. The
+     * tests assert this behaviour explicitly to avoid accidental regressions.
+     */
     return {
       allowed: true,
       remaining: limit,

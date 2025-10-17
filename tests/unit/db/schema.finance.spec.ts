@@ -56,13 +56,19 @@ describe("finance database schema", () => {
     });
   });
 
-  it("indexes BacktestRun lookups by asset, timeframe, and period start", () => {
+  it("deduplicates backtest runs per strategy/timeframe window", () => {
     const indexes = mapIndexes(backtestRun);
 
     expect(indexes).toContainEqual({
-      name: "BacktestRun_asset_timeframe_period_idx",
-      columns: ["assetId", "timeframe", "periodStart"],
-      unique: false,
+      name: "BacktestRun_asset_timeframe_period_unique",
+      columns: [
+        "assetId",
+        "timeframe",
+        "periodStart",
+        "strategyVersionId",
+        "periodEnd",
+      ],
+      unique: true,
     });
   });
 

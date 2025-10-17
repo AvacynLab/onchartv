@@ -6,7 +6,6 @@ import {
   assertFinanceFeatureEnabled,
   logRouteLatency,
   now,
-  parseIsoToEpochSeconds,
   resolveClientKey,
   resolveRange,
 } from "@/lib/finance/api-utils";
@@ -27,24 +26,83 @@ const SUPPORTED_TIMEFRAMES = ["1D"] as const;
 const MAX_BACKTEST_RANGE_DAYS = 5_000;
 const SECONDS_PER_DAY = 86_400;
 
+const DEFAULT_TIMEFRAME = SUPPORTED_TIMEFRAMES[0];
+
+const isoEpochSchema = (field: string) =>
+  z
+    .string({ required_error: `${field} is required` })
+    .transform((value, ctx) => {
+      const trimmed = value.trim();
+
+      if (trimmed.length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `${field} must not be empty`,
+        });
+        return z.NEVER;
+      }
+
+      const numeric = Number(trimmed);
+
+      if (!Number.isNaN(numeric)) {
+        return Math.floor(numeric);
+      }
+
+      const parsed = Date.parse(trimmed);
+
+      if (Number.isNaN(parsed)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Field '${field}' must be a valid ISO date or epoch seconds.`,
+        });
+        return z.NEVER;
+      }
+
+      return Math.floor(parsed / 1000);
+    });
+
 const requestSchema = z.object({
   symbol: z
     .string({ required_error: "symbol is required" })
-    .min(1, "symbol must not be empty"),
-  timeframe: z.string().optional(),
-  period: z.object({
-    from: z
-      .string({ required_error: "period.from is required" })
-      .min(1, "period.from must not be empty"),
-    to: z
-      .string({ required_error: "period.to is required" })
-      .min(1, "period.to must not be empty"),
-  }),
+    .transform((value) => value.trim())
+    .refine((value) => value.length > 0, "symbol must not be empty"),
+  timeframe: z
+    .string()
+    .optional()
+    .transform((value, ctx) => {
+      const normalised = (value ?? DEFAULT_TIMEFRAME).trim().toUpperCase();
+
+      if (!SUPPORTED_TIMEFRAMES.includes(normalised as (typeof SUPPORTED_TIMEFRAMES)[number])) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Unsupported timeframe '${value ?? ""}'. Only 1D candles are available in the offline catalogue.`,
+        });
+        return z.NEVER;
+      }
+
+      return normalised as (typeof SUPPORTED_TIMEFRAMES)[number];
+    })
+    .default(DEFAULT_TIMEFRAME),
+  period: z
+    .object({
+      from: isoEpochSchema("period.from"),
+      to: isoEpochSchema("period.to"),
+    })
+    .superRefine((value, ctx) => {
+      if (value.from > value.to) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Field 'period.from' must be earlier than 'period.to'.",
+          path: ["from"],
+        });
+      }
+    }),
   strategy: z.object({
     type: z.literal("sma-crossover"),
     name: z
       .string({ required_error: "strategy.name is required" })
-      .min(1, "strategy.name must not be empty"),
+      .transform((value) => value.trim())
+      .refine((value) => value.length > 0, "strategy.name must not be empty"),
     description: z.string().max(500).optional(),
     strategyId: z.string().uuid().optional(),
     params: z
@@ -117,14 +175,7 @@ export async function POST(request: Request): Promise<Response> {
 
     const payload = parsed.data;
     const metadata = assertSupportedSymbol(payload.symbol);
-    const timeframe = (payload.timeframe ?? "1D").trim().toUpperCase();
-
-    if (!SUPPORTED_TIMEFRAMES.includes(timeframe as (typeof SUPPORTED_TIMEFRAMES)[number])) {
-      throw new ChatSDKError(
-        "bad_request:api",
-        `Unsupported timeframe '${payload.timeframe ?? ""}'. Only 1D candles are available in the offline catalogue.`
-      );
-    }
+    const timeframe = payload.timeframe;
 
     const session = await auth();
 
@@ -136,12 +187,10 @@ export async function POST(request: Request): Promise<Response> {
     }
 
     const series = FINANCE_SERIES[metadata.symbol];
-    const fromEpoch = parseIsoToEpochSeconds(payload.period.from, "period.from");
-    const toEpoch = parseIsoToEpochSeconds(payload.period.to, "period.to");
+    const fromEpoch = payload.period.from;
+    const toEpoch = payload.period.to;
     const maxSpanSeconds = MAX_BACKTEST_RANGE_DAYS * SECONDS_PER_DAY;
-    const effectiveFrom = fromEpoch ?? series[0]!.timestamp;
-    const effectiveTo = toEpoch ?? series[series.length - 1]!.timestamp;
-    const requestedSpanSeconds = effectiveTo - effectiveFrom;
+    const requestedSpanSeconds = toEpoch - fromEpoch;
 
     if (requestedSpanSeconds > maxSpanSeconds) {
       throw new ChatSDKError(

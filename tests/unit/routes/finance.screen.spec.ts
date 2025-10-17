@@ -73,12 +73,8 @@ describe("/api/finance/screen", () => {
 
     expect(response.status).toBe(400);
     const error = await response.json();
-    expect(error.error).toEqual(
-      expect.objectContaining({
-        code: "bad_request:api",
-        cause: expect.stringContaining("valid JSON"),
-      })
-    );
+    expect(error.error.code).toBe("bad_request:api");
+    expect(error.error.message).toMatch(/valid JSON/);
   });
 
   it("rejects requests with a limit above the maximum", async () => {
@@ -95,7 +91,7 @@ describe("/api/finance/screen", () => {
     expect(response.status).toBe(400);
     const error = await response.json();
     expect(error.error.code).toBe("bad_request:api");
-    expect(error.error.cause).toMatch(/cannot exceed 25/);
+    expect(error.error.message).toMatch(/cannot exceed 25/);
   });
 
   it("returns forbidden when the finance feature flag is disabled", async () => {
@@ -114,7 +110,7 @@ describe("/api/finance/screen", () => {
       expect(response.status).toBe(403);
       const error = await response.json();
       expect(error.error.code).toBe("forbidden:api");
-      expect(error.error.cause).toMatch(/Finance endpoints are disabled/i);
+      expect(error.error.message).toMatch(/Finance endpoints are disabled/i);
     } finally {
       vi.unstubAllEnvs();
     }

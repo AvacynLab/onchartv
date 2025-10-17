@@ -23,6 +23,16 @@ describe("calculateEMA", () => {
     const result = calculateEMA(series([50, 50, 50, 50, 50, 50]), { period: 3 });
     expect(result.filter((value) => value !== null)).toEqual([50, 50, 50, 50]);
   });
+
+  it("short-circuits when the price series is empty", () => {
+    expect(calculateEMA(series([]), { period: 3 })).toEqual([]);
+  });
+
+  it("throws when provided an invalid period", () => {
+    expect(() => calculateEMA(series([1, 2, 3]), { period: 0 })).toThrow(
+      /positive integer/
+    );
+  });
 });
 
 describe("calculateRSI", () => {
@@ -41,5 +51,20 @@ describe("calculateRSI", () => {
   it("returns all null when the input is shorter than the window", () => {
     const result = calculateRSI(series([1, 2, 3, 4]), { period: 10 });
     expect(result).toEqual([null, null, null, null]);
+  });
+
+  it("reflects directional moves without breaching the canonical bounds", () => {
+    const rising = calculateRSI(series([10, 11, 12, 13, 14, 15, 16]), {
+      period: 3,
+    });
+    const falling = calculateRSI(series([20, 19, 18, 17, 16, 15, 14]), {
+      period: 3,
+    });
+
+    const risingValues = rising.filter((value): value is number => value !== null);
+    const fallingValues = falling.filter((value): value is number => value !== null);
+
+    expect(risingValues.every((value) => value >= 60 && value <= 100)).toBe(true);
+    expect(fallingValues.every((value) => value <= 40 && value >= 0)).toBe(true);
   });
 });

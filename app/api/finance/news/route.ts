@@ -12,11 +12,55 @@ import { ChatSDKError } from "@/lib/errors";
 import { logError } from "@/lib/logging";
 import { enforceRateLimit } from "@/lib/ratelimit";
 
+const MAX_NEWS_ITEMS = 50;
+
 const querySchema = z.object({
   symbol: z
     .string({ required_error: "symbol is required" })
-    .min(1, "symbol must not be empty"),
-  limit: z.string().optional(),
+    .transform((value) => value.trim())
+    .refine((value) => value.length > 0, "symbol must not be empty"),
+  limit: z
+    .string()
+    .optional()
+    .transform((value, ctx) => {
+      if (value === undefined) {
+        return undefined;
+      }
+
+      const trimmed = value.trim();
+
+      if (trimmed.length === 0) {
+        return undefined;
+      }
+
+      if (!/^\d+$/.test(trimmed)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Parameter 'limit' must be a positive integer when provided.",
+        });
+        return z.NEVER;
+      }
+
+      const parsed = Number.parseInt(trimmed, 10);
+
+      if (parsed <= 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Parameter 'limit' must be a positive integer when provided.",
+        });
+        return z.NEVER;
+      }
+
+      if (parsed > MAX_NEWS_ITEMS) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Parameter 'limit' cannot exceed ${MAX_NEWS_ITEMS}.`,
+        });
+        return z.NEVER;
+      }
+
+      return parsed;
+    }),
 });
 
 /**
@@ -54,27 +98,7 @@ export async function GET(request: Request): Promise<Response> {
 
     const metadata = assertSupportedSymbol(parsed.data.symbol);
     symbol = metadata.symbol;
-
-    /**
-     * Normalise the optional `limit` query and reject non-integer payloads so
-     * Playwright assertions remain stable across environments.
-     */
-    const rawLimit = parsed.data.limit?.trim();
-    if (rawLimit && !/^\d+$/.test(rawLimit)) {
-      throw new ChatSDKError(
-        "bad_request:api",
-        "Parameter 'limit' must be a positive integer when provided."
-      );
-    }
-
-    limit = rawLimit ? Number.parseInt(rawLimit, 10) : 10;
-
-    if (Number.isNaN(limit) || limit <= 0) {
-      throw new ChatSDKError(
-        "bad_request:api",
-        "Parameter 'limit' must be a positive integer when provided."
-      );
-    }
+    limit = parsed.data.limit ?? 10;
 
     const items = NEWS_ITEMS.filter((item) => item.symbol === metadata.symbol)
       .slice()

@@ -151,5 +151,43 @@ describe("BacktestReportArtifact", () => {
       params: { fastPeriod: 30, slowPeriod: 90 },
     });
   });
+
+  it("signale lorsque la période lente est inférieure ou égale à la rapide", async () => {
+    const user = userEvent.setup();
+    render(<BacktestReportArtifact artifact={makeArtifact()} />);
+
+    await user.click(screen.getByTestId("finance-backtest-retest-toggle"));
+
+    await user.clear(screen.getByLabelText("SMA lente"));
+    await user.type(screen.getByLabelText("SMA lente"), "10");
+
+    await user.click(
+      screen.getByRole("button", { name: "Lancer un nouveau backtest" })
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "La période lente doit être un entier supérieur à la période rapide."
+    );
+  });
+
+  it("valide que la date de fin ne précède pas la date de début", async () => {
+    const user = userEvent.setup();
+    render(<BacktestReportArtifact artifact={makeArtifact()} />);
+
+    await user.click(screen.getByTestId("finance-backtest-retest-toggle"));
+
+    await user.clear(screen.getByLabelText("Début"));
+    await user.type(screen.getByLabelText("Début"), "2024-03-01");
+    await user.clear(screen.getByLabelText("Fin"));
+    await user.type(screen.getByLabelText("Fin"), "2024-02-01");
+
+    await user.click(
+      screen.getByRole("button", { name: "Lancer un nouveau backtest" })
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "La date de fin doit être postérieure à la date de début."
+    );
+  });
 });
 

@@ -35,12 +35,15 @@ describe("detectCandlestickPatterns", () => {
 
   it("detects textbook hammer and engulfing setups", () => {
     const candles = buildCandles([
-      { timestamp: 1, open: 102, close: 98, high: 103, low: 97 },
-      { timestamp: 2, open: 98, close: 99.4, high: 100, low: 95 }, // hammer
-      { timestamp: 3, open: 99.5, close: 98.5, high: 100, low: 98 },
-      { timestamp: 4, open: 98, close: 101.5, high: 102, low: 97.5 }, // bullish engulfing
-      { timestamp: 5, open: 101.2, close: 102.4, high: 103, low: 100.8 },
-      { timestamp: 6, open: 103, close: 100, high: 103.5, low: 99.5 }, // bearish engulfing
+      { timestamp: 1, open: 110, close: 106, high: 111, low: 105 },
+      { timestamp: 2, open: 106, close: 102, high: 107, low: 101 },
+      { timestamp: 3, open: 102, close: 99, high: 103, low: 98 },
+      { timestamp: 4, open: 98, close: 100, high: 101, low: 94 }, // hammer
+      { timestamp: 5, open: 100.5, close: 98.2, high: 101, low: 97.5 },
+      { timestamp: 6, open: 97.8, close: 101.8, high: 102.5, low: 97.2 }, // bullish engulfing
+      { timestamp: 7, open: 101.5, close: 104, high: 104.6, low: 101 },
+      { timestamp: 8, open: 104, close: 105.8, high: 106.3, low: 103.5 },
+      { timestamp: 9, open: 106.2, close: 101.9, high: 106.6, low: 101.4 }, // bearish engulfing
     ]);
 
     const patterns = detectCandlestickPatterns(candles);
@@ -49,6 +52,23 @@ describe("detectCandlestickPatterns", () => {
     expect(names).toContain("hammer");
     expect(names).toContain("bullish_engulfing");
     expect(names).toContain("bearish_engulfing");
+  });
+
+  it("skips reversal patterns when the prerequisite trend is absent", () => {
+    const candles = buildCandles([
+      { timestamp: 1, open: 100, close: 100.5, high: 101, low: 99.5 },
+      { timestamp: 2, open: 100.6, close: 100.8, high: 101.2, low: 100.4 },
+      { timestamp: 3, open: 100.7, close: 100.9, high: 101.3, low: 100.5 },
+      { timestamp: 4, open: 100.4, close: 100.9, high: 101.1, low: 99.4 }, // hammer body but no downtrend
+      { timestamp: 5, open: 100.8, close: 101.1, high: 101.5, low: 100.6 },
+    ]);
+
+    const names = detectCandlestickPatterns(candles).map(
+      (pattern) => pattern.pattern.name
+    );
+
+    expect(names).not.toContain("hammer");
+    expect(names).toHaveLength(0);
   });
 });
 

@@ -5,6 +5,7 @@ import { performance } from "node:perf_hooks";
 
 import { ChatSDKError } from "@/lib/errors";
 import { isFinanceFeatureEnabled } from "@/lib/feature-flags";
+import { logInfo } from "@/lib/logging";
 import { findAssetMetadata, type FinanceAssetMetadata } from "./catalog";
 
 /**
@@ -107,8 +108,9 @@ export function logRouteLatency(
   const duration = performance.now() - startedAt;
   const sanitized = sanitizeRouteExtra(extra);
 
-  console.info(
-    `[api:${route}] completed in ${duration.toFixed(1)}ms`,
+  logInfo(
+    `api:${route}`,
+    `completed in ${duration.toFixed(1)}ms`,
     sanitized
   );
 }

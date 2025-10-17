@@ -13,6 +13,7 @@ import {
 } from "vitest";
 import * as logging from "@/lib/logging";
 import type { StructuredLogEntry } from "@/lib/logging";
+import * as featureFlags from "@/lib/feature-flags";
 
 import { DataStreamProvider } from "@/components/data-stream-provider";
 import type { ChatMessage } from "@/lib/types";
@@ -123,6 +124,11 @@ beforeEach(() => {
   hookState = createHookState();
   mockUseMessages.mockReturnValue(hookState);
   previewMessageSpy.mockClear();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 afterAll(() => {
@@ -357,6 +363,84 @@ describe("Messages", () => {
             }),
           ],
         }),
+      })
+    );
+  });
+
+  it("masque les artefacts finance lorsque le flag est désactivé", () => {
+    vi.stubEnv("NEXT_PUBLIC_FEATURE_FINANCE", "false");
+
+    const flagSpy = vi.spyOn(
+      featureFlags,
+      "isFinanceFeatureEnabledClient"
+    );
+    const warnSpy = vi
+      .spyOn(logging, "logWarning")
+      .mockImplementation((context, message, extra) => ({
+        context,
+        level: "warn",
+        timestamp: new Date().toISOString(),
+        message: typeof message === "string" ? message : undefined,
+        extra,
+      }) satisfies StructuredLogEntry);
+
+    const chartArtifact: FinanceChartArtifact = {
+      type: "finance.chart",
+      symbol: "BTCUSD",
+      timeframe: "1H",
+      range: { from: "2024-02-01", to: "2024-02-15" },
+      ohlcv: [
+        {
+          t: 1_706_070_400,
+          o: 42_000,
+          h: 42_800,
+          l: 41_900,
+          c: 42_500,
+          v: 8_500,
+        },
+      ],
+      overlays: [],
+    };
+
+    const assistantMessage = {
+      id: "msg-flagged",
+      role: "assistant",
+      parts: [{ type: "text", text: "Finance hidden" }],
+      metadata: { createdAt: new Date().toISOString() },
+      artifacts: [chartArtifact],
+    } as unknown as ChatMessage;
+
+    render(
+      <Messages
+        chatId="chat-flagged"
+        financeFeatureEnabledOverride={false}
+        isArtifactVisible={false}
+        isReadonly={false}
+        messages={[assistantMessage]}
+        regenerate={noop as any}
+        selectedModelId="model"
+        setMessages={noop as any}
+        status="idle"
+        votes={[]}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    expect(previewMessageSpy).toHaveBeenCalledTimes(1);
+
+    const [[previewProps]] = previewMessageSpy.mock.calls;
+    expect(previewProps.message.artifacts).toEqual([]);
+
+    expect(screen.queryByTestId("chat-artifact-fallback")).not.toBeInTheDocument();
+
+    expect(flagSpy).not.toHaveBeenCalled();
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "chat:messages",
+      expect.stringContaining("finance artefact hidden"),
+      expect.objectContaining({
+        artifactCount: 1,
+        messageId: "msg-flagged",
       })
     );
   });

@@ -64,9 +64,22 @@ describe("/api/finance/news", () => {
     expect(error.error).toEqual(
       expect.objectContaining({
         code: "bad_request:api",
-        cause: expect.stringContaining("positive integer"),
+        message: expect.stringContaining("positive integer"),
       })
     );
+  });
+
+  it("caps the number of requested articles to the configured maximum", async () => {
+    const { GET } = await import("@/app/api/finance/news/route");
+
+    const response = await GET(
+      new Request("http://localhost/api/finance/news?symbol=NVDA&limit=100")
+    );
+
+    expect(response.status).toBe(400);
+    const error = await response.json();
+    expect(error.error.code).toBe("bad_request:api");
+    expect(error.error.message).toMatch(/cannot exceed 50/);
   });
 
   it("rejects unknown symbols", async () => {
@@ -79,7 +92,7 @@ describe("/api/finance/news", () => {
     expect(response.status).toBe(400);
     const error = await response.json();
     expect(error.error.code).toBe("bad_request:api");
-    expect(error.error.cause).toMatch(/Unsupported symbol/);
+    expect(error.error.message).toMatch(/Unsupported symbol/);
   });
 
   it("returns forbidden when the finance feature flag is disabled", async () => {
@@ -94,7 +107,7 @@ describe("/api/finance/news", () => {
       expect(response.status).toBe(403);
       const error = await response.json();
       expect(error.error.code).toBe("forbidden:api");
-      expect(error.error.cause).toMatch(/Finance endpoints are disabled/i);
+      expect(error.error.message).toMatch(/Finance endpoints are disabled/i);
     } finally {
       vi.unstubAllEnvs();
     }

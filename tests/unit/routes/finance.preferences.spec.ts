@@ -119,14 +119,8 @@ describe("/api/finance/preferences", () => {
     expect(response.status).toBe(400);
 
     const error = await response.json();
-    expect(error).toEqual(
-      expect.objectContaining({
-        error: expect.objectContaining({
-          code: "bad_request:api",
-          message: expect.stringContaining("request couldn't be processed"),
-        }),
-      })
-    );
+    expect(error.error.code).toBe("bad_request:api");
+    expect(error.error.message).toMatch(/Sélectionne au moins un univers/);
   });
 
   it("returns forbidden when the finance feature flag is disabled", async () => {
@@ -141,7 +135,7 @@ describe("/api/finance/preferences", () => {
       expect(response.status).toBe(403);
       const error = await response.json();
       expect(error.error.code).toBe("forbidden:api");
-      expect(error.error.cause).toMatch(/Finance endpoints are disabled/i);
+      expect(error.error.message).toMatch(/Finance endpoints are disabled/i);
     } finally {
       vi.unstubAllEnvs();
     }

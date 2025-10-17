@@ -39,6 +39,10 @@ export function calculateSMA(
   const { period } = options;
   assertValidPeriod(period);
 
+  if (series.length === 0) {
+    return [];
+  }
+
   const result: NullableNumericSeries = new Array(series.length).fill(null);
   let rollingSum = 0;
 
@@ -70,6 +74,10 @@ export function calculateEMA(
 ): NullableNumericSeries {
   const { period } = options;
   assertValidPeriod(period);
+
+  if (series.length === 0) {
+    return [];
+  }
 
   const smaSeries = calculateSMA(series, options);
   const result: NullableNumericSeries = new Array(series.length).fill(null);

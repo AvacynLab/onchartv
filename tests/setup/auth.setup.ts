@@ -18,6 +18,7 @@ import {
   loginWithCredentialsCallback,
   type ResponseLike,
 } from "../utils/programmatic-login";
+import { isChatPathname } from "../utils/chat-redirect";
 import { withStepTiming } from "../utils/timing";
 
 const AUTH_DIR = path.resolve(__dirname, "../.auth");
@@ -176,6 +177,23 @@ async function ensureLoggedIn(
     await expect
       .poll(async () => hasExistingSession(context), { timeout: 15_000 })
       .toBeTruthy();
+
+    await expect
+      .poll(
+        async () => isChatPathname(page.url()),
+        {
+          /**
+           * Playwright occasionally lands on transitional routes (such as a
+           * marketing homepage) before Next.js finalises the redirect to the
+           * chat dashboard. Polling the canonical helper ensures we only
+           * consider the authentication flow complete once `/chat` is the active
+           * surface, which mirrors the product requirement enforced in the E2E
+           * scenarios.
+           */
+          timeout: 15_000,
+        }
+      )
+      .toBe(true);
   }
 }
 
