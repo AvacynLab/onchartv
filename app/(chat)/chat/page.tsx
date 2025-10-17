@@ -24,8 +24,8 @@ type ChatPageProps = {
  * Regular sessions land here after authentication; guests are bounced back to
  * `/login` where the Playwright harness provisions credentials.
  */
-export default async function Page(props: ChatPageProps = {}) {
-  const session = props.prefetchedSession ?? (await auth());
+export default async function Page(props: ChatPageProps) {
+  const session = props?.prefetchedSession ?? (await auth());
 
   if (!session || session.user.type !== "regular") {
     // Regular accounts are required for the chat surface; guests are routed to
