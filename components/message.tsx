@@ -148,6 +148,59 @@ const PurePreviewMessage = ({
               );
             }
 
+            if (type.startsWith("data-finance")) {
+              if (!financeFeatureEnabled) {
+                return null;
+              }
+
+              const payload = (part as { data?: unknown }).data;
+
+              if (!isFinanceArtifact(payload)) {
+                logWarning("chat:message", "[finance] ignored malformed persisted artifact", {
+                  artifactType:
+                    typeof (payload as { type?: unknown })?.type === "string"
+                      ? (payload as { type: string }).type
+                      : part.type,
+                });
+                return null;
+              }
+
+              let onExplainCandle: ArtifactRendererProps["onExplainCandle"];
+              let onRetest: ArtifactRendererProps["onRetest"];
+
+              if (chatComposer && payload.type === "finance.chart") {
+                const chartArtifact = payload as FinanceChartArtifact;
+                onExplainCandle = ({ timestamp }) => {
+                  const prompt = buildExplainCandlePrompt(chartArtifact, timestamp);
+                  chatComposer.prefillPrompt(prompt, { focus: true });
+                };
+              }
+
+              if (chatComposer && payload.type === "finance.backtest") {
+                onRetest = (artifact: FinanceBacktestArtifact) => {
+                  const command = buildBacktestSlashCommand(artifact);
+
+                  if (!command) {
+                    logWarning("chat:message", "[finance] unsupported backtest strategy for retest", {
+                      strategy: artifact.strategy,
+                    });
+                    return;
+                  }
+
+                  chatComposer.prefillPrompt(command, { focus: true });
+                };
+              }
+
+              return (
+                <ArtifactRenderer
+                  artifact={payload}
+                  key={key}
+                  onExplainCandle={onExplainCandle}
+                  onRetest={onRetest}
+                />
+              );
+            }
+
             if (type === "text") {
               if (mode === "view") {
                 return (

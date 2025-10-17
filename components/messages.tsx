@@ -53,7 +53,8 @@ const parseFinanceArtifact = (
   artifact: unknown,
   artifactIndex: number,
   messageId: string,
-  invalidArtifacts: InvalidArtifactLog[]
+  invalidArtifacts: InvalidArtifactLog[],
+  typeHint?: string
 ): FinanceArtifact | null => {
   const logInvalid = (details: {
     issues: string[];
@@ -65,28 +66,24 @@ const parseFinanceArtifact = (
       messageId,
       type: details.type,
     });
-    logWarning(
-      "chat:messages",
-      "[Messages] artifact payload is malformed and will be ignored",
-      {
-        artifact,
-        artifactIndex,
-        issues: details.issues,
-        messageId,
-        type: details.type,
-      }
-    );
+    logWarning("chat:messages", "[Messages] artifact payload is malformed and will be ignored", {
+      artifact,
+      artifactIndex,
+      issues: details.issues,
+      messageId,
+      type: details.type,
+    });
   };
 
   if (!artifact || typeof artifact !== "object") {
-    logInvalid({ issues: ["artifact is not an object"] });
+    logInvalid({ issues: ["artifact is not an object"], type: typeHint });
     return null;
   }
 
   const candidate = artifact as { type?: unknown };
 
   if (typeof candidate.type !== "string") {
-    logInvalid({ issues: ["artifact.type must be a string"] });
+    logInvalid({ issues: ["artifact.type must be a string"], type: typeHint });
     return null;
   }
 
@@ -222,33 +219,74 @@ function PureMessages({
              * the value into the array shape expected by the preview renderer
              * so downstream consumers stay immutable.
              */
-            const rawArtifacts = (
-              message as unknown as { artifacts?: unknown }
-            ).artifacts;
+            const rawArtifacts = (message as unknown as { artifacts?: unknown }).artifacts;
+
+            /**
+             * Build a unified list of artefact candidates originating either from
+             * the legacy `message.artifacts` array (streaming responses) or from
+             * persisted UI data parts (historical conversations). Keeping both
+             * sources ensures that previously stored chats continue to render
+             * finance payloads after we migrated the database representation to a
+             * discriminated union.
+             */
+            const artifactCandidates: Array<{
+              value: unknown;
+              typeHint?: string;
+            }> = [];
+
+            if (Array.isArray(rawArtifacts)) {
+              for (const candidate of rawArtifacts) {
+                const candidateType =
+                  typeof (candidate as { type?: unknown })?.type === "string"
+                    ? ((candidate as { type: string }).type as string)
+                    : undefined;
+                artifactCandidates.push({ value: candidate, typeHint: candidateType });
+              }
+            }
+
+            if (Array.isArray(message.parts)) {
+              for (const part of message.parts) {
+                if (
+                  !part ||
+                  typeof part !== "object" ||
+                  !("type" in part) ||
+                  typeof part.type !== "string" ||
+                  !part.type.startsWith("data-finance")
+                ) {
+                  continue;
+                }
+
+                const dataCarrier = part as { data?: unknown };
+                const nested = dataCarrier.data;
+                const nestedType =
+                  typeof (nested as { type?: unknown })?.type === "string"
+                    ? ((nested as { type: string }).type as string)
+                    : undefined;
+
+                artifactCandidates.push({ value: nested, typeHint: nestedType });
+              }
+            }
 
             const invalidArtifacts: InvalidArtifactLog[] = [];
-            const sanitizedArtifacts: FinanceArtifact[] =
-              financeFeatureEnabled && Array.isArray(rawArtifacts)
-                ? rawArtifacts.reduce<FinanceArtifact[]>(
-                    (acc, artifact, artifactIndex) => {
-                      const parsed = parseFinanceArtifact(
-                        artifact,
-                        artifactIndex,
-                        message.id,
-                        invalidArtifacts
-                      );
+            const sanitizedArtifacts: FinanceArtifact[] = financeFeatureEnabled
+              ? artifactCandidates.reduce<FinanceArtifact[]>((acc, candidate, artifactIndex) => {
+                  const parsed = parseFinanceArtifact(
+                    candidate.value,
+                    artifactIndex,
+                    message.id,
+                    invalidArtifacts,
+                    candidate.typeHint
+                  );
 
-                      if (parsed) {
-                        acc.push(parsed);
-                      }
+                  if (parsed) {
+                    acc.push(parsed);
+                  }
 
-                      return acc;
-                    },
-                    []
-                  )
-                : [];
+                  return acc;
+                }, [])
+              : [];
 
-            if (!financeFeatureEnabled && Array.isArray(rawArtifacts) && rawArtifacts.length > 0) {
+            if (!financeFeatureEnabled && artifactCandidates.length > 0) {
               /**
                * When finance experiences are disabled the UI must stay silent
                * about any related artefacts. Swallowing the payload keeps the
@@ -256,7 +294,7 @@ function PureMessages({
                * behaviour (APIs emit `403` when the feature is disabled).
                */
               logWarning("chat:messages", "[Messages] finance artefact hidden by feature flag", {
-                artifactCount: rawArtifacts.length,
+                artifactCount: artifactCandidates.length,
                 messageId: message.id,
               });
             }

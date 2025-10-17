@@ -190,6 +190,52 @@ describe("Messages", () => {
     warnSpy.mockRestore();
   });
 
+  it("hydrate les artefacts finance stockés dans les data parts", () => {
+    vi.stubEnv("NEXT_PUBLIC_FEATURE_FINANCE", "true");
+
+    const chartArtifact: FinanceChartArtifact = {
+      type: "finance.chart",
+      symbol: "BTCUSD",
+      timeframe: "1D",
+      range: { from: "2024-01-01", to: "2024-01-31" },
+      ohlcv: [
+        { t: 1704067200, o: 42_000, h: 43_000, l: 41_500, c: 42_750, v: 12_345 },
+      ],
+      overlays: [],
+    };
+
+    const financeMessage = {
+      id: "assistant-finance-1",
+      role: "assistant",
+      metadata: { createdAt: new Date().toISOString() },
+      parts: [
+        { id: "text-1", type: "text", text: "Voici le graphique demandé" },
+        { type: "data-financeChart", data: chartArtifact },
+      ],
+    } as unknown as ChatMessage;
+
+    render(
+      <Messages
+        chatId="chat-finance"
+        isArtifactVisible={false}
+        isReadonly={false}
+        messages={[financeMessage]}
+        regenerate={noop as any}
+        selectedModelId="model"
+        setMessages={noop as any}
+        status="idle"
+        votes={undefined}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    const latestInvocation = previewMessageSpy.mock.calls.at(-1)?.[0] as
+      | { message?: ChatMessage }
+      | undefined;
+
+    expect(latestInvocation?.message?.artifacts).toEqual([chartArtifact]);
+  });
+
   it("affiche les messages valides et ignore les votes manquants", () => {
     const message = {
       id: "msg-1",
