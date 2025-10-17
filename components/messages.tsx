@@ -13,6 +13,7 @@ import {
   financeArtifactSchema,
   type FinanceArtifact,
 } from "@/lib/finance/types";
+import { financeMessageArtifactSchema } from "@/lib/artifacts/types";
 import * as featureFlags from "@/lib/feature-flags";
 import { logWarning } from "@/lib/logging";
 
@@ -87,17 +88,41 @@ const parseFinanceArtifact = (
     return null;
   }
 
-  const parsed = financeArtifactSchema.safeParse(artifact);
+  const wrappedResult = financeMessageArtifactSchema.safeParse(artifact);
 
-  if (!parsed.success) {
-    logInvalid({
-      issues: parsed.error.issues.map((issue) => issue.message),
-      type: candidate.type,
-    });
-    return null;
+  if (wrappedResult.success) {
+    /**
+     * The artefact was persisted using the discriminated message wrapper. In
+     * this case we surface the nested payload so downstream components can stay
+     * agnostic of the storage format while still benefitting from precise
+     * TypeScript inference.
+     */
+    return wrappedResult.data.payload;
   }
 
-  return parsed.data;
+  const directResult = financeArtifactSchema.safeParse(artifact);
+
+  if (directResult.success) {
+    /**
+     * Legacy sessions (and certain streaming responses) still expose artefacts
+     * without the wrapper. Falling back to the bare schema keeps those chats
+     * readable for existing users and mirrors the server-side coercion logic.
+     */
+    return directResult.data;
+  }
+
+  const issues = Array.from(
+    new Set([
+      ...wrappedResult.error.issues.map((issue) => issue.message),
+      ...directResult.error.issues.map((issue) => issue.message),
+    ])
+  );
+
+  logInvalid({
+    issues,
+    type: candidate.type,
+  });
+  return null;
 };
 
 function PureMessages({

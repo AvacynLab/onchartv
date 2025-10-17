@@ -17,7 +17,10 @@ import * as featureFlags from "@/lib/feature-flags";
 
 import { DataStreamProvider } from "@/components/data-stream-provider";
 import type { ChatMessage } from "@/lib/types";
-import type { FinanceChartArtifact } from "@/lib/finance/types";
+import type {
+  FinanceBacktestArtifact,
+  FinanceChartArtifact,
+} from "@/lib/finance/types";
 
 const noop = () => {};
 
@@ -234,6 +237,82 @@ describe("Messages", () => {
       | undefined;
 
     expect(latestInvocation?.message?.artifacts).toEqual([chartArtifact]);
+  });
+
+  it("normalise les artefacts finance persistés via l'enveloppe message", () => {
+    vi.stubEnv("NEXT_PUBLIC_FEATURE_FINANCE", "true");
+
+    const backtestPayload: FinanceBacktestArtifact = {
+      type: "finance.backtest",
+      runId: "wrapped-1",
+      symbol: "AAPL",
+      timeframe: "1D",
+      period: { from: "2022-01-01", to: "2022-12-31" },
+      strategy: {
+        type: "sma-crossover",
+        params: { fastPeriod: 20, slowPeriod: 50 },
+      },
+      metrics: {
+        totalReturn: 0.34,
+        cagr: 0.29,
+        maxDrawdown: 0.12,
+        winRate: 0.61,
+        averageWin: 4200,
+        averageLoss: -1500,
+        sharpe: 1.4,
+        profitFactor: 2.7,
+        trades: 8,
+      },
+      equityCurve: [{ t: 1640995200, e: 10_000 }],
+      trades: [
+        {
+          entryTimestamp: 1640995200,
+          entryPrice: 150,
+          exitTimestamp: 1643673600,
+          exitPrice: 165,
+          quantity: 5,
+          grossPnl: 75,
+          netPnl: 72,
+        },
+      ],
+      commentary: "wrapped payload",
+    };
+
+    const messageWithWrappedArtifact = {
+      id: "assistant-finance-wrapped",
+      role: "assistant",
+      metadata: { createdAt: new Date().toISOString() },
+      parts: [
+        { id: "text-1", type: "text", text: "Résultats du backtest" },
+      ],
+      artifacts: [
+        {
+          type: "finance.backtest",
+          payload: backtestPayload,
+        },
+      ],
+    } as unknown as ChatMessage;
+
+    render(
+      <Messages
+        chatId="chat-finance"
+        isArtifactVisible={false}
+        isReadonly={false}
+        messages={[messageWithWrappedArtifact]}
+        regenerate={noop as any}
+        selectedModelId="model"
+        setMessages={noop as any}
+        status="idle"
+        votes={undefined}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    const latestInvocation = previewMessageSpy.mock.calls.at(-1)?.[0] as
+      | { message?: ChatMessage }
+      | undefined;
+
+    expect(latestInvocation?.message?.artifacts).toEqual([backtestPayload]);
   });
 
   it("affiche les messages valides et ignore les votes manquants", () => {

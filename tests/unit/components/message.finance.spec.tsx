@@ -219,4 +219,74 @@ describe("PreviewMessage finance feature flag", () => {
       expect.objectContaining({ artifact: backtestArtifact })
     );
   });
+
+  it("fallback sur message.artifacts lorsque les data parts sont absentes", () => {
+    vi.stubEnv("NEXT_PUBLIC_FEATURE_FINANCE", "true");
+
+    const backtestArtifact: FinanceBacktestArtifact = {
+      type: "finance.backtest",
+      runId: "run-2",
+      symbol: "AAPL",
+      timeframe: "1D",
+      period: { from: "2019-01-01", to: "2019-12-31" },
+      strategy: {
+        type: "sma-crossover",
+        params: { fastPeriod: 50, slowPeriod: 200 },
+      },
+      metrics: {
+        totalReturn: 0.12,
+        cagr: 0.08,
+        maxDrawdown: 0.03,
+        winRate: 0.55,
+        averageWin: 800,
+        averageLoss: -300,
+        sharpe: 1.1,
+        profitFactor: 1.8,
+        trades: 6,
+      },
+      equityCurve: [{ t: 1546300800, e: 110_000 }],
+      trades: [
+        {
+          entryTimestamp: 1546300800,
+          entryPrice: 140,
+          exitTimestamp: 1548892800,
+          exitPrice: 150,
+          quantity: 5,
+          grossPnl: 50,
+          netPnl: 48,
+        },
+      ],
+      commentary: "Streaming backtest output",
+    };
+
+    const streamingMessage = {
+      id: "assistant-artefact-stream",
+      role: "assistant",
+      metadata: { createdAt: new Date().toISOString() },
+      parts: [
+        { id: "text-1", type: "text", text: "Résultats du backtest" },
+      ],
+      artifacts: [backtestArtifact],
+    } as unknown as ChatMessage;
+
+    render(
+      <DataStreamProvider>
+        <PreviewMessage
+          chatId="chat-99"
+          isLoading={false}
+          isReadonly={true}
+          message={streamingMessage}
+          regenerate={noop as any}
+          requiresScrollPadding={false}
+          setMessages={noop as any}
+          vote={undefined}
+        />
+      </DataStreamProvider>
+    );
+
+    expect(screen.getByTestId("artifact-renderer-mock")).toBeInTheDocument();
+    expect(artifactRendererSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ artifact: backtestArtifact })
+    );
+  });
 });
