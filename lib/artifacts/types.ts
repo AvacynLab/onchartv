@@ -76,3 +76,32 @@ export function unwrapFinanceArtifact(
 
   return parsed.data.payload;
 }
+
+/**
+ * Lifts a finance artefact emitted by the toolchain into the persisted message
+ * representation. The switch keeps the compiler aware of the discriminator so
+ * the returned object always satisfies the correlated payload type without
+ * falling back to broad assertions.
+ */
+export function wrapFinanceArtifact(
+  artifact: FinanceArtifact
+): FinanceMessageArtifact {
+  switch (artifact.type) {
+    case "finance.chart":
+      return { type: artifact.type, payload: artifact };
+    case "finance.chart.annotations":
+      return { type: artifact.type, payload: artifact };
+    case "finance.fundamentals":
+      return { type: artifact.type, payload: artifact };
+    case "finance.news":
+      return { type: artifact.type, payload: artifact };
+    case "finance.backtest":
+      return { type: artifact.type, payload: artifact };
+    case "finance.screen":
+      return { type: artifact.type, payload: artifact };
+    default: {
+      const exhaustiveCheck: never = artifact;
+      return exhaustiveCheck;
+    }
+  }
+}

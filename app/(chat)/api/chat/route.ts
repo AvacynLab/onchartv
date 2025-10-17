@@ -62,6 +62,7 @@ import {
 } from "@/lib/ai/messages/signature";
 import { normaliseAssistantMessage } from "@/lib/chat/stream-fallback";
 
+import { wrapFinanceArtifact } from "@/lib/artifacts/types";
 import { convertToUIMessages, generateUUID } from "@/lib/utils";
 import { generateTitleFromUserMessage } from "../../actions";
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
@@ -766,7 +767,10 @@ export async function POST(request: Request) {
         const financeTools = createFinanceTools({
           preferences: financePreferences,
           onArtifact: (artifact: FinanceArtifact) => {
-            capturedArtifacts.push({ type: artifact.type, payload: artifact });
+            // Persist the streamed artefact using the discriminated wrapper so
+            // downstream consumers (UI/rendering) receive a payload that aligns
+            // with the database contract enforced by the Zod schema.
+            capturedArtifacts.push(wrapFinanceArtifact(artifact));
 
             switch (artifact.type) {
               case "finance.chart":
