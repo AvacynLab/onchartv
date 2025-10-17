@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 
 import ChatPage from "@/app/(chat)/chat/page";
 
-import { auth } from "../(auth)/auth";
+import { requireRegularChatSession } from "./session";
 
 /**
  * Entry point for the chat experience. We gate access to the nested `chat`
@@ -11,7 +11,7 @@ import { auth } from "../(auth)/auth";
  * and `/chat` share the same regular-session requirement.
  */
 export default async function Page() {
-  const session = await auth();
+  const session = await requireRegularChatSession();
 
   if (!session || session.user?.type !== "regular") {
     /**
@@ -24,5 +24,5 @@ export default async function Page() {
 
   // Using `createElement` avoids relying on the automatic JSX runtime during
   // isolated Vitest executions while producing the same markup as `<ChatPage />`.
-  return createElement(ChatPage, { prefetchedSession: session });
+  return createElement(ChatPage);
 }

@@ -8,10 +8,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const redirectMock = vi.fn();
 
 /**
- * Mocked auth provider returning a session depending on the scenario under
- * test. Each case resets the mock so assertions stay isolated.
+ * Mocked helper mirroring the cached session loader used by the chat entry
+ * point. Each case overrides the behaviour so scenarios remain isolated.
  */
-const authMock = vi.fn<[], Promise<Session | null>>();
+const requireRegularChatSessionMock = vi.fn<[], Promise<Session | null>>();
 
 /**
  * Nested chat page mock. The root page should delegate rendering to this
@@ -23,8 +23,8 @@ vi.mock("next/navigation", () => ({
   redirect: redirectMock,
 }));
 
-vi.mock("@/app/(auth)/auth", () => ({
-  auth: authMock,
+vi.mock("@/app/(chat)/session", () => ({
+  requireRegularChatSession: requireRegularChatSessionMock,
 }));
 
 vi.mock("@/app/(chat)/chat/page", () => ({
@@ -41,12 +41,12 @@ describe("app/(chat)/page", () => {
   beforeEach(() => {
     vi.resetModules();
     redirectMock.mockReset();
-    authMock.mockReset();
+    requireRegularChatSessionMock.mockReset();
     chatPageMock.mockReset();
   });
 
   it("redirects guests to /login", async () => {
-    authMock.mockResolvedValue(null);
+    requireRegularChatSessionMock.mockResolvedValue(null);
     redirectMock.mockImplementation(() => {
       throw new Error("redirect");
     });
@@ -70,7 +70,7 @@ describe("app/(chat)/page", () => {
       expires: new Date(Date.now() + 60_000).toISOString(),
     } satisfies Session;
 
-    authMock.mockResolvedValue(guestSession);
+    requireRegularChatSessionMock.mockResolvedValue(guestSession);
     redirectMock.mockImplementation(() => {
       throw new Error("redirect");
     });
@@ -94,16 +94,15 @@ describe("app/(chat)/page", () => {
       expires: new Date(Date.now() + 60_000).toISOString(),
     } satisfies Session;
 
-    authMock.mockResolvedValue(regularSession);
+    requireRegularChatSessionMock.mockResolvedValue(regularSession);
     const Page = await importPage();
     const result = await Page();
 
     expect(redirectMock).not.toHaveBeenCalled();
     expect(result).toMatchObject({
-      props: {
-        prefetchedSession: regularSession,
-      },
+      props: {},
       type: chatPageMock,
     });
+    expect(requireRegularChatSessionMock).toHaveBeenCalledTimes(1);
   });
 });
