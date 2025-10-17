@@ -57,13 +57,21 @@ test.describe("chat activity with reasoning", () => {
     await userMessage.edit("Why is grass green?");
     await chatPage.isGenerationComplete();
 
+    await expect
+      .poll(async () => {
+        const latest = await chatPage.getRecentAssistantMessage();
+        return latest.content;
+      }, { timeout: 15_000 })
+      .toBe("It's just green duh!");
+
+    await expect
+      .poll(async () => {
+        const latest = await chatPage.getRecentAssistantMessage();
+        return latest.reasoning;
+      }, { timeout: 15_000 })
+      .toBe("Grass is green because of chlorophyll absorption!");
+
     const updatedAssistantMessage = await chatPage.getRecentAssistantMessage();
-
-    expect(updatedAssistantMessage.content).toBe("It's just green duh!");
-
-    expect(updatedAssistantMessage.reasoning).toBe(
-      "Grass is green because of chlorophyll absorption!"
-    );
 
     await expect(
       updatedAssistantMessage.element.getByTestId(

@@ -11,8 +11,10 @@ import { useArtifactSelector } from "@/hooks/use-artifact";
 import { useAutoResume } from "@/hooks/use-auto-resume";
 import { useChatVisibility } from "@/hooks/use-chat-visibility";
 import type { Vote } from "@/lib/db/schema";
+import { buildMessageTextSignature } from "@/lib/ai/messages/signature";
 import { ChatSDKError } from "@/lib/errors";
-import type { Attachment, ChatMessage } from "@/lib/types";
+import type { Attachment, ChatMessage, MessageMetadata } from "@/lib/types";
+import { messageMetadataSchema } from "@/lib/types";
 import type { AppUsage } from "@/lib/usage";
 import { fetcher, fetchWithErrorHandlers, generateUUID } from "@/lib/utils";
 import {
@@ -100,14 +102,77 @@ export function Chat({
       api: "/api/chat",
       fetch: fetchWithErrorHandlers,
       prepareSendMessagesRequest(request) {
+        const baseBody =
+          typeof request.body === "object" && request.body !== null
+            ? { ...(request.body as Record<string, unknown>) }
+            : {};
+
+        const providedMessage =
+          typeof baseBody.message === "object" && baseBody.message !== null
+            ? (baseBody.message as ChatMessage)
+            : undefined;
+
+        const lastMessage = providedMessage ?? request.messages.at(-1);
+
+        let messageWithSignature: ChatMessage | undefined;
+
+        if (lastMessage) {
+          const parts = Array.isArray(lastMessage.parts)
+            ? lastMessage.parts
+            : [];
+
+          const signature = buildMessageTextSignature(parts);
+          const rawMetadata =
+            typeof lastMessage.metadata === "object" && lastMessage.metadata !== null
+              ? lastMessage.metadata
+              : {};
+
+          /**
+           * Nous nous assurons que les métadonnées disposent toujours d'un
+           * horodatage valide afin de satisfaire le schéma partagé
+           * `messageMetadataSchema`. Les prompts édités peuvent ne fournir
+           * qu'une empreinte client : nous reconstruisons donc un objet
+           * complet avant de lui adjoindre la nouvelle signature.
+           */
+          const metadataCandidate = {
+            ...rawMetadata,
+            createdAt:
+              typeof (rawMetadata as { createdAt?: unknown }).createdAt === "string"
+                ? (rawMetadata as { createdAt: string }).createdAt
+                : new Date().toISOString(),
+          };
+
+          const metadataResult = messageMetadataSchema.safeParse(metadataCandidate);
+
+          const metadataWithSignature: MessageMetadata = metadataResult.success
+            ? {
+                ...metadataResult.data,
+                clientTextSignature: signature,
+              }
+            : {
+                createdAt: new Date().toISOString(),
+                clientTextSignature: signature,
+              };
+
+          messageWithSignature = {
+            ...lastMessage,
+            metadata: metadataWithSignature,
+          };
+        }
+
+        const bodyPayload: Record<string, unknown> = {
+          ...baseBody,
+          id: request.id,
+          selectedChatModel: currentModelIdRef.current,
+          selectedVisibilityType: visibilityType,
+        };
+
+        if (messageWithSignature) {
+          bodyPayload.message = messageWithSignature;
+        }
+
         return {
-          body: {
-            id: request.id,
-            message: request.messages.at(-1),
-            selectedChatModel: currentModelIdRef.current,
-            selectedVisibilityType: visibilityType,
-            ...request.body,
-          },
+          body: bodyPayload,
         };
       },
     }),
@@ -147,27 +212,40 @@ export function Chat({
   /**
    * En environnement de test ou lorsque le hook n'est pas initialisé, l'accès
    * aux paramètres peut échouer. Nous défendons donc l'accès au paramètre de
-   * requête.
+   * requête et ne conservons qu'une valeur non vide une fois normalisée.
    */
-  const query =
-    typeof searchParams?.get === "function" ? searchParams.get("query") : null;
+  const initialQuery = useMemo(() => {
+    if (typeof searchParams?.get !== "function") {
+      return null;
+    }
+
+    const rawValue = searchParams.get("query");
+    if (typeof rawValue !== "string") {
+      return null;
+    }
+
+    const trimmed = rawValue.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }, [searchParams]);
 
   const [hasAppendedQuery, setHasAppendedQuery] = useState(false);
 
   useEffect(() => {
-    if (query && !hasAppendedQuery) {
-      sendMessage({
-        role: "user" as const,
-        parts: [{ type: "text", text: query }],
-      });
-
-      setHasAppendedQuery(true);
-
-      if (typeof window !== "undefined") {
-        window.history.replaceState({}, "", `/chat/${id}`);
-      }
+    if (!initialQuery || hasAppendedQuery) {
+      return;
     }
-  }, [query, sendMessage, hasAppendedQuery, id]);
+
+    sendMessage({
+      role: "user" as const,
+      parts: [{ type: "text", text: initialQuery }],
+    });
+
+    setHasAppendedQuery(true);
+
+    if (typeof window !== "undefined") {
+      window.history.replaceState({}, "", `/chat/${id}`);
+    }
+  }, [initialQuery, sendMessage, hasAppendedQuery, id]);
 
   /**
    * Les flux de messages peuvent être transitoirement `undefined` pendant le

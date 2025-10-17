@@ -13,7 +13,13 @@ const iconsByType: Record<"success" | "error", ReactNode> = {
 
 const SINGLETON_TOAST_ID = "app-toast";
 const AUTOMATION_BRIDGE_ID = "automation-toast-bridge";
-const AUTOMATION_TOAST_LIFETIME_MS = 4_000;
+/**
+ * Extend the automation bridge lifetime so hermetic Playwright runs always
+ * observe the toast copy even when the UI redirects immediately after a
+ * successful action. Eight seconds keeps the helper generous without delaying
+ * real users because the bridge only renders in automation contexts.
+ */
+export const AUTOMATION_TOAST_LIFETIME_MS = 8_000;
 const automationTimers = new WeakMap<HTMLElement, number>();
 
 function clearAutomationTimer(element: HTMLElement | null) {

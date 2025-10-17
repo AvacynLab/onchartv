@@ -51,6 +51,21 @@ You can deploy your own version of the Next.js AI Chatbot to Vercel with one cli
 
 You will need to use the environment variables [defined in `.env.example`](.env.example) to run Next.js AI Chatbot. It's recommended you use [Vercel Environment Variables](https://vercel.com/docs/projects/environment-variables) for this, but a `.env` file is all that is necessary.
 
+### Variables d'environnement essentielles
+
+Configurez explicitement les variables suivantes avant de démarrer le serveur ou d'exécuter la suite de tests. Elles garantissent que les fonctionnalités finance restent hermétiques et que Playwright contourne correctement le rate-limit.
+
+| Variable | Obligatoire | Description |
+|----------|-------------|-------------|
+| `FEATURE_FINANCE` | Oui | Active les artefacts finance (chart, backtest, news) côté API et UI. Valeur recommandée : `true`. |
+| `PLAYWRIGHT` | Pour les tests e2e | Positionnez `true` lors des exécutions Playwright afin de bypasser le rate-limit et d'utiliser les mocks offline. |
+| `POSTGRES_URL` | Oui | Chaîne de connexion utilisée par `pnpm db:migrate` et `pnpm db:seed`. |
+| `AUTH_SECRET` | Oui | Secret partagé par Auth.js pour signer les sessions regular. |
+| `OPENAI_API_KEY` | Oui | Clé API utilisée par l'assistant lors du streaming des réponses. |
+| `OPENAI_MODEL_ID` | Oui | Identifiant du modèle de base texte. Voir également `OPENAI_REASONING_MODEL_ID`, `OPENAI_TITLE_MODEL_ID`, `OPENAI_ARTIFACT_MODEL_ID` pour les capacités supplémentaires. |
+
+Ajoutez `FEATURE_USE_REAL_DATA`, `MARKET_DATA_API_BASE_URL`, `MARKET_DATA_API_KEY` et `NEWS_API_KEY` uniquement si vous souhaitez substituer les jeux de données offline par un fournisseur tiers.
+
 > Note: You should not commit your `.env` file or it will expose secrets that will allow others to control access to your various AI and authentication provider accounts.
 
 1. Install Vercel CLI: `npm i -g vercel`
@@ -78,14 +93,13 @@ Your app template should now be running on [localhost:3000](http://localhost:300
 
 ### Résolution des tests e2e
 
-1. Install the Playwright browser binaries once via `pnpm exec playwright install`.
-2. Start the development server with `FEATURE_FINANCE=true pnpm dev`.
-3. In another shell, execute `PLAYWRIGHT=true FEATURE_FINANCE=true pnpm exec playwright test`.
-4. The Playwright auth bootstrap registers and reuses a **regular** account
-   (option B). If you need to reset the credentials, remove `tests/.auth` and
-   rerun the setup script.
-5. Traces are stored under `artifacts/` when a scenario fails; open them with
-   `pnpm exec playwright show-trace <trace.zip>` to inspect the run.
+1. Installez les binaires Playwright via `pnpm exec playwright install`.
+2. Démarrez le serveur en forçant les flags : `FEATURE_FINANCE=true pnpm dev`.
+3. Exécutez les tests dans un second terminal avec `PLAYWRIGHT=true FEATURE_FINANCE=true pnpm exec playwright test`.
+4. **Overlay Next “Application error” ?** Vérifiez que le segment `(chat)` monte l'error boundary [`app/(chat)/error.tsx`](app/(chat)/error.tsx) et qu'aucune exception n'est loggée côté console.
+5. **Timeout lors de la connexion ?** Confirmez que `tests/setup/auth.setup.ts` a bien persisté l'état de session regular dans `tests/.auth`. Supprimez le répertoire puis relancez la commande précédente pour régénérer le storage state.
+6. **Artefacts finance vides ?** Assurez-vous que chaque route `/api/finance/*` est interceptée par `tests/helpers/finance-mocks.ts` et que `PLAYWRIGHT=true` est exporté (sinon le rate-limit bloque les requêtes).
+7. Les traces Playwright sont stockées sous `artifacts/` en cas d'échec ; inspectez-les via `pnpm exec playwright show-trace <trace.zip>`.
 
 ## Avertissements / Usage responsable
 

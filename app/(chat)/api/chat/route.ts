@@ -13,8 +13,6 @@ import {
 import type { ModelCatalog } from "tokenlens/core";
 import { fetchModels } from "tokenlens/fetch";
 import { getUsage } from "tokenlens/helpers";
-import type { Session } from "next-auth";
-
 import { auth, type UserType } from "@/app/(auth)/auth";
 import type { VisibilityType } from "@/components/visibility-selector";
 import { entitlementsByUserType } from "@/lib/ai/entitlements";
@@ -40,6 +38,7 @@ import {
   getFinancePreferencesByUserId,
   deleteChatById,
   getChatById,
+  getMessageById,
   getMessageCountByUserId,
   getMessagesByChatId,
   saveChat,
@@ -54,9 +53,13 @@ import {
 } from "@/lib/finance/preferences";
 import { ChatSDKError } from "@/lib/errors";
 import { logError, logWarning } from "@/lib/logging";
-import type { ChatMessage } from "@/lib/types";
+import type { Attachment, ChatMessage } from "@/lib/types";
 import type { AppUsage } from "@/lib/usage";
 import type { UIDataTypes, UIMessagePart, UITools } from "ai";
+import {
+  buildMessageTextSignature,
+  type MessagePartCandidate,
+} from "@/lib/ai/messages/signature";
 import { normaliseAssistantMessage } from "@/lib/chat/stream-fallback";
 
 import { convertToUIMessages, generateUUID } from "@/lib/utils";
@@ -106,38 +109,22 @@ const resolveGlobalStreamContext = () => {
 
 const textDecoder = new TextDecoder();
 
-type RegularSessionValidationResult =
-  | {
-      ok: true;
-      session: Session;
-      user: Session["user"] & { type: "regular"; id: string };
-    }
-  | { ok: false; response: Response };
-
 /**
- * Validate the resolved session against the regular-user contract expected by
- * the chat API. Returning a discriminated union keeps the call sites concise
- * while still enforcing the explicit `session.user.type !== "regular"` guard
- * mandated by the brief. The helper deliberately avoids throwing so callers
- * can surface formatted JSON errors without depending on exception handling.
+ * Shared helper returning the canonical forbidden payload mandated by the
+ * regular-only chat mode. Keeping the Response factory centralised ensures the
+ * POST and DELETE handlers stay in sync with the contract asserted by the
+ * Playwright storage-state initialiser.
  */
-function validateRegularSession(
-  session: Session | null | undefined
-): RegularSessionValidationResult {
-  if (!session?.user) {
-    return { ok: false, response: new ChatSDKError("unauthorized:chat").toResponse() };
-  }
-
-  if (session.user.type !== "regular") {
-    return { ok: false, response: new ChatSDKError("forbidden:auth").toResponse() };
-  }
-
-  return {
-    ok: true,
-    session: session as Session,
-    user: session.user as Session["user"] & { type: "regular"; id: string },
-  };
-}
+const regularSessionRequiredResponse = () =>
+  Response.json(
+    {
+      error: {
+        code: "forbidden:chat",
+        message: "Regular session required",
+      },
+    },
+    { status: 403 }
+  );
 
 class InMemoryResumableStream {
   private readonly reader: ReadableStreamDefaultReader<unknown>;
@@ -400,7 +387,7 @@ const getTokenlensCatalog = tokenlensFetchEnabled
       async (): Promise<ModelCatalog | undefined> => {
         try {
           return await fetchModels();
-        } catch (err) {
+        } catch (err: unknown) {
           logWarning(
             "tokenlens.catalog",
             "Catalog fetch failed; using bundled fallback",
@@ -419,14 +406,15 @@ const getTokenlensCatalog = tokenlensFetchEnabled
  * narrower `ChatMessage` structure. The extractor handles both so it can
  * serialise attachments during streaming as well as on final persistence.
  */
-type AttachmentCandidate =
-  | ChatMessage["parts"][number]
-  | UIMessagePart<UIDataTypes, UITools>;
+type AttachmentCandidate = Exclude<MessagePartCandidate, string>;
 type FilePart = Extract<AttachmentCandidate, { type: "file" }>;
 
 const extractAttachments = (parts: ReadonlyArray<AttachmentCandidate>) => {
   return parts
-    .filter((part): part is FilePart => part.type === "file")
+    .filter(
+      (part): part is FilePart =>
+        typeof part === "object" && part !== null && part.type === "file"
+    )
     .map((filePart) => {
       /**
        * `streamText` reuses the same shape for both end-user uploads and tool
@@ -470,10 +458,13 @@ export function getStreamContext() {
     resolvedContext = createResumableStreamContext({
       waitUntil: after,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (
-      typeof error?.message === "string" &&
-      error.message.includes("REDIS_URL")
+      typeof error === "object" &&
+      error !== null &&
+      "message" in error &&
+      typeof (error as { message?: unknown }).message === "string" &&
+      (error as { message: string }).message.includes("REDIS_URL")
     ) {
       logWarning(
         "chat.streams",
@@ -506,14 +497,9 @@ export async function POST(request: Request) {
   try {
     const {
       id,
-      message,
+      message: incomingMessage,
       selectedChatModel,
       selectedVisibilityType,
-    }: {
-      id: string;
-      message: ChatMessage;
-      selectedChatModel: ChatModel["id"];
-      selectedVisibilityType: VisibilityType;
     } = requestBody;
 
     chatIdForLogs = id;
@@ -521,18 +507,23 @@ export async function POST(request: Request) {
     const session = await auth();
 
     /**
-     * Validate the session upfront so downstream persistence only executes for
-     * fully authorised users. This keeps the API responses deterministic and
-     * avoids leaking whether a chat exists to guests while still honouring the
-     * mandated regular-user gate.
+     * Enforce the regular-session gate mandated by the product brief. Returning
+     * a deterministic JSON payload keeps the API aligned with the E2E storage
+     * state initialiser which now provisions a fully registered account.
      */
-    const sessionValidation = validateRegularSession(session);
-
-    if (!sessionValidation.ok) {
-      return sessionValidation.response;
+    if (!session || session.user?.type !== "regular") {
+      return regularSessionRequiredResponse();
     }
 
-    const { user: sessionUser, session: ensuredSession } = sessionValidation;
+    const sessionUser = session.user as typeof session.user & {
+      id: string | undefined;
+      type: "regular";
+    };
+
+    if (typeof sessionUser.id !== "string" || sessionUser.id.length === 0) {
+      return regularSessionRequiredResponse();
+    }
+    const ensuredSession = session;
 
     const userType: UserType = sessionUser.type;
 
@@ -553,7 +544,7 @@ export async function POST(request: Request) {
       }
     } else {
       const title = await generateTitleFromUserMessage({
-        message,
+        message: incomingMessage,
       });
 
       await saveChat({
@@ -580,7 +571,151 @@ export async function POST(request: Request) {
       : DEFAULT_FINANCE_PREFERENCES;
 
     const messagesFromDb = await getMessagesByChatId({ id });
-    const uiMessages = [...convertToUIMessages(messagesFromDb), message];
+    const [persistedMessage] = await getMessageById({ id: incomingMessage.id });
+
+    const incomingParts = Array.isArray(incomingMessage.parts)
+      ? (incomingMessage.parts as ChatMessage["parts"])
+      : [];
+    const persistedParts = Array.isArray(persistedMessage?.parts)
+      ? (persistedMessage!.parts as ChatMessage["parts"])
+      : null;
+
+    const incomingSignature = buildMessageTextSignature(incomingParts);
+    const persistedSignature = buildMessageTextSignature(persistedParts);
+
+    const clientSignature = (() => {
+      const metadata = incomingMessage.metadata;
+
+      if (!metadata || typeof metadata !== "object") {
+        return null;
+      }
+
+      const signature = (metadata as { clientTextSignature?: unknown })
+        .clientTextSignature;
+
+      return typeof signature === "string" ? signature.trim() : null;
+    })();
+
+    const incomingHasText = incomingSignature.length > 0;
+    const persistedHasText = persistedSignature.length > 0;
+    const signaturesMatch =
+      incomingHasText &&
+      persistedHasText &&
+      incomingSignature === persistedSignature;
+
+    let resolvedParts: ChatMessage["parts"];
+
+    if (incomingHasText) {
+      const clientMatchesPersisted =
+        typeof clientSignature === "string" && clientSignature === persistedSignature;
+
+      if (
+        signaturesMatch &&
+        persistedParts &&
+        (clientSignature == null || clientMatchesPersisted)
+      ) {
+        resolvedParts = persistedParts;
+      } else {
+        if (persistedHasText && !signaturesMatch) {
+          logWarning(
+            "chat:message",
+            "Incoming text signature diverged from the persisted record; using incoming parts",
+            {
+              clientSignature,
+              incomingSignature,
+              persistedSignature,
+            }
+          );
+        } else if (signaturesMatch && clientSignature && !clientMatchesPersisted) {
+          logWarning(
+            "chat:message",
+            "Client signature disagrees with the persisted record despite matching payload; using incoming parts",
+            {
+              clientSignature,
+              incomingSignature,
+              persistedSignature,
+            }
+          );
+        }
+
+        resolvedParts = incomingParts;
+      }
+    } else if (persistedParts) {
+      resolvedParts = persistedParts;
+    } else {
+      resolvedParts = incomingParts;
+    }
+
+    const resolvedAttachments: Attachment[] = Array.isArray(
+      persistedMessage?.attachments
+    )
+      ? (persistedMessage!.attachments as Attachment[])
+      : extractAttachments(resolvedParts);
+
+    // Attachments are persisted alongside the chat record but the UI message
+    // contract mirrors `UIMessage` which does not expose an attachments field.
+    // Returning the pared-down shape keeps the in-flight stream compatible
+    // while the saved database row still retains the uploaded assets.
+    const resolvedMessageMetadata: ChatMessage["metadata"] = (() => {
+      /**
+       * Prefer the persisted timestamp so edited prompts retain their original
+       * creation date. When the client emits a fresh message (no persisted
+       * record yet), fall back to either the provided metadata timestamp or
+       * generate one on the fly to keep the UI payload consistent.
+       */
+      const persistedCreatedAt =
+        persistedMessage?.createdAt instanceof Date
+          ? persistedMessage.createdAt.toISOString()
+          : null;
+
+      let createdAt = persistedCreatedAt;
+
+      if (!createdAt) {
+        const candidate =
+          typeof incomingMessage.metadata === "object" &&
+          incomingMessage.metadata !== null &&
+          "createdAt" in incomingMessage.metadata
+            ? (incomingMessage.metadata as { createdAt?: unknown }).createdAt
+            : undefined;
+
+        createdAt = typeof candidate === "string" && candidate.length > 0 ? candidate : new Date().toISOString();
+      }
+
+      const metadata: ChatMessage["metadata"] = {
+        createdAt,
+      };
+
+      if (clientSignature) {
+        metadata.clientTextSignature = clientSignature;
+      }
+
+      return metadata;
+    })();
+
+    const resolvedMessage: ChatMessage = {
+      id: incomingMessage.id,
+      role: incomingMessage.role,
+      parts: resolvedParts,
+      metadata: resolvedMessageMetadata,
+    };
+
+    const updatedMessagesFromDb = persistedMessage
+      ? messagesFromDb.map((messageRecord) =>
+          messageRecord.id === resolvedMessage.id
+            ? {
+                ...messageRecord,
+                parts: resolvedParts as typeof messageRecord.parts,
+                attachments: resolvedAttachments.map((attachment) => ({
+                  ...attachment,
+                })) as typeof messageRecord.attachments,
+              }
+            : messageRecord
+        )
+      : messagesFromDb;
+
+    const uiMessages = persistedMessage
+      ? convertToUIMessages(updatedMessagesFromDb)
+      : [...convertToUIMessages(updatedMessagesFromDb), resolvedMessage];
 
     // Resolve coarse location data without triggering network calls during
     // hermetic Playwright runs. The helper gracefully falls back to an empty
@@ -600,19 +735,21 @@ export async function POST(request: Request) {
       country,
     };
 
-    await saveMessages({
-      messages: [
-        {
-          chatId: id,
-          id: message.id,
-          role: "user",
-          parts: message.parts,
-          attachments: extractAttachments(message.parts),
-          artifacts: [],
-          createdAt: new Date(),
-        },
-      ],
-    });
+    if (!persistedMessage) {
+      await saveMessages({
+        messages: [
+          {
+            chatId: id,
+            id: resolvedMessage.id,
+            role: "user",
+            parts: resolvedMessage.parts,
+            attachments: resolvedAttachments,
+            artifacts: [],
+            createdAt: new Date(),
+          },
+        ],
+      });
+    }
 
     const streamId = generateUUID();
     await createStreamId({ streamId, chatId: id });
@@ -752,7 +889,7 @@ export async function POST(request: Request) {
               const summary = getUsage({ modelId, usage, providers });
               finalMergedUsage = { ...usage, ...summary, modelId } as AppUsage;
               dataStream.write({ type: "data-usage", data: finalMergedUsage });
-            } catch (err) {
+            } catch (err: unknown) {
               logWarning(
                 "tokenlens.enrichment",
                 "TokenLens enrichment failed",
@@ -819,7 +956,7 @@ export async function POST(request: Request) {
               chatId: id,
               context: finalMergedUsage,
             });
-          } catch (err) {
+          } catch (err: unknown) {
             logWarning(
               "chat.persistence",
               "Unable to persist last usage for chat",
@@ -851,7 +988,7 @@ export async function POST(request: Request) {
     }
 
     return new Response(stream.pipeThrough(new JsonToSseTransformStream()));
-  } catch (error) {
+  } catch (error: unknown) {
     const vercelId = request.headers.get("x-vercel-id");
 
     if (error instanceof ChatSDKError) {
@@ -877,13 +1014,19 @@ export async function DELETE(request: Request) {
   }
 
   const session = await auth();
-  const sessionValidation = validateRegularSession(session);
 
-  if (!sessionValidation.ok) {
-    return sessionValidation.response;
+  if (!session || session.user?.type !== "regular") {
+    return regularSessionRequiredResponse();
   }
 
-  const { user: sessionUser } = sessionValidation;
+  const sessionUser = session.user as typeof session.user & {
+    id: string | undefined;
+    type: "regular";
+  };
+
+  if (typeof sessionUser.id !== "string" || sessionUser.id.length === 0) {
+    return regularSessionRequiredResponse();
+  }
 
   const chat = await getChatById({ id });
 

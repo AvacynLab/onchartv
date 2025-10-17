@@ -1,4 +1,4 @@
-import type { BrowserContext, Page } from "@playwright/test";
+import type { BrowserContext, Locator, Page } from "@playwright/test";
 import { describe, expect, it, vi } from "vitest";
 
 import { chatModels } from "@/lib/ai/models";
@@ -261,10 +261,14 @@ describe("ChatPage.waitForChatApiResponse", () => {
       first: vi
         .fn(() => toastLocator as unknown as ReturnType<Locator["first"]>)
         .mockName("toastLocator.first"),
+      last: vi
+        .fn(() => toastLocator as unknown as ReturnType<Locator["last"]>)
+        .mockName("toastLocator.last"),
       waitFor: vi
         .fn(() => new Promise<never>(() => {}))
         .mockName("toastLocator.waitFor"),
-    };
+      innerText: vi.fn().mockResolvedValue(""),
+    } satisfies Partial<Locator>;
 
     const page = {
       ...createEmitter(pageListeners),
@@ -426,6 +430,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
       sendButtonLocator,
       stopButtonLocator,
       suggestedActionsLocator,
+      toastLocator,
     };
   };
 
@@ -473,6 +478,44 @@ describe("ChatPage.waitForChatApiResponse", () => {
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
     }
+  });
+
+  it("handles chat requests that resolve without a response payload", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createEventHarness();
+      const chatPage = new ChatPage(harness.page);
+
+      stubFallback(chatPage);
+      seedPendingSnapshot(chatPage);
+
+      const waitPromise = (chatPage as any).waitForChatApiResponse();
+
+      await harness.emitRequest({
+        method: () => "POST",
+        url: () => "http://localhost:3000/api/chat",
+        response: vi.fn().mockResolvedValue(null),
+      });
+
+      await expect(waitPromise).resolves.toBeUndefined();
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores chat API requests targeting non-local hosts", () => {
+    const harness = createEventHarness();
+    const chatPage = new ChatPage(harness.page);
+
+    // External hosts (for example OpenAI endpoints) should be ignored to keep
+    // hermetic Playwright runs offline.
+    const result = (chatPage as any).matchesChatApiRequest({
+      url: () => "https://api.example.com/api/chat",
+      method: () => "POST",
+    });
+
+    expect(result).toBe(false);
   });
 
   it("resolves as soon as a Playwright chat signal is emitted", async () => {
@@ -630,6 +673,11 @@ describe("ChatPage.waitForChatApiResponse", () => {
       stubFallback(chatPage);
       seedPendingSnapshot(chatPage);
 
+      harness.toastLocator.waitFor.mockResolvedValue(undefined);
+      harness.toastLocator.innerText.mockResolvedValue(
+        "A regular account is required to use this feature."
+      );
+
       const waitPromise = (chatPage as any).waitForChatApiResponse();
 
       await harness.emitResponse(
@@ -638,12 +686,17 @@ describe("ChatPage.waitForChatApiResponse", () => {
           ok: false,
           status: 403,
           statusText: "Forbidden",
-          body: "forbidden:chat",
+          body: JSON.stringify({
+            error: {
+              code: "forbidden:chat",
+              message: "Regular session required",
+            },
+          }),
         })
       );
 
       await expect(waitPromise).rejects.toThrow(
-        "Chat API request failed with 403 Forbidden – forbidden:chat"
+        'Chat API rejected the request (403 Forbidden, code forbidden:chat) after surfacing a toast: "A regular account is required to use this feature."'
       );
     } finally {
       vi.runOnlyPendingTimers();
@@ -2391,6 +2444,90 @@ describe("ChatPage generation helpers", () => {
     expect(waitSpy).toHaveBeenCalledOnce();
     expect(sendClick).not.toHaveBeenCalled();
     expect(pressMock).toHaveBeenCalledWith("Enter");
+
+    captureSpy.mockRestore();
+    prepareSpy.mockRestore();
+    composerSpy.mockRestore();
+    waitSpy.mockRestore();
+  });
+
+  it("waits for the stop button when skipping the response await", async () => {
+    const assistantLocator = {
+      count: vi.fn().mockResolvedValue(0),
+      nth: vi.fn(),
+    };
+    const userLocator = {
+      count: vi.fn().mockResolvedValue(0),
+    };
+    const stopButtonLocator = {
+      isVisible: vi.fn().mockResolvedValue(false),
+    };
+    const sendButtonLocator = {
+      click: vi.fn().mockResolvedValue(undefined),
+      isVisible: vi.fn().mockResolvedValue(true),
+      isEnabled: vi.fn().mockResolvedValue(true),
+    };
+    const composerLocator = {
+      click: vi.fn(),
+      fill: vi.fn(),
+      type: vi.fn(),
+      inputValue: vi.fn().mockResolvedValue(""),
+    };
+    const suggestedActionsLocator = {
+      isVisible: vi.fn().mockResolvedValue(false),
+    };
+    const waitForSelector = vi.fn().mockResolvedValue(undefined);
+
+    const page = {
+      getByTestId: vi.fn((testId: string) => {
+        switch (testId) {
+          case "message-assistant":
+            return assistantLocator as unknown as ReturnType<Page["getByTestId"]>;
+          case "message-user":
+            return userLocator as unknown as ReturnType<Page["getByTestId"]>;
+          case "stop-button":
+            return stopButtonLocator as unknown as ReturnType<Page["getByTestId"]>;
+          case "send-button":
+            return sendButtonLocator as unknown as ReturnType<Page["getByTestId"]>;
+          case "multimodal-input":
+            return composerLocator as unknown as ReturnType<Page["getByTestId"]>;
+          case "suggested-actions":
+            return suggestedActionsLocator as unknown as ReturnType<Page["getByTestId"]>;
+          default:
+            throw new Error(`Unexpected test id: ${testId}`);
+        }
+      }),
+      evaluate: vi.fn().mockResolvedValue(0),
+      waitForSelector,
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+    const captureSpy = vi
+      .spyOn(chatPage as any, "captureAssistantSnapshot")
+      .mockResolvedValue({
+        count: 0,
+        latestArtifactCount: 0,
+        latestMessageId: null,
+        latestMessageText: "",
+      });
+    const prepareSpy = vi.spyOn(chatPage as any, "prepareForGeneration");
+    const composerSpy = vi
+      .spyOn(chatPage as any, "waitForComposerReady")
+      .mockResolvedValue({
+        sendButtonEnabled: true,
+      });
+    const waitSpy = vi
+      .spyOn(chatPage as any, "waitForChatApiResponse")
+      .mockResolvedValue(undefined);
+
+    await chatPage.sendUserMessage("Hello", { waitForResponse: false });
+
+    expect(prepareSpy).toHaveBeenCalledWith({ composerValueOverride: "Hello" });
+    expect(waitSpy).toHaveBeenCalledOnce();
+    expect(waitForSelector).toHaveBeenCalledWith(
+      '[data-testid="stop-button"]',
+      expect.objectContaining({ state: "visible", timeout: 10_000 })
+    );
 
     captureSpy.mockRestore();
     prepareSpy.mockRestore();

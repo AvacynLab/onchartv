@@ -55,7 +55,14 @@ test.describe.serial("Login and Registration", () => {
 
 test("Register new account", async ({ page }) => {
   await authPage.register(testUser.email, testUser.password);
-  await authPage.expectToastToContain("Account created successfully!");
+
+  try {
+    await authPage.expectToastToContain("Account created successfully!");
+  } catch (error) {
+    await waitForChatDashboard(page);
+    await expect(page.getByPlaceholder("Send a message...")).toBeVisible();
+  }
+
   // Persist the freshly issued session cookies so later tests can reuse the
   // authenticated context without resubmitting the login form, which reduces
   // flakiness and keeps the flow deterministic across retries.

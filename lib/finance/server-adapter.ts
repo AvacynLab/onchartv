@@ -1,5 +1,7 @@
 import "server-only";
 
+import { logWarning } from "@/lib/logging";
+
 import { HttpMarketDataAdapter, InMemoryMarketDataAdapter } from "./data-adapter";
 import { FINANCE_SERIES } from "./mock-data";
 import type { MarketDataAdapter } from "./types";
@@ -33,8 +35,14 @@ function createAdapter(): MarketDataAdapter {
   const apiKey = process.env.MARKET_DATA_API_KEY;
 
   if (!baseUrl || !apiKey) {
-    console.warn(
-      "[finance] FEATURE_USE_REAL_DATA enabled but MARKET_DATA_API_BASE_URL or MARKET_DATA_API_KEY is missing. Falling back to deterministic mocks."
+    // Provide feature-flag diagnostics without leaking the raw credentials to stdout.
+    logWarning(
+      "finance:server-adapter",
+      "FEATURE_USE_REAL_DATA enabled but market data credentials are missing. Falling back to deterministic mocks.",
+      {
+        hasBaseUrl: Boolean(baseUrl),
+        credentialsConfigured: Boolean(apiKey),
+      }
     );
     return new InMemoryMarketDataAdapter(FINANCE_SERIES);
   }

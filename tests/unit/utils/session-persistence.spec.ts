@@ -30,15 +30,18 @@ describe("session persistence utilities", () => {
     }
   });
 
-  test("persists and restores the auth session cookie", async () => {
+  test.each([
+    ["authjs.session-token"],
+    ["__Secure-next-auth.session-token"],
+  ])("persists and restores the %s cookie", async (cookieName) => {
     const cookie: Cookie = {
       domain: "localhost",
       expires: Date.now() / 1000 + 3600,
       httpOnly: true,
-      name: "authjs.session-token",
+      name: cookieName,
       path: "/",
       sameSite: "Lax",
-      secure: false,
+      secure: cookieName.startsWith("__Secure-"),
       value: "token-value",
     };
 
@@ -55,9 +58,7 @@ describe("session persistence utilities", () => {
     await persistSessionCookies(context as unknown as BrowserContext);
 
     expect(hasPersistedSessionCookies()).toBe(true);
-    expect(fs.readFileSync(SESSION_PATH, "utf-8")).toContain(
-      "authjs.session-token",
-    );
+    expect(fs.readFileSync(SESSION_PATH, "utf-8")).toContain(cookieName);
 
     const restored = await restoreSessionCookies(
       context as unknown as BrowserContext,

@@ -317,6 +317,7 @@ export function BacktestReportArtifact({
           </p>
         </div>
         <Button
+          aria-label={RETEST_TOGGLE_LABEL}
           aria-controls={retestFormId}
           aria-expanded={isRetestOpen}
           /**

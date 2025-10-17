@@ -10,7 +10,9 @@ import {
   useState,
 } from "react";
 import { deleteTrailingMessages, updateMessageParts } from "@/app/(chat)/actions";
-import type { Attachment, ChatMessage } from "@/lib/types";
+import { buildMessageTextSignature } from "@/lib/ai/messages/signature";
+import type { Attachment, ChatMessage, MessageMetadata } from "@/lib/types";
+import { messageMetadataSchema } from "@/lib/types";
 import { cn, getTextFromMessage } from "@/lib/utils";
 import { isAutomationRuntime } from "./utils/automation";
 import { Button } from "./ui/button";
@@ -103,12 +105,47 @@ export function MessageEditor({
             let regenerationPromise: Promise<unknown> | undefined;
 
             try {
+              const removalCutoffIso = new Date().toISOString();
               await deleteTrailingMessages({
                 id: message.id,
               });
 
               const updatedParts = rebuildMessageParts(message, trimmedDraft);
               const updatedAttachments = cloneAttachments(message);
+
+              const signature = buildMessageTextSignature(updatedParts);
+
+              const rawMetadata =
+                typeof message.metadata === "object" && message.metadata !== null
+                  ? message.metadata
+                  : {};
+
+              const metadataCandidate = {
+                ...rawMetadata,
+                createdAt:
+                  typeof (rawMetadata as { createdAt?: unknown }).createdAt === "string"
+                    ? (rawMetadata as { createdAt: string }).createdAt
+                    : new Date().toISOString(),
+              };
+
+              const metadataResult = messageMetadataSchema.safeParse(metadataCandidate);
+
+              const updatedMetadata: MessageMetadata = metadataResult.success
+                ? {
+                    ...metadataResult.data,
+                    clientTextSignature: signature,
+                  }
+                : {
+                    createdAt: new Date().toISOString(),
+                    clientTextSignature: signature,
+                  };
+
+              const updatedMessage: MessageWithAttachments = {
+                ...message,
+                parts: updatedParts,
+                attachments: updatedAttachments,
+                metadata: updatedMetadata,
+              };
               await updateMessageParts({
                 id: message.id,
                 parts: updatedParts,
@@ -122,14 +159,36 @@ export function MessageEditor({
                   return messages;
                 }
 
-                const existingMessage = messages[index];
-                const updatedMessage: MessageWithAttachments = {
-                  ...existingMessage,
-                  parts: updatedParts,
-                  attachments: updatedAttachments,
-                };
+                const leadingMessages = messages.slice(0, index);
+                const trailingMessages = messages.slice(index + 1);
 
-                return [...messages.slice(0, index), updatedMessage];
+                /**
+                 * Preserve any trailing messages that were appended after the edit
+                 * sequence began (for example, when the provider streams a fresh
+                 * assistant reply before the reducer runs). Comparing the
+                 * `createdAt` metadata against the cutoff keeps newly generated
+                 * responses intact while still pruning the stale assistant reply
+                 * that belongs to the previous prompt.
+                 */
+                const preservedTrailing = trailingMessages.filter((trailing) => {
+                  const createdAt = extractCreatedAt(trailing);
+
+                  if (!createdAt) {
+                    return false;
+                  }
+
+                  return createdAt > removalCutoffIso;
+                });
+
+                /**
+                 * Drop any trailing messages so the UI mirrors the database
+                 * state after `deleteTrailingMessages` removes stale assistant
+                 * responses. Keeping only the edited user prompt ensures the
+                 * upcoming regeneration starts from a clean slate. Newer
+                 * trailing entries (for example already-streamed assistant
+                 * replies) are re-appended so concurrent updates are not lost.
+                 */
+                return [...leadingMessages, updatedMessage, ...preservedTrailing];
               });
 
               /**
@@ -140,7 +199,10 @@ export function MessageEditor({
                * the network roundtrip, matching the behaviour Playwright
                * expects during the edit flow.
                */
-              regenerationPromise = regenerate({ messageId: message.id });
+              regenerationPromise = regenerate({
+                messageId: message.id,
+                body: { message: updatedMessage },
+              });
 
               emitPlaywrightSignal("sent");
 
@@ -196,22 +258,81 @@ function rebuildMessageParts(
     ? originalMessage.parts
     : [];
 
+  /**
+   * Replace the first textual fragment (either the standard `text` part or the
+   * AI SDK's `input_text` variant) with the freshly edited prompt while
+   * discarding any additional text fragments that may linger from previous
+   * submissions. This guarantees the server receives a single authoritative
+   * prompt and prevents stale copies of the original text from skewing the
+   * signature comparison logic.
+   */
+  const updatedParts: ChatMessage["parts"] = [];
   let textFragmentReplaced = false;
 
-  const updatedParts = existingParts.map((part) => {
-    if (part?.type === "text" && !textFragmentReplaced) {
-      textFragmentReplaced = true;
-      return { ...part, text: nextText };
+  for (const part of existingParts) {
+    /**
+     * The AI SDK emits both `text` parts (with a `type` discriminator) and
+     * legacy fragments that surface the edited prompt through an
+     * `input_text` property without an accompanying `type`. We branch on both
+     * shapes while keeping the guards type-safe for the UIMessagePart union.
+     */
+    if (part?.type === "text") {
+      if (!textFragmentReplaced) {
+        updatedParts.push({ ...part, text: nextText });
+        textFragmentReplaced = true;
+      }
+
+      continue;
     }
 
-    return part;
-  });
+    const hasInputText =
+      typeof part === "object" &&
+      part !== null &&
+      "input_text" in part &&
+      typeof (part as { input_text?: unknown }).input_text === "string";
+
+    if (hasInputText) {
+      if (!textFragmentReplaced) {
+        /**
+         * The discriminated union exposed by the AI SDK does not formally
+         * define the legacy `input_text` fragment, therefore we clone the
+         * original part as a generic record and cast it back to a
+         * UIMessagePart after injecting the edited payload.
+         */
+        const updatedInputTextPart = {
+          ...(part as Record<string, unknown>),
+          input_text: nextText,
+        } as Record<string, unknown>;
+
+        updatedParts.push(
+          updatedInputTextPart as unknown as ChatMessage["parts"][number]
+        );
+        textFragmentReplaced = true;
+      }
+
+      continue;
+    }
+
+    updatedParts.push(part);
+  }
 
   if (!textFragmentReplaced) {
     updatedParts.push({ type: "text", text: nextText });
   }
 
   return updatedParts;
+}
+
+function extractCreatedAt(message: ChatMessage): string | null {
+  if (typeof message.metadata !== "object" || message.metadata === null) {
+    return null;
+  }
+
+  const candidate = (message.metadata as { createdAt?: unknown }).createdAt;
+
+  return typeof candidate === "string" && candidate.length > 0
+    ? candidate
+    : null;
 }
 
 function emitPlaywrightSignal(phase: "submit" | "sent" | "error") {

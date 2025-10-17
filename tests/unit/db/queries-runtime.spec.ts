@@ -1,4 +1,7 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import type { StructuredLogEntry } from "@/lib/logging";
 
 /**
  * Preserve the original hermetic flags so the suite can toggle the environment
@@ -60,5 +63,46 @@ describe("lib/db/queries hermetic toggles", () => {
     expect(createdUser?.email).toBe("toggle@example.com");
 
     queries.__resetInMemoryDbForTests();
+  });
+
+  it("journalise un avertissement structuré lorsque le cache Playwright est corrompu", async () => {
+    process.env.PLAYWRIGHT = "true";
+    vi.resetModules();
+
+    const authDir = path.resolve(process.cwd(), "tests/.auth");
+    const persistedPath = path.join(authDir, "playwright-users.json");
+
+    fs.mkdirSync(authDir, { recursive: true });
+    fs.writeFileSync(persistedPath, "{malformed", "utf-8");
+
+    const logging = await import("@/lib/logging");
+    const warnSpy = vi
+      .spyOn(logging, "logWarning")
+      .mockImplementation((context, message, extra) => ({
+        context,
+        level: "warn",
+        message: typeof message === "string" ? message : undefined,
+        timestamp: new Date().toISOString(),
+        extra,
+      }) satisfies StructuredLogEntry);
+
+    const queries = await import("@/lib/db/queries");
+
+    await queries.createUser("log@example.com", "secret");
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "db:queries",
+      "Failed to hydrate Playwright users from persisted store",
+      expect.objectContaining({
+        error: expect.any(SyntaxError),
+      })
+    );
+
+    queries.__resetInMemoryDbForTests();
+    warnSpy.mockRestore();
+
+    if (fs.existsSync(persistedPath)) {
+      fs.rmSync(persistedPath);
+    }
   });
 });

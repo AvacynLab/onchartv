@@ -1,6 +1,7 @@
 import { compareSync } from "bcrypt-ts";
 
-import { DUMMY_PASSWORD, isTestEnvironment } from "@/lib/constants";
+import { isTestEnvironment } from "@/lib/constants";
+import { getDummyPassword } from "@/lib/auth/dummy-password";
 import type { User } from "@/lib/db/schema";
 
 async function verifyPassword(
@@ -91,7 +92,7 @@ export async function resolveCredentialsUser(
      * default adapter and keeps the observable timing behaviour consistent
      * between successful and failed attempts.
      */
-    compareSync(password, DUMMY_PASSWORD);
+    compareSync(password, getDummyPassword());
     return null;
   }
 
@@ -125,7 +126,7 @@ export async function resolveCredentialsUser(
     const [refreshedUser] = await getUser(email);
 
     if (!refreshedUser?.password) {
-      compareSync(password, DUMMY_PASSWORD);
+      compareSync(password, getDummyPassword());
       return null;
     }
 
@@ -170,7 +171,7 @@ export async function resolveCredentialsUser(
       return user ?? null;
     }
 
-    compareSync(password, DUMMY_PASSWORD);
+    compareSync(password, getDummyPassword());
     return null;
   }
 
@@ -195,7 +196,7 @@ export async function resolveCredentialsUser(
     return user;
   }
 
-  compareSync(password, DUMMY_PASSWORD);
+  compareSync(password, getDummyPassword());
   return null;
 }
 

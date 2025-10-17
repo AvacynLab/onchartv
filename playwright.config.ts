@@ -155,6 +155,21 @@ export default defineConfig({
   use: {
     baseURL,
     trace: "retain-on-failure",
+    /**
+     * Force the Playwright-driven Chromium process to propagate the same feature
+     * flags as the server. Without this explicit environment bridge certain
+     * helper utilities (e.g. rate-limit bypass checks executed via
+     * `page.evaluate`) would observe `undefined` and fall back to production
+     * defaults, which in turn reintroduces the flaky 429s we previously saw in
+     * CI. Keeping the variables in sync ensures the browser and server behave
+     * consistently during hermetic runs.
+     */
+    launchOptions: {
+      env: {
+        PLAYWRIGHT: "true",
+        FEATURE_FINANCE: process.env.FEATURE_FINANCE ?? "true",
+      },
+    },
   },
   outputDir: artifactOutputDir,
   timeout: 240 * 1000,
@@ -191,7 +206,13 @@ export default defineConfig({
   webServer: shouldStartWebServer
     ? {
         command: "node --import tsx tests/utils/run-next-dev.ts",
-        url: `${baseURL}/ping`,
+        /**
+         * Wait for the dedicated health endpoint rather than a generic ping so
+         * we only start the suites once the API layer is ready. This prevents
+         * Playwright from hammering partially compiled `/api/finance/*` routes,
+         * which previously manifested as sporadic 404s during CI cold starts.
+         */
+        url: `${baseURL}/api/health`,
         // Allow extra time for the dev server to compile the finance bundles on
         // cold CI machines. The previous 120s budget was occasionally tight
         // when Playwright requested a rebuild after installing dependencies.

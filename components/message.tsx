@@ -38,7 +38,9 @@ import {
   type FinanceBacktestArtifact,
   type FinanceChartArtifact,
 } from "@/lib/finance/types";
+import { logWarning } from "@/lib/logging";
 import { useChatComposer } from "./chat-composer-context";
+import { isFinanceFeatureEnabledClient } from "@/lib/feature-flags";
 
 const isFinanceArtifact = (value: unknown): value is FinanceArtifact => {
   return financeArtifactSchema.safeParse(value).success;
@@ -73,6 +75,7 @@ const PurePreviewMessage = ({
 
   useDataStream();
   const chatComposer = useChatComposer();
+  const financeFeatureEnabled = isFinanceFeatureEnabledClient();
 
   // Tag the rendered message with its unique identifier so e2e helpers
   // can detect updates even when the assistant reuses identical copy.
@@ -235,6 +238,16 @@ const PurePreviewMessage = ({
             }
 
             if (type.startsWith("tool-tool.finance.")) {
+              if (!financeFeatureEnabled) {
+                /**
+                 * Hide finance-specific tool outputs entirely when the feature
+                 * flag is disabled. Rendering an empty placeholder avoids
+                 * leaking partially initialised UI modules while still keeping
+                 * the surrounding assistant message readable.
+                 */
+                return null;
+              }
+
               if (!("toolCallId" in part) || !("state" in part)) {
                 return null;
               }
@@ -271,9 +284,11 @@ const PurePreviewMessage = ({
                   const command = buildBacktestSlashCommand(artifact);
 
                   if (!command) {
-                    console.warn(
+                    // Emit a structured warning so unsupported strategies remain discoverable during QA.
+                    logWarning(
+                      "chat:message",
                       "[finance] unsupported backtest strategy for retest",
-                      artifact.strategy
+                      { strategy: artifact.strategy }
                     );
                     return;
                   }

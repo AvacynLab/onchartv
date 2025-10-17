@@ -17,6 +17,7 @@ import type { ModelMessage } from "ai";
 
 import { isPlaywrightLikeEnvironment } from "./playwright-env";
 import { DEFAULT_ONBOARDING_SUGGESTION } from "../constants";
+import { logWarning } from "@/lib/logging";
 
 type CreateOpenAI = typeof import("@ai-sdk/openai").createOpenAI;
 
@@ -842,7 +843,8 @@ if (!shouldUseMocks) {
       "Missing @ai-sdk/openai dependency. Run `pnpm install` to install the official provider.";
 
     if (process.env.NODE_ENV !== "production") {
-      console.warn(message, error);
+      // Developers often hit this branch locally; structure the warning and redact sensitive fields.
+      logWarning("ai:providers", message, { error });
     }
 
     throw new Error(message);

@@ -24,6 +24,10 @@ declare module "vitest" {
   }
 }
 
+/**
+ * Custom inline snapshot matcher keeps the spec hermetic while Vitest's native
+ * snapshot utilities remain unavailable in the current toolchain.
+ */
 expect.extend({
   toMatchStaticSnapshot(
     this: MatcherState,
@@ -62,7 +66,9 @@ describe("ArtifactRenderer", () => {
   });
 
   it("falls back gracefully on unsupported payloads", () => {
-    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const errorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
 
     render(
       <ArtifactRenderer
@@ -71,14 +77,21 @@ describe("ArtifactRenderer", () => {
       />
     );
 
-    expect(consoleSpy).toHaveBeenCalled();
-    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[ArtifactRenderer] unsupported artefact payload",
+      expect.objectContaining({ foo: "bar" })
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Contenu indisponible : le format de l’artefact fourni est invalide."
+    );
 
-    consoleSpy.mockRestore();
+    errorSpy.mockRestore();
   });
 
   it("surfaces an error when the artefact type is unknown", () => {
-    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const errorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
 
     render(
       <ArtifactRenderer
@@ -91,12 +104,15 @@ describe("ArtifactRenderer", () => {
 
     const alert = screen.getByTestId("artifact-renderer-error");
     expect(alert).toHaveTextContent("n’est pas pris en charge");
-    expect(consoleSpy).toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[ArtifactRenderer] unknown artefact type",
+      expect.objectContaining({ type: "finance.unknown" })
+    );
     expect(alert).toMatchStaticSnapshot(
       '<div class="rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive" data-testid="artifact-renderer-error" role="alert">Contenu indisponible : l’artefact « finance.unknown » n’est pas pris en charge.</div>'
     );
 
-    consoleSpy.mockRestore();
+    errorSpy.mockRestore();
   });
 
   it("short-circuits when finance artefacts are disabled", () => {

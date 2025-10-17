@@ -1,5 +1,3 @@
-import { generateDummyPassword } from "./db/utils";
-
 /**
  * Deterministic onboarding prompt surfaced across the application. The value
  * underpins Playwright journeys that click the first suggested action, so it is
@@ -26,5 +24,3 @@ export function isTestEnvironment(): boolean {
       process.env.CI_PLAYWRIGHT
   );
 }
-
-export const DUMMY_PASSWORD = generateDummyPassword();

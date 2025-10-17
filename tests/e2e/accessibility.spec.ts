@@ -1,4 +1,5 @@
 import { expect, test } from "../fixtures";
+import { setupFinanceApiMocks } from "../helpers/finance-mocks";
 import { ChatPage } from "../pages/chat";
 
 /**
@@ -12,6 +13,7 @@ test.describe("Finance artefacts accessibility", () => {
 
   test.beforeEach(async ({ page }) => {
     chatPage = new ChatPage(page);
+    await setupFinanceApiMocks(page);
     await chatPage.createNewChat();
   });
 
@@ -32,8 +34,16 @@ test.describe("Finance artefacts accessibility", () => {
     await chatPage.sendUserMessage("Backteste SMA 50/200 sur AAPL 2018-01-01 → 2020-12-31");
     await chatPage.isGenerationComplete();
 
-    const retestButton = page.getByRole("button", { name: /Re-tester avec ces paramètres/ });
+    const backtestArtifact = page.getByTestId("finance-backtest-artifact");
+    await expect(backtestArtifact).toBeVisible();
+
+    const retestButton = backtestArtifact.getByTestId(
+      "finance-backtest-retest-toggle"
+    );
     await expect(retestButton).toBeVisible();
+    await expect(retestButton).toHaveAccessibleName(
+      /Re-tester avec ces paramètres/
+    );
     await retestButton.focus();
     await expect(retestButton).toBeFocused();
 

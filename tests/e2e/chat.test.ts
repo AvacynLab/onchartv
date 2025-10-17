@@ -16,7 +16,15 @@ test.describe("Chat activity", () => {
 
   let chatPage: ChatPage;
 
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ adaContext }) => {
+    const { page } = adaContext;
+
+    /**
+     * Drive every scenario with the fully authenticated storage state produced
+     * by the setup project. The worker-scoped context mirrors a regular user
+     * session so the chat suite never falls back to the deprecated guest flow
+     * while bootstrapping a new thread.
+     */
     chatPage = new ChatPage(page);
     await chatPage.createNewChat();
   });
@@ -64,7 +72,9 @@ test.describe("Chat activity", () => {
   });
 
   test("Stop generation during submission", async () => {
-    await chatPage.sendUserMessage("Why is grass green?");
+    await chatPage.sendUserMessage("Why is grass green?", {
+      waitForResponse: false,
+    });
     await expect(chatPage.stopButton).toBeVisible();
     await chatPage.stopButton.click();
     await expect(chatPage.sendButton).toBeVisible();
@@ -81,6 +91,13 @@ test.describe("Chat activity", () => {
     await userMessage.edit("Why is the sky blue?");
 
     await chatPage.isGenerationComplete();
+
+    await expect
+      .poll(async () => {
+        const latest = await chatPage.getRecentAssistantMessage();
+        return latest.content;
+      }, { timeout: 15_000 })
+      .toContain("It's just blue duh!");
 
     const updatedAssistantMessage = await chatPage.getRecentAssistantMessage();
     expect(updatedAssistantMessage.content).toContain("It's just blue duh!");
@@ -151,7 +168,9 @@ test.describe("Chat activity", () => {
     await chatPage.isVoteComplete();
   });
 
-  test("Create message from url query", async ({ page }) => {
+  test("Create message from url query", async ({ adaContext }) => {
+    const { page } = adaContext;
+
     await page.goto("/?query=Why is the sky blue?");
 
     await chatPage.isGenerationComplete();

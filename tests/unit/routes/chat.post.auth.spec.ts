@@ -100,7 +100,7 @@ describe("POST /api/chat auth guards", () => {
     process.env = envBackup;
   });
 
-  it("returns a 401 response when the caller is unauthenticated", async () => {
+  it("returns a 403 response when the caller is unauthenticated", async () => {
     authMock.mockResolvedValue(null);
 
     const { POST } = await import("@/app/(chat)/api/chat/route");
@@ -108,9 +108,12 @@ describe("POST /api/chat auth guards", () => {
     const request = buildRequest();
     const response = await POST(request);
 
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(403);
     await expect(response.json()).resolves.toMatchObject({
-      error: { code: "unauthorized:chat" },
+      error: {
+        code: "forbidden:chat",
+        message: "Regular session required",
+      },
     });
     expect(getMessageCountByUserIdMock).not.toHaveBeenCalled();
     expect(getChatByIdMock).not.toHaveBeenCalled();
@@ -126,7 +129,10 @@ describe("POST /api/chat auth guards", () => {
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toMatchObject({
-      error: { code: "forbidden:auth" },
+      error: {
+        code: "forbidden:chat",
+        message: "Regular session required",
+      },
     });
     expect(getMessageCountByUserIdMock).not.toHaveBeenCalled();
     expect(getChatByIdMock).not.toHaveBeenCalled();

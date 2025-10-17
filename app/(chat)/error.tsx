@@ -29,7 +29,14 @@ export default function ChatErrorBoundary({
   const isDeveloperBuild = process.env.NODE_ENV !== "production";
 
   useEffect(() => {
-    console.error("[chat] rendering error boundary", error);
+    /**
+     * Surface the raw error object to the console without additional context so
+     * we avoid leaking personally identifiable information in production
+     * bundles. The `reportError` hook mirrors Next.js' recommended pattern and
+     * keeps the overlay disabled while still surfacing diagnostics for
+     * developers.
+     */
+    console.error(error);
 
     if (typeof window !== "undefined" && typeof window.reportError === "function") {
       window.reportError(error);

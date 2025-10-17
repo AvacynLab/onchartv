@@ -3,6 +3,8 @@ import path from "node:path";
 
 import type { BrowserContext, Cookie } from "@playwright/test";
 
+import { isAuthSessionCookieName } from "./auth-session";
+
 /**
  * Location on disk where we persist the authentication cookie captured during
  * Playwright runs. Storing the cookie separately from the storage state keeps
@@ -34,7 +36,7 @@ export async function persistSessionCookies(
   const cookies = await context.cookies();
 
   const sessionCookies = cookies.filter((cookie) =>
-    cookie.name.includes("authjs.session-token"),
+    isAuthSessionCookieName(cookie.name),
   );
 
   if (sessionCookies.length === 0) {

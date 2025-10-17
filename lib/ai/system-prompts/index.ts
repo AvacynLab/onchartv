@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { logWarning } from "@/lib/logging";
+
 /**
  * Cache holder for the finance manual content so that repeated calls avoid
  * touching the filesystem during a single request lifecycle.
@@ -32,7 +34,7 @@ export function getFinanceManualPrompt(): string {
     financeManualCache = fs.readFileSync(manualPath, "utf8").trim();
   } catch (error) {
     // Provide context without leaking stack traces in production logs.
-    console.warn("finance-manual: failed to load finance.md", error);
+    logWarning("ai:finance-manual", "Failed to load finance.md", { error });
     financeManualCache = "";
   }
 

@@ -21,7 +21,7 @@ describe("resolveNextDevCommand", () => {
       command: "pnpm",
       args: ["exec", "next", "dev"],
       rationale:
-        "Playwright hermetic flags detected; launching Next.js with the classic webpack dev server to avoid Turbopack cold-start delays.",
+        "Playwright hermetic flags detected; launching Next.js without the Turbopack flag so we reuse the classic webpack dev server and dodge module resolution issues like the missing @tanstack/react-query crash.",
     });
   });
 
@@ -32,7 +32,7 @@ describe("resolveNextDevCommand", () => {
       command: "pnpm",
       args: ["exec", "next", "dev"],
       rationale:
-        "Playwright hermetic flags detected; launching Next.js with the classic webpack dev server to avoid Turbopack cold-start delays.",
+        "Playwright hermetic flags detected; launching Next.js without the Turbopack flag so we reuse the classic webpack dev server and dodge module resolution issues like the missing @tanstack/react-query crash.",
     });
   });
 

@@ -34,8 +34,12 @@ describe("MessageEditor", () => {
   const baseMessage: EditableChatMessage = {
     id: "message-id",
     role: "user",
-    parts: [{ type: "text", text: "Original prompt" }],
+    parts: [
+      { type: "text", text: "Original prompt" },
+      { type: "text", text: "Duplicate prompt fragment" },
+    ],
     attachments: [],
+    metadata: { createdAt: "2024-01-01T00:00:00.000Z" },
   };
 
   beforeEach(() => {
@@ -47,6 +51,21 @@ describe("MessageEditor", () => {
       }>;
     }).__PLAYWRIGHT_CHAT_SIGNALS__;
   });
+
+  const flushAsyncUpdates = async () => {
+    await act(async () => {
+      if (typeof vi.isFakeTimers === "function" && vi.isFakeTimers()) {
+        vi.runAllTimers();
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    });
+
+    // Ensure any remaining microtasks (e.g. resolved Promises scheduled by the
+    // async event handler) complete before the assertions run. This keeps the
+    // helper compatible with both real and mocked timers.
+    await Promise.resolve();
+  };
 
   it("flushes the edited prompt before triggering a regeneration", async () => {
     const setMode = vi.fn();
@@ -82,7 +101,7 @@ describe("MessageEditor", () => {
       />
     );
 
-    const editor = await screen.findByTestId("message-editor");
+    const editor = screen.getByTestId("message-editor");
 
     await act(async () => {
       fireEvent.change(editor, {
@@ -96,9 +115,7 @@ describe("MessageEditor", () => {
       fireEvent.click(submit);
     });
 
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
+    await flushAsyncUpdates();
 
     const updateArgs =
       updateMessagePartsMock.mock.calls[updateMessagePartsMock.mock.calls.length - 1]?.[0];
@@ -113,12 +130,28 @@ describe("MessageEditor", () => {
     expect(regenerate).toHaveBeenCalledTimes(1);
     expect(regenerate).toHaveBeenCalledWith({
       messageId: baseMessage.id,
+      body: {
+        message: {
+          ...baseMessage,
+          attachments: [],
+          parts: [{ type: "text", text: "Edited reasoning prompt" }],
+          metadata: {
+            createdAt: baseMessage.metadata?.createdAt,
+            clientTextSignature: "Edited reasoning prompt",
+          },
+        },
+      },
     });
     expect(setMode).toHaveBeenCalledWith("view");
 
     expect(messages).toEqual([
       {
         ...baseMessage,
+        attachments: [],
+        metadata: {
+          createdAt: baseMessage.metadata?.createdAt,
+          clientTextSignature: "Edited reasoning prompt",
+        },
         parts: [{ type: "text", text: "Edited reasoning prompt" }],
       },
     ]);
@@ -192,7 +225,7 @@ describe("MessageEditor", () => {
       />
     );
 
-    const editor = await screen.findByTestId("message-editor");
+    const editor = screen.getByTestId("message-editor");
 
     await act(async () => {
       fireEvent.change(editor, {
@@ -206,13 +239,32 @@ describe("MessageEditor", () => {
       fireEvent.click(submit);
     });
 
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
+    await flushAsyncUpdates();
 
     expect(regenerate).toHaveBeenCalledTimes(1);
     expect(regenerate).toHaveBeenCalledWith({
       messageId: messageWithAttachment.id,
+      body: {
+        message: {
+          ...messageWithAttachment,
+          attachments: [
+            { name: "image.png", url: "https://example.com/image.png", contentType: "image/png" },
+          ],
+          parts: [
+            {
+              type: "file",
+              url: "https://example.com/image.png",
+              name: "image.png",
+              mediaType: "image/png",
+            },
+            { type: "text", text: "Edited attachment prompt" },
+          ],
+          metadata: {
+            ...(messageWithAttachment.metadata ?? {}),
+            clientTextSignature: "Edited attachment prompt",
+          },
+        },
+      },
     });
     expect(setMode).toHaveBeenCalledWith("view");
     const attachmentUpdateArgs =
@@ -254,7 +306,181 @@ describe("MessageEditor", () => {
           },
           { type: "text", text: "Edited attachment prompt" },
         ],
+        metadata: {
+          ...(messageWithAttachment.metadata ?? {}),
+          clientTextSignature: "Edited attachment prompt",
+        },
       },
     ]);
+  });
+
+  it("overwrites input_text fragments when editing inline prompts", async () => {
+    const setMode = vi.fn();
+    const inputTextMessage: EditableChatMessage = {
+      id: "message-input-text",
+      role: "user",
+      metadata: { createdAt: "2024-01-01T00:00:00.000Z" },
+      parts: [
+        {
+          type: "input_text",
+          input_text: "Why is grass green?",
+        },
+      ],
+    };
+
+    let messages: ChatMessage[] = [inputTextMessage];
+    const setMessages = vi.fn(
+      (
+        updater:
+          | ChatMessage[]
+          | ((currentMessages: ChatMessage[]) => ChatMessage[])
+      ) => {
+        messages =
+          typeof updater === "function" ? updater(messages) : updater;
+      }
+    );
+
+    const regenerate = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <MessageEditor
+        message={inputTextMessage}
+        regenerate={regenerate}
+        setMode={setMode}
+        setMessages={setMessages}
+      />
+    );
+
+    const editor = screen.getByTestId("message-editor");
+
+    await act(async () => {
+      fireEvent.change(editor, {
+        target: { value: "Why is the sky blue?" },
+      });
+    });
+
+    const submit = screen.getByTestId("message-editor-send-button");
+
+    await act(async () => {
+      fireEvent.click(submit);
+    });
+
+    await flushAsyncUpdates();
+
+    expect(updateMessagePartsMock).toHaveBeenCalledWith({
+      id: inputTextMessage.id,
+      parts: [{ type: "input_text", input_text: "Why is the sky blue?" }],
+      attachments: [],
+    });
+
+    expect(messages).toEqual([
+      {
+        ...inputTextMessage,
+        attachments: [],
+        parts: [{ type: "input_text", input_text: "Why is the sky blue?" }],
+        metadata: {
+          ...(inputTextMessage.metadata ?? {}),
+          clientTextSignature: "Why is the sky blue?",
+        },
+      },
+    ]);
+  });
+
+  it("preserves assistant replies appended after the edit starts", async () => {
+    vi.useFakeTimers();
+    const fixedNow = new Date("2024-01-01T00:00:00.000Z");
+    vi.setSystemTime(fixedNow);
+
+    try {
+      const setMode = vi.fn();
+      const message: EditableChatMessage = {
+        id: "message-with-trailing",
+        role: "user",
+        metadata: { createdAt: "2024-01-01T00:00:00.000Z" },
+        parts: [{ type: "text", text: "Why is grass green?" }],
+      };
+
+      let messages: ChatMessage[] = [
+        message,
+        {
+          id: "assistant-old",
+          role: "assistant",
+          parts: [{ type: "text", text: "Old response" }],
+          metadata: { createdAt: "2023-12-31T23:59:59.000Z" },
+        },
+      ];
+
+      const setMessages = vi.fn(
+        (
+          updater:
+            | ChatMessage[]
+            | ((currentMessages: ChatMessage[]) => ChatMessage[])
+        ) => {
+          if (typeof updater === "function") {
+            messages = updater([
+              ...messages,
+              {
+                id: "assistant-new",
+                role: "assistant",
+                parts: [{ type: "text", text: "New response" }],
+                metadata: { createdAt: "2024-01-01T00:00:05.000Z" },
+              },
+            ]);
+          } else {
+            messages = updater;
+          }
+        }
+      );
+
+      const regenerate = vi.fn().mockResolvedValue(undefined);
+
+      render(
+        <MessageEditor
+          message={message}
+          regenerate={regenerate}
+          setMode={setMode}
+          setMessages={setMessages}
+        />
+      );
+
+      const editor = screen.getByTestId("message-editor");
+
+      await act(async () => {
+        fireEvent.change(editor, {
+          target: { value: "Why is the sky blue?" },
+        });
+      });
+
+      const submit = screen.getByTestId("message-editor-send-button");
+
+      await act(async () => {
+        fireEvent.click(submit);
+      });
+
+      await flushAsyncUpdates();
+
+      // The regenerated user message should preserve the updated text, keep the
+      // existing timestamp metadata, and normalise the attachments array so the
+      // downstream reducer always receives a consistent shape.
+      expect(messages).toEqual([
+        {
+          ...message,
+          parts: [{ type: "text", text: "Why is the sky blue?" }],
+          metadata: {
+            ...(message.metadata ?? {}),
+            clientTextSignature: "Why is the sky blue?",
+          },
+          attachments: [],
+        },
+        {
+          id: "assistant-new",
+          role: "assistant",
+          parts: [{ type: "text", text: "New response" }],
+          metadata: { createdAt: "2024-01-01T00:00:05.000Z" },
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

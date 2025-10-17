@@ -31,12 +31,20 @@ const filePartSchema = z.object({
 
 const partSchema = z.union([textPartSchema, filePartSchema]);
 
+const metadataSchema = z
+  .object({
+    clientTextSignature: z.string().optional(),
+  })
+  .passthrough()
+  .optional();
+
 export const postRequestBodySchema = z.object({
   id: z.string().uuid(),
   message: z.object({
     id: z.string().uuid(),
     role: z.enum(["user"]),
     parts: z.array(partSchema),
+    metadata: metadataSchema,
   }),
   selectedChatModel: z.enum(["chat-model", "chat-model-reasoning"]),
   selectedVisibilityType: z.enum(["public", "private"]),

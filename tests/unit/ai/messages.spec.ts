@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { formatISO } from "date-fns";
+import * as logging from "@/lib/logging";
+import type { StructuredLogEntry } from "@/lib/logging";
 
 import { convertToModelMessages } from "@/lib/ai/messages/convert-to-model-messages";
 import type { DBMessage } from "@/lib/db/schema";
@@ -109,7 +111,15 @@ describe("convertToUIMessages", () => {
   });
 
   it("ignore les artefacts finance invalides en loggant un avertissement", () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warnSpy = vi
+      .spyOn(logging, "logWarning")
+      .mockImplementation((context, message, extra) => ({
+        context,
+        level: "warn",
+        message: typeof message === "string" ? message : undefined,
+        timestamp: new Date().toISOString(),
+        extra,
+      }) satisfies StructuredLogEntry);
     const createdAt = new Date("2025-02-20T10:00:00Z");
 
     const malformedArtifact = {
@@ -136,6 +146,7 @@ describe("convertToUIMessages", () => {
 
     expect(uiMessage.parts).toEqual([]);
     expect(warnSpy).toHaveBeenCalledWith(
+      "chat:convertToUIMessages",
       "[convertToUIMessages] skipped malformed finance artifact",
       expect.objectContaining({
         artifactType: "finance.chart",

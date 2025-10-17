@@ -37,6 +37,13 @@ export async function GET(request: Request): Promise<Response> {
       windowMs: 60_000,
     });
 
+    if (!rateLimit.allowed) {
+      throw new ChatSDKError(
+        "rate_limit:api",
+        "Finance news quota exceeded for this client."
+      );
+    }
+
     const params = Object.fromEntries(new URL(request.url).searchParams.entries());
     const parsed = querySchema.safeParse(params);
 

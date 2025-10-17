@@ -38,7 +38,7 @@ describe("ChatErrorBoundary", () => {
     expect(reset).toHaveBeenCalled();
 
     await waitFor(() => {
-      expect(consoleSpy).toHaveBeenCalled();
+      expect(consoleSpy).toHaveBeenCalledWith(error);
       expect(reportSpy).toHaveBeenCalledWith(error);
     });
 
