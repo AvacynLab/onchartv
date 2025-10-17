@@ -1,6 +1,8 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
+import type { PageProps } from "next";
+
 import { Chat } from "@/components/chat";
 import { DataStreamHandler } from "@/components/data-stream-handler";
 import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
@@ -8,7 +10,7 @@ import { generateUUID } from "@/lib/utils";
 
 import { auth } from "../../(auth)/auth";
 
-type ChatPageProps = {
+type ChatPageProps = PageProps & {
   /**
    * Optional session prefetched by a parent segment. When provided we reuse it
    * to avoid hitting the auth provider twice for the same navigation.
@@ -21,8 +23,8 @@ type ChatPageProps = {
  * Regular sessions land here after authentication; guests are bounced back to
  * `/login` where the Playwright harness provisions credentials.
  */
-export default async function Page(props?: ChatPageProps) {
-  const session = props?.prefetchedSession ?? (await auth());
+export default async function Page(props: ChatPageProps = {}) {
+  const session = props.prefetchedSession ?? (await auth());
 
   if (!session || session.user.type !== "regular") {
     // Regular accounts are required for the chat surface; guests are routed to
