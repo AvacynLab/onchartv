@@ -398,6 +398,83 @@ describe("Messages", () => {
     expect(financeParts).toHaveLength(1);
   });
 
+  it("filtre les doublons de parts finance injectés pendant le streaming", () => {
+    vi.stubEnv("NEXT_PUBLIC_FEATURE_FINANCE", "true");
+
+    const artifact: FinanceBacktestArtifact = {
+      type: "finance.backtest",
+      runId: "streamed-duplicate",
+      symbol: "NVDA",
+      timeframe: "4H",
+      period: { from: "2024-02-01", to: "2024-03-01" },
+      strategy: {
+        type: "sma-crossover",
+        params: { fastPeriod: 12, slowPeriod: 26 },
+      },
+      metrics: {
+        totalReturn: 0.08,
+        cagr: 0.11,
+        maxDrawdown: 0.05,
+        winRate: 0.6,
+        averageWin: 1100,
+        averageLoss: -500,
+        sharpe: 0.9,
+        profitFactor: 1.5,
+        trades: 5,
+      },
+      equityCurve: [{ t: 1706745600, e: 10_000 }],
+      trades: [
+        {
+          entryTimestamp: 1706745600,
+          entryPrice: 410,
+          exitTimestamp: 1707436800,
+          exitPrice: 418,
+          quantity: 3,
+          grossPnl: 24,
+          netPnl: 22,
+        },
+      ],
+      commentary: "duplicate parts should collapse",
+    };
+
+    const messageWithDuplicateParts = {
+      id: "assistant-streaming-dedupe",
+      role: "assistant",
+      metadata: { createdAt: new Date().toISOString() },
+      parts: [
+        { id: "text", type: "text", text: "Streaming backtest" },
+        { type: "data-financeBacktest", data: artifact, transient: true },
+        { type: "data-financeBacktest", data: { ...artifact } },
+      ],
+      artifacts: [],
+    } as unknown as ChatMessage;
+
+    render(
+      <Messages
+        chatId="chat-finance"
+        isArtifactVisible={false}
+        isReadonly={false}
+        messages={[messageWithDuplicateParts]}
+        regenerate={noop as any}
+        selectedModelId="model"
+        setMessages={noop as any}
+        status="idle"
+        votes={undefined}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    const latestInvocation = previewMessageSpy.mock.calls.at(-1)?.[0] as
+      | { message?: ChatMessage }
+      | undefined;
+
+    const financeParts = latestInvocation?.message?.parts?.filter(
+      (part) => part.type === "data-financeBacktest"
+    );
+
+    expect(financeParts).toHaveLength(1);
+  });
+
   it("affiche les messages valides et ignore les votes manquants", () => {
     const message = {
       id: "msg-1",

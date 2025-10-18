@@ -15,13 +15,13 @@ Voici ta **liste de tâches exhaustive**, agent. Elle est calée sur la **derni�
 ## Plan de correction (2025-10-30)
 
 1. **Finance – artefacts backtest**
-   * Vérifier que la requête backtest renvoie bien un unique artefact `finance-backtest-artifact`.
-   * Corriger les doublons/absences en garantissant une clé stable et un rendu conditionnel explicite.
-   * Couvrir le scénario par un test ciblé (composant ou route) validant l’unicité et la disponibilité de la table des trades.
+   * [x] Vérifier que la requête backtest renvoie bien un unique artefact `finance-backtest-artifact`.
+   * [x] Corriger les doublons/absences en garantissant une clé stable et un rendu conditionnel explicite.
+   * [x] Couvrir le scénario par un test ciblé (composant ou route) validant l’unicité et la disponibilité de la table des trades.
 2. **Chat – réédition de message**
-   * Inspecter le flux `editMessage` pour s’assurer que la réponse assistant est propagée après modification.
-   * Sécuriser la logique de streaming côté client et côté test helper (`ChatPage.waitForChatApiResponse`).
-   * Ajouter une couverture test (unit ou integration) pour éviter une régression silencieuse.
+   * [x] Inspecter le flux `editMessage` pour s’assurer que la réponse assistant est propagée après modification.
+   * [x] Sécuriser la logique de streaming côté client et côté test helper (`ChatPage.waitForChatApiResponse`).
+   * [ ] Ajouter une couverture test (unit ou integration) pour éviter une régression silencieuse.
 3. **Session – enregistrement utilisateur**
    * Diagnostiquer pourquoi la création d’un compte ne redirige plus vers `/chat`.
    * Harmoniser la réponse du handler `register` et l’attente Playwright (toast + redirection).
@@ -294,3 +294,4 @@ Si tu veux un lot de **patchs diff prêts à coller** pour les fichiers clés (`
 - **2025-10-29** — Introduction d’un schéma discriminant pour les artefacts persistés (`lib/artifacts/types.ts`), branchement de `convertToUIMessages` sur la nouvelle union, exécution de `pnpm install --frozen-lockfile`, et ajout de tests Vitest couvrant le wrapper (`artifacts.types.spec.ts`, `messages.spec.tsx`, `ai/messages.spec.ts`).
 - **2025-10-30** — Harmonisation des journaux : ajout de `logInfo`, conservation des empreintes anonymisées dans les logs finance, mise à jour du seed Postgres pour émettre un journal structuré, et rafraîchissement des tests Vitest (`logging`, `finance.api-utils`, `db/seed`).
 - **2025-10-31** — Déduplication des artefacts finance côté `convertToUIMessages` et `components/messages`, ajout d’un hash déterministe pour éviter les doublons, écriture des tests ciblés (`tests/unit/ai/messages.spec.ts`, `tests/unit/components/messages.spec.tsx`) et exécution de `pnpm exec vitest run …` pour valider le comportement.
+- **2025-11-01** — Élimination des doublons de parts finance côté `components/messages`, ajout d’un test RTL couvrant le scénario de streaming et renforcement du helper Playwright (`isGenerationComplete`) pour attendre le retour d’un message assistant avant les assertions, puis exécution de `pnpm exec vitest run tests/unit/components/messages.spec.tsx`.
