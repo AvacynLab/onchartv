@@ -287,6 +287,14 @@ function persistUsers(store: InMemoryStore) {
   }
 }
 
+declare global {
+  // eslint-disable-next-line no-var -- shared cache for the Playwright in-memory store.
+  var __ONCHARTV_IN_MEMORY_STORE__:
+    | InMemoryStore
+    | null
+    | undefined;
+}
+
 let inMemoryStore: InMemoryStore | null = null;
 
 /**
@@ -301,8 +309,13 @@ function getInMemoryStore(): InMemoryStore {
     );
   }
 
+  if (globalThis.__ONCHARTV_IN_MEMORY_STORE__) {
+    inMemoryStore = globalThis.__ONCHARTV_IN_MEMORY_STORE__ ?? null;
+  }
+
   if (!inMemoryStore) {
     inMemoryStore = getOrCreateInMemoryStore();
+    globalThis.__ONCHARTV_IN_MEMORY_STORE__ = inMemoryStore;
   }
 
   loadPersistedUsers(inMemoryStore);
@@ -345,6 +358,8 @@ export function __resetInMemoryDbForTests(): void {
   store.indicatorConfigs.clear();
   store.newsItems.clear();
   store.financePreferences.clear();
+
+  globalThis.__ONCHARTV_IN_MEMORY_STORE__ = store;
 
   try {
     if (fs.existsSync(PLAYWRIGHT_USERS_PATH)) {
