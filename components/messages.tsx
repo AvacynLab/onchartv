@@ -5,6 +5,7 @@ import React, { Fragment, memo, useEffect, useRef } from "react";
 import { useMessages } from "@/hooks/use-messages";
 import type { Vote } from "@/lib/db/schema";
 import type { ChatMessage } from "@/lib/types";
+import { stableStringifyForHash } from "@/lib/utils";
 import { useDataStream } from "./data-stream-provider";
 import { Conversation, ConversationContent } from "./elements/conversation";
 import { Greeting } from "./greeting";
@@ -254,6 +255,45 @@ function PureMessages({
              * finance payloads after we migrated the database representation to a
              * discriminated union.
              */
+            /**
+             * Deduplicate finance data parts before handing them to the
+             * renderer. Streaming may briefly surface both the transient
+             * artefact emitted during tool execution and the persisted payload
+             * saved once the assistant response completes. Comparing payload
+             * fingerprints avoids double-rendering the same finance panel while
+             * keeping other message parts untouched.
+             */
+            const seenFinancePartKeys = new Set<string>();
+            const deduplicatedParts = Array.isArray(message.parts)
+              ? message.parts.reduce<ChatMessage["parts"]>((acc, part) => {
+                  if (
+                    !part ||
+                    typeof part !== "object" ||
+                    typeof (part as { type?: unknown }).type !== "string"
+                  ) {
+                    acc.push(part);
+                    return acc;
+                  }
+
+                  const partType = (part as { type: string }).type;
+                  if (!partType.startsWith("data-finance")) {
+                    acc.push(part);
+                    return acc;
+                  }
+
+                  const payload = (part as { data?: unknown }).data;
+                  const fingerprint = `${partType}:${stableStringifyForHash(payload)}`;
+
+                  if (seenFinancePartKeys.has(fingerprint)) {
+                    return acc;
+                  }
+
+                  seenFinancePartKeys.add(fingerprint);
+                  acc.push(part);
+                  return acc;
+                }, [])
+              : [];
+
             const artifactCandidates: Array<{
               value: unknown;
               typeHint?: string;
@@ -269,30 +309,33 @@ function PureMessages({
               }
             }
 
-            if (Array.isArray(message.parts)) {
-              for (const part of message.parts) {
-                if (
-                  !part ||
-                  typeof part !== "object" ||
-                  !("type" in part) ||
-                  typeof part.type !== "string" ||
-                  !part.type.startsWith("data-finance")
-                ) {
-                  continue;
-                }
-
-                const dataCarrier = part as { data?: unknown };
-                const nested = dataCarrier.data;
-                const nestedType =
-                  typeof (nested as { type?: unknown })?.type === "string"
-                    ? ((nested as { type: string }).type as string)
-                    : undefined;
-
-                artifactCandidates.push({ value: nested, typeHint: nestedType });
+            for (const part of deduplicatedParts) {
+              if (
+                !part ||
+                typeof part !== "object" ||
+                typeof (part as { type?: unknown }).type !== "string"
+              ) {
+                continue;
               }
+
+              const partType = (part as { type: string }).type;
+              if (!partType.startsWith("data-finance")) {
+                continue;
+              }
+
+              const dataCarrier = part as { data?: unknown };
+              const nested = dataCarrier.data;
+              const nestedType =
+                typeof (nested as { type?: unknown })?.type === "string"
+                  ? ((nested as { type: string }).type as string)
+                  : undefined;
+
+              artifactCandidates.push({ value: nested, typeHint: nestedType });
             }
 
             const invalidArtifacts: InvalidArtifactLog[] = [];
+            const seenArtifactKeys = new Set<string>(seenFinancePartKeys);
+
             const sanitizedArtifacts: FinanceArtifact[] = financeFeatureEnabled
               ? artifactCandidates.reduce<FinanceArtifact[]>((acc, candidate, artifactIndex) => {
                   const parsed = parseFinanceArtifact(
@@ -303,10 +346,18 @@ function PureMessages({
                     candidate.typeHint
                   );
 
-                  if (parsed) {
-                    acc.push(parsed);
+                  if (!parsed) {
+                    return acc;
                   }
 
+                  const artifactFingerprint = `${parsed.type}:${stableStringifyForHash(parsed)}`;
+
+                  if (seenArtifactKeys.has(artifactFingerprint)) {
+                    return acc;
+                  }
+
+                  seenArtifactKeys.add(artifactFingerprint);
+                  acc.push(parsed);
                   return acc;
                 }, [])
               : [];
@@ -327,6 +378,7 @@ function PureMessages({
             const normalisedMessage = {
               ...message,
               artifacts: sanitizedArtifacts,
+              parts: deduplicatedParts,
             } as ChatMessage;
 
             const invalidCount = financeFeatureEnabled ? invalidArtifacts.length : 0;

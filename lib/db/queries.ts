@@ -103,7 +103,10 @@ type InMemoryStore = {
 
 declare global {
   // eslint-disable-next-line no-var -- Explicitly extend the Node.js global scope.
-  var __ONCHARTV_IN_MEMORY_STORE__: InMemoryStore | undefined;
+  var __ONCHARTV_IN_MEMORY_STORE__:
+    | InMemoryStore
+    | null
+    | undefined;
 }
 
 type ProcessWithInMemoryStore = NodeJS.Process & {
@@ -301,8 +304,13 @@ function getInMemoryStore(): InMemoryStore {
     );
   }
 
+  if (globalThis.__ONCHARTV_IN_MEMORY_STORE__) {
+    inMemoryStore = globalThis.__ONCHARTV_IN_MEMORY_STORE__ ?? null;
+  }
+
   if (!inMemoryStore) {
     inMemoryStore = getOrCreateInMemoryStore();
+    globalThis.__ONCHARTV_IN_MEMORY_STORE__ = inMemoryStore;
   }
 
   loadPersistedUsers(inMemoryStore);
@@ -345,6 +353,8 @@ export function __resetInMemoryDbForTests(): void {
   store.indicatorConfigs.clear();
   store.newsItems.clear();
   store.financePreferences.clear();
+
+  globalThis.__ONCHARTV_IN_MEMORY_STORE__ = store;
 
   try {
     if (fs.existsSync(PLAYWRIGHT_USERS_PATH)) {

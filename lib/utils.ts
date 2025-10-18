@@ -39,6 +39,91 @@ const FALLBACK_PARSE_ERROR_MESSAGE =
 const FALLBACK_READ_ERROR_MESSAGE =
   'Unable to read the error response returned by the server.';
 
+/**
+ * Prefix applied to finance data parts injected into chat messages. Centralising
+ * the marker keeps downstream deduplication logic in sync with the renderers and
+ * avoids scattering string literals across the codebase.
+ */
+const FINANCE_DATA_PART_PREFIX = 'data-finance';
+
+/**
+ * Generate a deterministic string fingerprint for arbitrary JSON-like values.
+ *
+ * The helper recursively sorts object keys, guards against circular references
+ * via a `WeakSet`, and annotates primitive types to differentiate between values
+ * such as the number `1` and the string `'1'`.  Message artefact deduplication
+ * relies on this stable representation to detect duplicates originating from
+ * mixed persistence layers (legacy `message.artifacts` arrays and newer
+ * `data-finance*` parts streamed by the assistant).
+ */
+export function stableStringifyForHash(
+  value: unknown,
+  seen: WeakSet<object> = new WeakSet()
+): string {
+  if (value === null) {
+    return 'null';
+  }
+
+  const valueType = typeof value;
+
+  if (valueType === 'undefined') {
+    return 'undefined';
+  }
+
+  if (
+    valueType === 'number' ||
+    valueType === 'boolean' ||
+    valueType === 'bigint'
+  ) {
+    return `${valueType}:${String(value)}`;
+  }
+
+  if (valueType === 'string') {
+    return `string:${value}`;
+  }
+
+  if (valueType === 'symbol') {
+    return `symbol:${value.description ?? ''}`;
+  }
+
+  if (valueType === 'function') {
+    return 'function';
+  }
+
+  if (value instanceof Date) {
+    return `date:${value.toISOString()}`;
+  }
+
+  if (Array.isArray(value)) {
+    if (seen.has(value)) {
+      return '[Circular]';
+    }
+    seen.add(value);
+    const serialisedItems = value
+      .map((item) => stableStringifyForHash(item, seen))
+      .join(',');
+    return `array:[${serialisedItems}]`;
+  }
+
+  if (valueType === 'object') {
+    const objectValue = value as Record<string, unknown>;
+    if (seen.has(objectValue)) {
+      return '[Circular]';
+    }
+    seen.add(objectValue);
+    const serialisedEntries = Object.entries(objectValue)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(
+        ([key, entryValue]) =>
+          `${key}:${stableStringifyForHash(entryValue, seen)}`
+      )
+      .join(',');
+    return `object:{${serialisedEntries}}`;
+  }
+
+  return String(value);
+}
+
 function toChatSdkErrorFromEnvelope(
   envelope: ApiErrorEnvelope['error']
 ): ChatSDKError {
@@ -263,15 +348,46 @@ const artifactToDataPart = (
 
 export function convertToUIMessages(messages: DBMessage[]): ChatMessage[] {
   return messages.map((message) => {
-    const baseParts = message.parts as UIMessagePart<CustomUIDataTypes, ChatTools>[];
+    const baseParts = Array.isArray(message.parts)
+      ? (message.parts as UIMessagePart<CustomUIDataTypes, ChatTools>[])
+      : [];
+
     const artifactParts = (message.artifacts ?? [])
       .map(artifactToDataPart)
       .filter((part): part is UIMessagePart<CustomUIDataTypes, ChatTools> => part !== null);
 
+    const seenFinancePartKeys = new Set<string>();
+
+    const registerFinancePart = (
+      part: UIMessagePart<CustomUIDataTypes, ChatTools>
+    ): boolean => {
+      if (!part || typeof part !== 'object') {
+        return true;
+      }
+
+      const partType = typeof part.type === 'string' ? part.type : null;
+      if (!partType || !partType.startsWith(FINANCE_DATA_PART_PREFIX)) {
+        return true;
+      }
+
+      const payload = (part as { data?: unknown }).data;
+      const fingerprint = `${partType}:${stableStringifyForHash(payload)}`;
+
+      if (seenFinancePartKeys.has(fingerprint)) {
+        return false;
+      }
+
+      seenFinancePartKeys.add(fingerprint);
+      return true;
+    };
+
+    const dedupedBaseParts = baseParts.filter(registerFinancePart);
+    const dedupedArtifactParts = artifactParts.filter(registerFinancePart);
+
     return {
       id: message.id,
       role: message.role as 'user' | 'assistant' | 'system',
-      parts: [...baseParts, ...artifactParts],
+      parts: [...dedupedBaseParts, ...dedupedArtifactParts],
       metadata: {
         createdAt: formatISO(message.createdAt),
       },

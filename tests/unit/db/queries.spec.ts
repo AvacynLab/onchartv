@@ -75,6 +75,40 @@ describe("finance queries", () => {
     queries = reloadedQueries;
   });
 
+  it("shares transient chat messages across module reloads", async () => {
+    const chatId = "module-reload-chat";
+    const createdAt = new Date("2024-02-01T00:00:00.000Z");
+
+    await queries.saveMessages({
+      messages: [
+        {
+          id: "user-reload",
+          chatId,
+          role: "user",
+          parts: [{ type: "text", text: "Initial prompt" }],
+          attachments: [],
+          artifacts: [],
+          createdAt,
+        },
+      ],
+    });
+
+    let messages = await queries.getMessagesByChatId({ id: chatId });
+    expect(messages).toHaveLength(1);
+
+    vi.resetModules();
+    vi.mock("server-only", () => ({}));
+
+    const reloadedQueries = await import("../../../lib/db/queries");
+    messages = await reloadedQueries.getMessagesByChatId({ id: chatId });
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.id).toBe("user-reload");
+
+    reloadedQueries.__resetInMemoryDbForTests();
+    queries = reloadedQueries;
+  });
+
   it("allows credentials verification after failed attempts refresh the user hash", async () => {
     const email = "playwright-flow@example.com";
     const password = "deterministic-secret";

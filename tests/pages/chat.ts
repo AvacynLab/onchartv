@@ -489,6 +489,15 @@ export class ChatPage {
     );
 
     /**
+     * Inline edit submissions temporarily clear the trailing assistant reply
+     * before the regeneration begins streaming. Ensure a fresh assistant
+     * bubble is attached before continuing so downstream helpers never observe
+     * an empty timeline (which previously triggered "No assistant message"
+     * errors in the Playwright harness).
+     */
+    await expect(assistantMessages).not.toHaveCount(0, { timeout: 60_000 });
+
+    /**
      * The assistant stream reuses the same container while piping tool results
      * into the UI. By the time we reach this section the guard above has either
      * observed a brand-new bubble or detected fresh content within the latest
