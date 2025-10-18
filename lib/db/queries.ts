@@ -103,7 +103,10 @@ type InMemoryStore = {
 
 declare global {
   // eslint-disable-next-line no-var -- Explicitly extend the Node.js global scope.
-  var __ONCHARTV_IN_MEMORY_STORE__: InMemoryStore | undefined;
+  var __ONCHARTV_IN_MEMORY_STORE__:
+    | InMemoryStore
+    | null
+    | undefined;
 }
 
 type ProcessWithInMemoryStore = NodeJS.Process & {
@@ -285,14 +288,6 @@ function persistUsers(store: InMemoryStore) {
     // Persisting the hermetic credentials is best-effort; warn while redacting sensitive payloads.
     logWarning("db:queries", "Failed to persist Playwright users", { error });
   }
-}
-
-declare global {
-  // eslint-disable-next-line no-var -- shared cache for the Playwright in-memory store.
-  var __ONCHARTV_IN_MEMORY_STORE__:
-    | InMemoryStore
-    | null
-    | undefined;
 }
 
 let inMemoryStore: InMemoryStore | null = null;
