@@ -1697,6 +1697,25 @@ export async function createBacktestRun(
 ): Promise<BacktestRun> {
   if (isTestEnvironment()) {
     const store = getInMemoryStore();
+
+    // Mirror the production unique index so the in-memory Playwright database
+    // behaves consistently during unit tests and local dev runs.
+    const hasDuplicateWindow = Array.from(store.backtestRuns.values()).some(
+      (existingRun) =>
+        existingRun.assetId === input.assetId &&
+        existingRun.timeframe === input.timeframe &&
+        existingRun.periodStart.getTime() === input.periodStart.getTime() &&
+        existingRun.periodEnd.getTime() === input.periodEnd.getTime() &&
+        existingRun.strategyVersionId === input.strategyVersionId,
+    );
+
+    if (hasDuplicateWindow) {
+      throw new ChatSDKError(
+        "bad_request:database",
+        "Backtest run already exists for this strategy window",
+      );
+    }
+
     const id = generateUUID();
     const record: BacktestRun = {
       id,

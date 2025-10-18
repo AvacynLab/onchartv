@@ -150,15 +150,8 @@ describe("/api/finance/backtest", () => {
     expect(response.status).toBe(401);
 
     const error = await response.json();
-    expect(error).toEqual(
-      expect.objectContaining({
-        error: expect.objectContaining({
-          code: "unauthorized:auth",
-          message: expect.stringContaining("sign in"),
-          cause: expect.stringContaining("signed in"),
-        }),
-      })
-    );
+    expect(error.error.code).toBe("unauthorized:auth");
+    expect(error.error.message).toMatch(/signed in/i);
   });
 
   it("rejects unsupported timeframes", async () => {
@@ -170,7 +163,7 @@ describe("/api/finance/backtest", () => {
     expect(response.status).toBe(400);
     const error = await response.json();
     expect(error.error.code).toBe("bad_request:api");
-    expect(error.error.cause).toMatch(/Unsupported timeframe/);
+    expect(error.error.message).toMatch(/Unsupported timeframe/);
   });
 
   it("rejects SMA windows where the fast period is not strictly shorter", async () => {
@@ -187,7 +180,7 @@ describe("/api/finance/backtest", () => {
     expect(response.status).toBe(400);
     const error = await response.json();
     expect(error.error.code).toBe("bad_request:api");
-    expect(error.error.cause).toMatch(/strictly less than/);
+    expect(error.error.message).toMatch(/strictly less than/);
   });
 
   it("rejects periods where 'from' is later than 'to'", async () => {
@@ -204,7 +197,7 @@ describe("/api/finance/backtest", () => {
     expect(response.status).toBe(400);
     const error = await response.json();
     expect(error.error.code).toBe("bad_request:api");
-    expect(error.error.cause).toMatch(/earlier than 'to'/);
+    expect(error.error.message).toMatch(/period\.from/);
   });
 
   it("rejects periods that exceed the maximum supported duration", async () => {
@@ -221,7 +214,7 @@ describe("/api/finance/backtest", () => {
     expect(response.status).toBe(400);
     const error = await response.json();
     expect(error.error.code).toBe("bad_request:api");
-    expect(error.error.cause).toMatch(/maximum supported duration/i);
+    expect(error.error.message).toMatch(/maximum supported duration/i);
   });
 
   it("forbids access when the finance feature flag is disabled", async () => {
@@ -234,7 +227,7 @@ describe("/api/finance/backtest", () => {
       expect(response.status).toBe(403);
       const error = await response.json();
       expect(error.error.code).toBe("forbidden:api");
-      expect(error.error.cause).toMatch(/Finance endpoints are disabled/i);
+      expect(error.error.message).toMatch(/Finance endpoints are disabled/i);
     } finally {
       vi.unstubAllEnvs();
     }

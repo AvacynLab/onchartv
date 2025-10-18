@@ -149,8 +149,12 @@ describe("seedDatabase", () => {
 
       expect(mocks.onConflictDoUpdate).toHaveBeenCalledTimes(5);
       expect(mocks.end).toHaveBeenCalledWith({ timeout: 5 });
-      expect(infoSpy).toHaveBeenCalledWith(
-        "[db:seed] Inserted 5 finance assets into the catalogue."
+      expect(infoSpy).toHaveBeenCalledTimes(1);
+      const [prefix, entry] = infoSpy.mock.calls[0]!;
+      expect(prefix).toBe("[db:seed]");
+      expect(entry.level).toBe("info");
+      expect(entry.message).toBe(
+        "Inserted 5 finance assets into the catalogue."
       );
     } finally {
       infoSpy.mockRestore();

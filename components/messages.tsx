@@ -13,6 +13,8 @@ import {
   financeArtifactSchema,
   type FinanceArtifact,
 } from "@/lib/finance/types";
+import { financeMessageArtifactSchema } from "@/lib/artifacts/types";
+import * as featureFlags from "@/lib/feature-flags";
 import { logWarning } from "@/lib/logging";
 
 type MessagesProps = {
@@ -25,6 +27,7 @@ type MessagesProps = {
   isReadonly: boolean;
   isArtifactVisible: boolean;
   selectedModelId: string;
+  financeFeatureEnabledOverride?: boolean;
 };
 
 const isRenderableMessage = (value: ChatMessage | null | undefined): value is ChatMessage => {
@@ -51,7 +54,8 @@ const parseFinanceArtifact = (
   artifact: unknown,
   artifactIndex: number,
   messageId: string,
-  invalidArtifacts: InvalidArtifactLog[]
+  invalidArtifacts: InvalidArtifactLog[],
+  typeHint?: string
 ): FinanceArtifact | null => {
   const logInvalid = (details: {
     issues: string[];
@@ -63,42 +67,62 @@ const parseFinanceArtifact = (
       messageId,
       type: details.type,
     });
-    logWarning(
-      "chat:messages",
-      "[Messages] artifact payload is malformed and will be ignored",
-      {
-        artifact,
-        artifactIndex,
-        issues: details.issues,
-        messageId,
-        type: details.type,
-      }
-    );
+    logWarning("chat:messages", "[Messages] artifact payload is malformed and will be ignored", {
+      artifact,
+      artifactIndex,
+      issues: details.issues,
+      messageId,
+      type: details.type,
+    });
   };
 
   if (!artifact || typeof artifact !== "object") {
-    logInvalid({ issues: ["artifact is not an object"] });
+    logInvalid({ issues: ["artifact is not an object"], type: typeHint });
     return null;
   }
 
   const candidate = artifact as { type?: unknown };
 
   if (typeof candidate.type !== "string") {
-    logInvalid({ issues: ["artifact.type must be a string"] });
+    logInvalid({ issues: ["artifact.type must be a string"], type: typeHint });
     return null;
   }
 
-  const parsed = financeArtifactSchema.safeParse(artifact);
+  const wrappedResult = financeMessageArtifactSchema.safeParse(artifact);
 
-  if (!parsed.success) {
-    logInvalid({
-      issues: parsed.error.issues.map((issue) => issue.message),
-      type: candidate.type,
-    });
-    return null;
+  if (wrappedResult.success) {
+    /**
+     * The artefact was persisted using the discriminated message wrapper. In
+     * this case we surface the nested payload so downstream components can stay
+     * agnostic of the storage format while still benefitting from precise
+     * TypeScript inference.
+     */
+    return wrappedResult.data.payload;
   }
 
-  return parsed.data;
+  const directResult = financeArtifactSchema.safeParse(artifact);
+
+  if (directResult.success) {
+    /**
+     * Legacy sessions (and certain streaming responses) still expose artefacts
+     * without the wrapper. Falling back to the bare schema keeps those chats
+     * readable for existing users and mirrors the server-side coercion logic.
+     */
+    return directResult.data;
+  }
+
+  const issues = Array.from(
+    new Set([
+      ...wrappedResult.error.issues.map((issue) => issue.message),
+      ...directResult.error.issues.map((issue) => issue.message),
+    ])
+  );
+
+  logInvalid({
+    issues,
+    type: candidate.type,
+  });
+  return null;
 };
 
 function PureMessages({
@@ -110,6 +134,7 @@ function PureMessages({
   regenerate,
   isReadonly,
   selectedModelId,
+  financeFeatureEnabledOverride,
 }: MessagesProps) {
   const {
     containerRef: messagesContainerRef,
@@ -129,6 +154,16 @@ function PureMessages({
    */
   const safeMessages = Array.isArray(messages) ? messages : messages ?? [];
   const safeVotes = Array.isArray(votes) ? votes : votes ?? [];
+
+  /**
+   * Evaluate the finance flag once per render. Tests can inject
+   * `financeFeatureEnabledOverride` to force the disabled branch without
+   * mutating global process state.
+   */
+  const financeFeatureEnabled =
+    typeof financeFeatureEnabledOverride === "boolean"
+      ? financeFeatureEnabledOverride
+      : featureFlags.isFinanceFeatureEnabledClient();
 
   /**
    * Track the previous message count and the viewport stickiness so we can
@@ -209,18 +244,63 @@ function PureMessages({
              * the value into the array shape expected by the preview renderer
              * so downstream consumers stay immutable.
              */
-            const rawArtifacts = (
-              message as unknown as { artifacts?: unknown }
-            ).artifacts;
+            const rawArtifacts = (message as unknown as { artifacts?: unknown }).artifacts;
+
+            /**
+             * Build a unified list of artefact candidates originating either from
+             * the legacy `message.artifacts` array (streaming responses) or from
+             * persisted UI data parts (historical conversations). Keeping both
+             * sources ensures that previously stored chats continue to render
+             * finance payloads after we migrated the database representation to a
+             * discriminated union.
+             */
+            const artifactCandidates: Array<{
+              value: unknown;
+              typeHint?: string;
+            }> = [];
+
+            if (Array.isArray(rawArtifacts)) {
+              for (const candidate of rawArtifacts) {
+                const candidateType =
+                  typeof (candidate as { type?: unknown })?.type === "string"
+                    ? ((candidate as { type: string }).type as string)
+                    : undefined;
+                artifactCandidates.push({ value: candidate, typeHint: candidateType });
+              }
+            }
+
+            if (Array.isArray(message.parts)) {
+              for (const part of message.parts) {
+                if (
+                  !part ||
+                  typeof part !== "object" ||
+                  !("type" in part) ||
+                  typeof part.type !== "string" ||
+                  !part.type.startsWith("data-finance")
+                ) {
+                  continue;
+                }
+
+                const dataCarrier = part as { data?: unknown };
+                const nested = dataCarrier.data;
+                const nestedType =
+                  typeof (nested as { type?: unknown })?.type === "string"
+                    ? ((nested as { type: string }).type as string)
+                    : undefined;
+
+                artifactCandidates.push({ value: nested, typeHint: nestedType });
+              }
+            }
 
             const invalidArtifacts: InvalidArtifactLog[] = [];
-            const sanitizedArtifacts: FinanceArtifact[] = Array.isArray(rawArtifacts)
-              ? rawArtifacts.reduce<FinanceArtifact[]>((acc, artifact, artifactIndex) => {
+            const sanitizedArtifacts: FinanceArtifact[] = financeFeatureEnabled
+              ? artifactCandidates.reduce<FinanceArtifact[]>((acc, candidate, artifactIndex) => {
                   const parsed = parseFinanceArtifact(
-                    artifact,
+                    candidate.value,
                     artifactIndex,
                     message.id,
-                    invalidArtifacts
+                    invalidArtifacts,
+                    candidate.typeHint
                   );
 
                   if (parsed) {
@@ -231,12 +311,25 @@ function PureMessages({
                 }, [])
               : [];
 
+            if (!financeFeatureEnabled && artifactCandidates.length > 0) {
+              /**
+               * When finance experiences are disabled the UI must stay silent
+               * about any related artefacts. Swallowing the payload keeps the
+               * assistant copy visible while mirroring the server-side flag
+               * behaviour (APIs emit `403` when the feature is disabled).
+               */
+              logWarning("chat:messages", "[Messages] finance artefact hidden by feature flag", {
+                artifactCount: artifactCandidates.length,
+                messageId: message.id,
+              });
+            }
+
             const normalisedMessage = {
               ...message,
               artifacts: sanitizedArtifacts,
             } as ChatMessage;
 
-            const invalidCount = invalidArtifacts.length;
+            const invalidCount = financeFeatureEnabled ? invalidArtifacts.length : 0;
 
             return (
               <Fragment key={message.id}>
@@ -321,6 +414,13 @@ export const Messages = memo(PureMessages, (prevProps, nextProps) => {
   }
 
   if (prevProps.selectedModelId !== nextProps.selectedModelId) {
+    return false;
+  }
+
+  if (
+    prevProps.financeFeatureEnabledOverride !==
+    nextProps.financeFeatureEnabledOverride
+  ) {
     return false;
   }
 

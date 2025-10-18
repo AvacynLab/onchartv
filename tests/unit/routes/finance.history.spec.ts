@@ -66,6 +66,7 @@ describe("/api/finance/history", () => {
     expect(response.status).toBe(400);
     const error = await response.json();
     expect(error.error.code).toBe("bad_request:api");
+    expect(error.error.message).toMatch(/Unsupported timeframe/);
   });
 
   it("caps the default candle count to the maximum when the adapter returns more", async () => {
@@ -106,7 +107,7 @@ describe("/api/finance/history", () => {
     expect(response.status).toBe(400);
     const error = await response.json();
     expect(error.error.code).toBe("bad_request:api");
-    expect(error.error.cause).toMatch(/maximum of 5000/);
+    expect(error.error.message).toMatch(/maximum of 5000/);
   });
 
   it("rejects decimal limits to avoid silent truncation", async () => {
@@ -117,7 +118,7 @@ describe("/api/finance/history", () => {
     expect(response.status).toBe(400);
     const error = await response.json();
     expect(error.error.code).toBe("bad_request:api");
-    expect(error.error.cause).toMatch(/positive integer/);
+    expect(error.error.message).toMatch(/positive integer/);
   });
 
   it("rejects blank symbols after trimming whitespace", async () => {
@@ -130,7 +131,7 @@ describe("/api/finance/history", () => {
     expect(response.status).toBe(400);
     const error = await response.json();
     expect(error.error.code).toBe("bad_request:api");
-    expect(error.error.cause).toMatch(/symbol must not be empty/);
+    expect(error.error.message).toMatch(/symbol must not be empty/);
   });
 
   it("rejects malformed from parameters with a descriptive error", async () => {
@@ -143,20 +144,20 @@ describe("/api/finance/history", () => {
     expect(response.status).toBe(400);
     const error = await response.json();
     expect(error.error.code).toBe("bad_request:api");
-    expect(error.error.cause).toMatch(/Field 'from' must be a valid ISO date/i);
+    expect(error.error.message).toMatch(/Field 'from' must be a valid ISO date/i);
   });
 
-  it("rejects ranges where 'from' is later than 'to'", async () => {
+  it("normalises reversed ranges before resolving the series", async () => {
     const response = await GET(
       new Request(
         "http://localhost/api/finance/history?symbol=AAPL&from=2024-06-10T00:00:00Z&to=2024-06-01T00:00:00Z"
       )
     );
 
-    expect(response.status).toBe(400);
-    const error = await response.json();
-    expect(error.error.code).toBe("bad_request:api");
-    expect(error.error.cause).toMatch(/earlier than 'to'/);
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.count).toBeGreaterThan(0);
+    expect(payload.range.from).toBeLessThanOrEqual(payload.range.to);
   });
 
   it("returns a forbidden error when the finance feature flag is disabled", async () => {
@@ -170,7 +171,7 @@ describe("/api/finance/history", () => {
       expect(response.status).toBe(403);
       const error = await response.json();
       expect(error.error.code).toBe("forbidden:api");
-      expect(error.error.cause).toMatch(/Finance endpoints are disabled/i);
+      expect(error.error.message).toMatch(/Finance endpoints are disabled/i);
     } finally {
       vi.unstubAllEnvs();
     }

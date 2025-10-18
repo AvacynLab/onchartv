@@ -16,6 +16,7 @@ const SENSITIVE_KEY_PATTERNS = [
   /cookie/i,
   /key$/i,
   /api[-_]?key/i,
+  /user/i,
 ];
 
 const SENSITIVE_VALUE_PATTERNS = [
@@ -32,7 +33,7 @@ const MAX_STACK_LINES = 5;
  * final shape without reading from stdout.
  */
 export interface StructuredLogEntry {
-  level: "error" | "warn";
+  level: "error" | "warn" | "info";
   context: string;
   timestamp: string;
   message?: string;
@@ -97,9 +98,11 @@ export function sanitizeForLogging(value: unknown, seen = new WeakSet()): unknow
 
       const propertyValue = extraProperties[key];
 
+      const sanitizedProperty = sanitizeForLogging(propertyValue, seen);
+
       base[key] = shouldRedactKey(key)
-        ? REDACTED_VALUE
-        : sanitizeForLogging(propertyValue, seen);
+        ? redactUnlessFingerprint(sanitizedProperty)
+        : sanitizedProperty;
     }
 
     return base;
@@ -124,12 +127,14 @@ export function sanitizeForLogging(value: unknown, seen = new WeakSet()): unknow
       for (const [key, nestedValue] of Object.entries(
         value as Record<string, unknown>
       )) {
+        const sanitizedValue = sanitizeForLogging(nestedValue, seen);
+
         if (shouldRedactKey(key)) {
-          result[key] = REDACTED_VALUE;
+          result[key] = redactUnlessFingerprint(sanitizedValue);
           continue;
         }
 
-        result[key] = sanitizeForLogging(nestedValue, seen);
+        result[key] = sanitizedValue;
       }
 
       return result;
@@ -165,6 +170,19 @@ export function logError(
   return emitStructuredLog("error", context, error, extra);
 }
 
+/**
+ * Emits a structured info log. The helper mirrors `logWarning`/`logError` but
+ * uses `console.info` as the sink so call sites can surface diagnostics without
+ * leaking sensitive payloads.
+ */
+export function logInfo(
+  context: string,
+  messageOrData: unknown,
+  extra?: Record<string, unknown>
+): StructuredLogEntry {
+  return emitStructuredLog("info", context, messageOrData, extra);
+}
+
 function emitStructuredLog(
   level: StructuredLogEntry["level"],
   context: string,
@@ -191,7 +209,12 @@ function emitStructuredLog(
     payload.extra = sanitizedExtra;
   }
 
-  const emitter = level === "error" ? console.error : console.warn;
+  const emitter =
+    level === "error"
+      ? console.error
+      : level === "warn"
+        ? console.warn
+        : console.info;
   emitter(`[${context}]`, payload);
 
   return payload;
@@ -207,4 +230,10 @@ function sanitizeString(value: string): string {
 
 function shouldRedactKey(key: string): boolean {
   return SENSITIVE_KEY_PATTERNS.some((pattern) => pattern.test(key));
+}
+
+function redactUnlessFingerprint(value: unknown): string {
+  return typeof value === "string" && value.startsWith("[fingerprint:")
+    ? value
+    : REDACTED_VALUE;
 }

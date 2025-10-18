@@ -1,12 +1,13 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
+
 import { Chat } from "@/components/chat";
 import { DataStreamHandler } from "@/components/data-stream-handler";
 import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
 import { generateUUID } from "@/lib/utils";
 
-import { auth } from "../../(auth)/auth";
+import { requireRegularChatSession } from "../session";
 
 /**
  * Server component responsible for provisioning a brand new chat surface.
@@ -14,7 +15,7 @@ import { auth } from "../../(auth)/auth";
  * `/login` where the Playwright harness provisions credentials.
  */
 export default async function Page() {
-  const session = await auth();
+  const session = await requireRegularChatSession();
 
   if (!session || session.user.type !== "regular") {
     // Regular accounts are required for the chat surface; guests are routed to

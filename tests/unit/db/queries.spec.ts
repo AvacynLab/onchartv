@@ -10,6 +10,7 @@ import type {
   CreateBacktestRunInput,
   CreateStrategyInput,
 } from "../../../lib/db/queries";
+import { ChatSDKError } from "../../../lib/errors";
 import { resolveCredentialsUser } from "../../../lib/auth/credentials-verify";
 import type {
   BacktestMetrics,
@@ -257,6 +258,79 @@ describe("finance queries", () => {
 
     expect(limitedRuns).toHaveLength(1);
     expect(limitedRuns[0]?.id).toBe(secondRun.id);
+  });
+
+  it("rejects duplicate backtests for identical strategy windows", async () => {
+    const asset = await queries.upsertAsset({
+      symbol: "AAPL",
+      exchange: "NASDAQ",
+      type: "equity",
+      name: "Apple Inc.",
+      currency: "USD",
+    });
+
+    const strategyInput: CreateStrategyInput = {
+      userId: USER_ID,
+      name: "Momentum",
+      description: "Short-term breakout",
+    };
+    const strategy = await queries.createStrategy(strategyInput);
+    const version = await queries.createStrategyVersion({
+      strategyId: strategy.id,
+      params: { lookback: 20 },
+    });
+
+    const baseInput: CreateBacktestRunInput = {
+      strategyVersionId: version.id,
+      assetId: asset.id,
+      timeframe: "1D",
+      periodStart: new Date("2022-01-01T00:00:00.000Z"),
+      periodEnd: new Date("2022-12-31T00:00:00.000Z"),
+      metrics: {
+        totalReturn: 0.21,
+        cagr: 0.21,
+        maxDrawdown: 0.08,
+        winRate: 0.62,
+        averageWin: 140,
+        averageLoss: 70,
+        sharpe: 1.4,
+        profitFactor: 2.1,
+        trades: 32,
+      },
+      trades: [
+        {
+          entryTimestamp: 1_640_995_200,
+          entryPrice: 165,
+          exitTimestamp: 1_641_254_400,
+          exitPrice: 173,
+          quantity: 12,
+          grossPnl: 96,
+          netPnl: 90,
+        },
+      ],
+      equityCurve: [
+        { timestamp: 1_640_995_200, equity: 10_000 },
+        { timestamp: 1_641_254_400, equity: 10_090 },
+      ],
+    };
+
+    await queries.createBacktestRun(baseInput);
+
+    // Attempting to persist the identical window twice must bubble the
+    // database constraint to prevent flaky analytics in downstream reports.
+    const duplicateRunPromise = queries.createBacktestRun(baseInput);
+
+    await expect(duplicateRunPromise).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    await expect(duplicateRunPromise).rejects.toSatisfy((error) => {
+      // Use both instanceof and constructor name guards to stay resilient to
+      // module graph duplication during Vitest's module isolation.
+      return (
+        error instanceof ChatSDKError ||
+        (error?.constructor?.name ?? "") === "ChatSDKError"
+      );
+    });
   });
 
   it("upserts and retrieves user finance preferences", async () => {

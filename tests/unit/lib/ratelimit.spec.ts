@@ -60,6 +60,27 @@ describe("enforceRateLimit", () => {
     }
   });
 
+  it("does not leak Playwright bypass state once the flag is disabled", () => {
+    process.env.PLAYWRIGHT = "true";
+    const options = { key: "user-4", limit: 2, windowMs: 1_000 } as const;
+
+    // Trigger a large number of requests while the bypass is active to ensure
+    // no internal bucket gets populated for the key.
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const verdict = enforceRateLimit(options);
+      expect(verdict.allowed).toBe(true);
+    }
+
+    // Reset the flag to mimic the behaviour outside Playwright runs. The next
+    // call must behave like the first ever request from this key; if the bypass
+    // leaked state, the quota would already be exhausted.
+    delete process.env.PLAYWRIGHT;
+
+    const firstVerdictAfterBypass = enforceRateLimit(options);
+    expect(firstVerdictAfterBypass.allowed).toBe(true);
+    expect(firstVerdictAfterBypass.remaining).toBe(1);
+  });
+
   it("reports remaining requests relative to the effective quota", () => {
     // Ensure the relaxed Playwright quota does not interfere with the
     // assertions that follow.

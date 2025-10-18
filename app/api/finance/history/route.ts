@@ -22,6 +22,24 @@ const DEFAULT_TIMEFRAME = SUPPORTED_TIMEFRAMES[0];
 type SupportedTimeframe = (typeof SUPPORTED_TIMEFRAMES)[number];
 
 /**
+ * Ensures an epoch tuple always respects `from <= to` so downstream helpers do
+ * not have to re-validate the order when callers swap their bounds.
+ */
+function normaliseEpochRange({
+  from,
+  to,
+}: {
+  readonly from?: number;
+  readonly to?: number;
+}): { from?: number; to?: number } {
+  if (typeof from === "number" && typeof to === "number" && from > to) {
+    return { from: to, to: from };
+  }
+
+  return { from, to };
+}
+
+/**
  * Builds a Zod schema that converts optional ISO/epoch payloads into epoch
  * seconds while surfacing consistent error messages for malformed inputs.
  */
@@ -71,11 +89,7 @@ const querySchema = z.object({
     .transform((value, ctx) => {
       const normalised = (value ?? DEFAULT_TIMEFRAME).trim().toUpperCase();
 
-      if (
-        !SUPPORTED_TIMEFRAMES.includes(
-          normalised as SupportedTimeframe
-        )
-      ) {
+      if (!SUPPORTED_TIMEFRAMES.includes(normalised as SupportedTimeframe)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: `Unsupported timeframe '${value ?? ""}'. Only 1D candles are available in the offline catalogue.`,
@@ -172,8 +186,14 @@ export async function GET(request: Request): Promise<Response> {
     const metadata = assertSupportedSymbol(parsed.data.symbol);
     symbol = metadata.symbol;
     timeframe = parsed.data.timeframe;
-    fromEpoch = parsed.data.from;
-    toEpoch = parsed.data.to;
+
+    const normalisedRange = normaliseEpochRange({
+      from: parsed.data.from,
+      to: parsed.data.to,
+    });
+
+    fromEpoch = normalisedRange.from;
+    toEpoch = normalisedRange.to;
     limit = parsed.data.limit;
 
     const series = FINANCE_SERIES[metadata.symbol];

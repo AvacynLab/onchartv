@@ -16,10 +16,15 @@ describe("logRouteLatency", () => {
     });
 
     expect(infoSpy).toHaveBeenCalledTimes(1);
-    const [, payload] = infoSpy.mock.calls[0]!;
+    const [prefix, entry] = infoSpy.mock.calls[0]!;
 
-    expect(payload).toMatchObject({ symbol: "AAPL" });
-    expect(payload.clientKey).toMatch(/\[fingerprint:[0-9a-f]{12}\]/);
+    expect(prefix).toBe("[api:finance.test]");
+    expect(entry.level).toBe("info");
+    expect(entry.message).toContain("completed in");
+
+    const extra = entry.extra as Record<string, unknown>;
+    expect(extra).toMatchObject({ symbol: "AAPL" });
+    expect(String(extra.clientKey)).toMatch(/\[fingerprint:[0-9a-f]{12}\]/);
 
     infoSpy.mockRestore();
   });

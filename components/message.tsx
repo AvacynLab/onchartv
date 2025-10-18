@@ -38,12 +38,53 @@ import {
   type FinanceBacktestArtifact,
   type FinanceChartArtifact,
 } from "@/lib/finance/types";
+import {
+  financeMessageArtifactSchema,
+  unwrapFinanceArtifact,
+} from "@/lib/artifacts/types";
 import { logWarning } from "@/lib/logging";
 import { useChatComposer } from "./chat-composer-context";
 import { isFinanceFeatureEnabledClient } from "@/lib/feature-flags";
 
 const isFinanceArtifact = (value: unknown): value is FinanceArtifact => {
   return financeArtifactSchema.safeParse(value).success;
+};
+
+/**
+ * Attempt to coerce legacy `message.artifacts` entries into the unified
+ * `FinanceArtifact` shape. Persisted records now store a discriminated wrapper,
+ * yet historic messages – and some streaming fallbacks – may still expose the
+ * bare finance payload. Centralising the parsing logic ensures we recover both
+ * formats without crashing the UI while emitting structured warnings for
+ * payloads that drift away from the documented schema.
+ */
+const coercePersistedFinanceArtifact = (
+  candidate: unknown,
+  artifactIndex: number,
+  messageId: string
+): FinanceArtifact | null => {
+  const wrappedResult = financeMessageArtifactSchema.safeParse(candidate);
+
+  if (wrappedResult.success) {
+    return unwrapFinanceArtifact(wrappedResult.data);
+  }
+
+  const legacyResult = financeArtifactSchema.safeParse(candidate);
+
+  if (legacyResult.success) {
+    return legacyResult.data;
+  }
+
+  logWarning("chat:message", "[finance] ignored malformed persisted artifact", {
+    artifactIndex,
+    artifactType:
+      typeof (candidate as { type?: unknown })?.type === "string"
+        ? (candidate as { type: string }).type
+        : undefined,
+    messageId,
+  });
+
+  return null;
 };
 
 const PurePreviewMessage = ({
@@ -76,6 +117,39 @@ const PurePreviewMessage = ({
   useDataStream();
   const chatComposer = useChatComposer();
   const financeFeatureEnabled = isFinanceFeatureEnabledClient();
+
+  /**
+   * Preserve backwards compatibility with streaming sessions that still rely on
+   * the legacy `message.artifacts` property. Once the discriminated data parts
+   * land in the persisted history we prioritise those over the fallback array
+   * to avoid rendering duplicates, but we still coerce each entry through the
+   * runtime validator so malformed payloads never reach the UI.
+   */
+  const rawArtifacts = (message as unknown as { artifacts?: unknown }).artifacts;
+  const hasFinanceDataParts =
+    Array.isArray(message.parts) &&
+    message.parts.some(
+      (part) => typeof part.type === "string" && part.type.startsWith("data-finance")
+    );
+  const financeArtifactsFromMessage =
+    financeFeatureEnabled && Array.isArray(rawArtifacts)
+      ? rawArtifacts.reduce<FinanceArtifact[]>((accumulator, candidate, index) => {
+          const parsed = coercePersistedFinanceArtifact(candidate, index, message.id);
+
+          if (parsed) {
+            accumulator.push(parsed);
+          }
+
+          return accumulator;
+        }, [])
+      : [];
+
+  if (!financeFeatureEnabled && Array.isArray(rawArtifacts) && rawArtifacts.length > 0) {
+    logWarning("chat:message", "[finance] artifact hidden by feature flag", {
+      artifactCount: rawArtifacts.length,
+      messageId: message.id,
+    });
+  }
 
   // Tag the rendered message with its unique identifier so e2e helpers
   // can detect updates even when the assistant reuses identical copy.
@@ -144,6 +218,59 @@ const PurePreviewMessage = ({
                   isLoading={isLoading}
                   key={key}
                   reasoning={part.text}
+                />
+              );
+            }
+
+            if (type.startsWith("data-finance")) {
+              if (!financeFeatureEnabled) {
+                return null;
+              }
+
+              const payload = (part as { data?: unknown }).data;
+
+              if (!isFinanceArtifact(payload)) {
+                logWarning("chat:message", "[finance] ignored malformed persisted artifact", {
+                  artifactType:
+                    typeof (payload as { type?: unknown })?.type === "string"
+                      ? (payload as { type: string }).type
+                      : part.type,
+                });
+                return null;
+              }
+
+              let onExplainCandle: ArtifactRendererProps["onExplainCandle"];
+              let onRetest: ArtifactRendererProps["onRetest"];
+
+              if (chatComposer && payload.type === "finance.chart") {
+                const chartArtifact = payload as FinanceChartArtifact;
+                onExplainCandle = ({ timestamp }) => {
+                  const prompt = buildExplainCandlePrompt(chartArtifact, timestamp);
+                  chatComposer.prefillPrompt(prompt, { focus: true });
+                };
+              }
+
+              if (chatComposer && payload.type === "finance.backtest") {
+                onRetest = (artifact: FinanceBacktestArtifact) => {
+                  const command = buildBacktestSlashCommand(artifact);
+
+                  if (!command) {
+                    logWarning("chat:message", "[finance] unsupported backtest strategy for retest", {
+                      strategy: artifact.strategy,
+                    });
+                    return;
+                  }
+
+                  chatComposer.prefillPrompt(command, { focus: true });
+                };
+              }
+
+              return (
+                <ArtifactRenderer
+                  artifact={payload}
+                  key={key}
+                  onExplainCandle={onExplainCandle}
+                  onRetest={onRetest}
                 />
               );
             }
@@ -398,6 +525,49 @@ const PurePreviewMessage = ({
 
             return null;
           })}
+
+          {financeFeatureEnabled &&
+          !hasFinanceDataParts &&
+          financeArtifactsFromMessage.length > 0
+            ? financeArtifactsFromMessage.map((artifact, artifactIndex) => {
+                let onExplainCandle: ArtifactRendererProps["onExplainCandle"];
+                let onRetest: ArtifactRendererProps["onRetest"];
+
+                if (chatComposer && artifact.type === "finance.chart") {
+                  const chartArtifact = artifact as FinanceChartArtifact;
+                  onExplainCandle = ({ timestamp }) => {
+                    const prompt = buildExplainCandlePrompt(chartArtifact, timestamp);
+                    chatComposer.prefillPrompt(prompt, { focus: true });
+                  };
+                }
+
+                if (chatComposer && artifact.type === "finance.backtest") {
+                  onRetest = (candidate) => {
+                    const command = buildBacktestSlashCommand(candidate);
+
+                    if (!command) {
+                      logWarning(
+                        "chat:message",
+                        "[finance] unsupported backtest strategy for retest",
+                        { strategy: candidate.strategy }
+                      );
+                      return;
+                    }
+
+                    chatComposer.prefillPrompt(command, { focus: true });
+                  };
+                }
+
+                return (
+                  <ArtifactRenderer
+                    artifact={artifact}
+                    key={`${message.id}-legacy-artifact-${artifactIndex}`}
+                    onExplainCandle={onExplainCandle}
+                    onRetest={onRetest}
+                  />
+                );
+              })
+            : null}
 
           {!isReadonly && (
             <MessageActions

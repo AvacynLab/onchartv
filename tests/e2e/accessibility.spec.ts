@@ -37,6 +37,16 @@ test.describe("Finance artefacts accessibility", () => {
     const backtestArtifact = page.getByTestId("finance-backtest-artifact");
     await expect(backtestArtifact).toBeVisible();
 
+    const tradesTable = backtestArtifact.locator("table");
+    await expect(tradesTable).toBeVisible();
+    await expect(tradesTable).toHaveAttribute("aria-describedby", /trade-journal-caption/);
+    await expect(tradesTable.locator("thead th")).toHaveCount(6);
+    await expect(tradesTable.locator("tbody tr")).not.toHaveCount(0);
+    await expect(backtestArtifact.getByTestId("trade-pagination")).toHaveAttribute(
+      "aria-live",
+      "polite"
+    );
+
     const retestButton = backtestArtifact.getByTestId(
       "finance-backtest-retest-toggle"
     );
@@ -59,5 +69,12 @@ test.describe("Finance artefacts accessibility", () => {
     await expect(externalLink).toBeVisible();
     await externalLink.focus();
     await expect(externalLink).toBeFocused();
+
+    // Guard against regressions that would bring back the Next.js client-side exception overlay.
+    await expect(
+      page.locator(
+        "text=Application error: a client-side exception has occurred (see the browser console for more information)."
+      )
+    ).toHaveCount(0);
   });
 });

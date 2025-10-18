@@ -4,11 +4,13 @@ import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { describe, expect, it } from "vitest";
 
-const MIGRATION_PATH = join(
-  process.cwd(),
-  "lib/db/migrations/0008_resilient_finance_scaffold.sql"
+const MIGRATION_PATHS = [
+  join(process.cwd(), "lib/db/migrations/0008_resilient_finance_scaffold.sql"),
+  join(process.cwd(), "lib/db/migrations/0010_guard_backtest_windows.sql"),
+];
+const MIGRATION_SQL = MIGRATION_PATHS.map((path) => readFileSync(path, "utf8")).join(
+  "\n\n",
 );
-const MIGRATION_SQL = readFileSync(MIGRATION_PATH, "utf8");
 const BASELINE_SCHEMA_SQL = `
 CREATE TABLE "User" (
   id uuid PRIMARY KEY
@@ -61,6 +63,12 @@ describe("finance schema migration", () => {
 
       expect(columnResult.rows[0]?.is_nullable).toBe("NO");
       expect(columnResult.rows[0]?.column_default).toBe("'[]'::jsonb");
+
+      const indexResult = await db.query<{ is_unique: boolean }>(
+        `SELECT i.indisunique AS is_unique FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname = 'BacktestRun_asset_timeframe_period_unique';`
+      );
+
+      expect(indexResult.rows[0]?.is_unique).toBe(true);
     } finally {
       await db.close();
     }

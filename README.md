@@ -68,6 +68,16 @@ Ajoutez `FEATURE_USE_REAL_DATA`, `MARKET_DATA_API_BASE_URL`, `MARKET_DATA_API_KE
 
 > Note: You should not commit your `.env` file or it will expose secrets that will allow others to control access to your various AI and authentication provider accounts.
 
+### Authentication model: regular-only
+
+Chat SDK fonctionne désormais exclusivement avec des sessions **regular**. Les comptes invités ont été retirés pour supprimer les divergences entre l’API et l’UI.
+
+- `app/(chat)/page.tsx` force une redirection immédiate vers `/login` si la session est absente ou si `session.user.type !== "regular"`.
+- Les routes protégées comme [`app/(chat)/api/chat/route.ts`](app/(chat)/api/chat/route.ts) renvoient `403 { error: { code: "forbidden:chat", message: "Regular session required" } }` lorsqu’un compte non regular tente d’émettre une requête.
+- Le bootstrap Playwright (`tests/setup/auth.setup.ts`) effectue un enregistrement + connexion regular puis enregistre l’`storageState` sous `tests/.auth`. Toutes les suites E2E réutilisent cet état pour rester déterministes.
+
+Si vous changez le schéma d’authentification, pensez à réactualiser ces points ainsi que la documentation associée.
+
 1. Install Vercel CLI: `npm i -g vercel`
 2. Link local instance with Vercel and GitHub accounts (creates `.vercel` directory): `vercel link`
 3. Download your environment variables: `vercel env pull`
