@@ -46,11 +46,14 @@ const moduleHasSpy = Boolean(
     "mock" in loggingModule.logWarning
 );
 
-const logging = cachedHasSpy && !moduleHasSpy
-  ? cachedLogging
+// Ensure TypeScript recognises that we always return a concrete logging module
+// instance even when juggling cached spy targets, so downstream call sites do
+// not need to defensively handle `undefined`.
+const logging: typeof loggingModule = cachedHasSpy && !moduleHasSpy
+  ? cachedLogging!
   : moduleHasSpy && !cachedHasSpy
     ? loggingModule
-    : cachedLogging ?? loggingModule;
+    : (cachedLogging ?? loggingModule);
 globalWithLogging.__ONCHARTV_LOGGING_MODULE__ = logging;
 import type { AppUsage } from "../usage";
 import { generateUUID } from "../utils";
