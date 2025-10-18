@@ -1950,7 +1950,7 @@ export class ChatPage {
           return;
         }
 
-        if (latestText && latestText !== baseline.latestMessageText) {
+        if (latestText !== baseline.latestMessageText) {
           return;
         }
 
