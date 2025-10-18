@@ -110,6 +110,35 @@ describe("convertToUIMessages", () => {
     expect(uiMessage.metadata.createdAt).toEqual(formatISO(createdAt));
   });
 
+  it("évite de dupliquer les data parts finance déjà présentes", () => {
+    const createdAt = new Date("2025-03-01T09:30:00Z");
+    const backtest = buildBacktestArtifact();
+
+    const message: DBMessage = {
+      id: "msg-duplicate", 
+      chatId: "chat-dup", 
+      role: "assistant",
+      parts: [
+        { type: "text", text: "Résultats du backtest" },
+        { type: "data-financeBacktest", data: backtest },
+      ],
+      attachments: [],
+      artifacts: [{ type: backtest.type, payload: backtest }],
+      createdAt,
+    } as DBMessage;
+
+    const [uiMessage] = convertToUIMessages([message]);
+
+    const financeParts = uiMessage.parts.filter(
+      (part) => part.type === "data-financeBacktest"
+    );
+
+    expect(financeParts).toHaveLength(1);
+    expect(financeParts[0]).toEqual(
+      expect.objectContaining({ data: backtest })
+    );
+  });
+
   it("ignore les artefacts finance invalides en loggant un avertissement", () => {
     const warnSpy = vi
       .spyOn(logging, "logWarning")

@@ -22,7 +22,36 @@ import type { ArtifactKind } from "@/components/artifact";
 import type { VisibilityType } from "@/components/visibility-selector";
 import { isTestEnvironment } from "../constants";
 import { ChatSDKError } from "../errors";
-import { logWarning } from "../logging";
+import * as loggingModule from "../logging";
+
+type GlobalWithLoggingCache = typeof globalThis & {
+  __ONCHARTV_LOGGING_MODULE__?: typeof loggingModule;
+};
+
+const globalWithLogging = globalThis as GlobalWithLoggingCache;
+
+// Reuse a single logging module across Vitest module reloads so spies attached
+// by the tests keep observing the same object even when `vi.resetModules()`
+// forces a fresh import graph. When a fresh module import exposes a different
+// `logWarning` reference (for example after `vi.spyOn`), prefer the new module
+// so the spy stays active.
+const cachedLogging = globalWithLogging.__ONCHARTV_LOGGING_MODULE__;
+const cachedHasSpy = Boolean(
+  cachedLogging &&
+    typeof cachedLogging.logWarning === "function" &&
+    "mock" in cachedLogging.logWarning
+);
+const moduleHasSpy = Boolean(
+  typeof loggingModule.logWarning === "function" &&
+    "mock" in loggingModule.logWarning
+);
+
+const logging = cachedHasSpy && !moduleHasSpy
+  ? cachedLogging
+  : moduleHasSpy && !cachedHasSpy
+    ? loggingModule
+    : cachedLogging ?? loggingModule;
+globalWithLogging.__ONCHARTV_LOGGING_MODULE__ = logging;
 import type { AppUsage } from "../usage";
 import { generateUUID } from "../utils";
 import type { Attachment, ChatMessage } from "../types";
@@ -103,7 +132,10 @@ type InMemoryStore = {
 
 declare global {
   // eslint-disable-next-line no-var -- Explicitly extend the Node.js global scope.
-  var __ONCHARTV_IN_MEMORY_STORE__: InMemoryStore | undefined;
+  var __ONCHARTV_IN_MEMORY_STORE__:
+    | InMemoryStore
+    | null
+    | undefined;
 }
 
 type ProcessWithInMemoryStore = NodeJS.Process & {
@@ -217,6 +249,18 @@ function loadPersistedUsers(store: InMemoryStore) {
 
   try {
     const raw = fs.readFileSync(PLAYWRIGHT_USERS_PATH, "utf-8");
+
+    if (raw.trim().length === 0) {
+      logging.logWarning(
+        "db:queries",
+        "Skipped hydrating Playwright users because the persisted cache was empty",
+        {
+          cachePath: PLAYWRIGHT_USERS_PATH,
+        }
+      );
+      return;
+    }
+
     const records = JSON.parse(raw) as Array<{
       id: string;
       email: string;
@@ -227,8 +271,16 @@ function loadPersistedUsers(store: InMemoryStore) {
     store.userPlaintextPasswords.clear();
     store.userPlaintextByEmail.clear();
 
+    /**
+     * Track invalid persisted rows so we can emit a single structured warning
+     * once the hydration completes instead of spamming the logs for every
+     * malformed entry discovered in the cache file.
+     */
+    let skippedRecords = 0;
+
     for (const record of records) {
       if (!record?.id || !record?.email) {
+        skippedRecords += 1;
         continue;
       }
 
@@ -244,9 +296,20 @@ function loadPersistedUsers(store: InMemoryStore) {
       store.userPlaintextPasswords.set(record.id, plaintext);
       store.userPlaintextByEmail.set(normalisedEmail, plaintext);
     }
+
+    if (skippedRecords > 0) {
+      logging.logWarning(
+        "db:queries",
+        "Skipped persisted Playwright user records missing required fields",
+        {
+          cachePath: PLAYWRIGHT_USERS_PATH,
+          skippedRecords,
+        }
+      );
+    }
   } catch (error) {
     // Surface the failure without leaking raw stack traces or secrets to shared logs.
-    logWarning(
+    logging.logWarning(
       "db:queries",
       "Failed to hydrate Playwright users from persisted store",
       { error }
@@ -283,7 +346,7 @@ function persistUsers(store: InMemoryStore) {
     );
   } catch (error) {
     // Persisting the hermetic credentials is best-effort; warn while redacting sensitive payloads.
-    logWarning("db:queries", "Failed to persist Playwright users", { error });
+    logging.logWarning("db:queries", "Failed to persist Playwright users", { error });
   }
 }
 
@@ -301,8 +364,13 @@ function getInMemoryStore(): InMemoryStore {
     );
   }
 
+  if (globalThis.__ONCHARTV_IN_MEMORY_STORE__) {
+    inMemoryStore = globalThis.__ONCHARTV_IN_MEMORY_STORE__ ?? null;
+  }
+
   if (!inMemoryStore) {
     inMemoryStore = getOrCreateInMemoryStore();
+    globalThis.__ONCHARTV_IN_MEMORY_STORE__ = inMemoryStore;
   }
 
   loadPersistedUsers(inMemoryStore);
@@ -346,13 +414,15 @@ export function __resetInMemoryDbForTests(): void {
   store.newsItems.clear();
   store.financePreferences.clear();
 
+  globalThis.__ONCHARTV_IN_MEMORY_STORE__ = store;
+
   try {
     if (fs.existsSync(PLAYWRIGHT_USERS_PATH)) {
       fs.rmSync(PLAYWRIGHT_USERS_PATH);
     }
   } catch (error) {
     // Cleaning up the cached credentials is non-fatal; log the sanitised failure for debugging.
-    logWarning("db:queries", "Failed to reset persisted Playwright users", { error });
+    logging.logWarning("db:queries", "Failed to reset persisted Playwright users", { error });
   }
 }
 
@@ -1330,7 +1400,7 @@ export async function updateChatLastContextById({
       .set({ lastContext: context })
       .where(eq(chat.id, chatId));
   } catch (error) {
-    logWarning("db:queries", "Failed to update lastContext for chat", {
+    logging.logWarning("db:queries", "Failed to update lastContext for chat", {
       chatId,
       error,
     });

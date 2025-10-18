@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { randomBytes } from "node:crypto";
 import {
   expect,
   test as setup,
@@ -11,9 +10,17 @@ import {
 } from "@playwright/test";
 
 import { hasAuthSessionCookie } from "../utils/auth-session";
-import { persistSessionCookies } from "../utils/session-persistence";
+import {
+  clearPersistedSessionCookies,
+  persistSessionCookies,
+} from "../utils/session-persistence";
 import { waitForServerReady } from "../utils/server-health";
 import { warmupNextRoutes } from "../utils/server-warmup";
+import {
+  AUTH_DIR,
+  CREDENTIALS_PATH,
+  loadCredentials,
+} from "../utils/load-credentials";
 import {
   loginWithCredentialsCallback,
   type ResponseLike,
@@ -21,35 +28,7 @@ import {
 import { isChatPathname } from "../utils/chat-redirect";
 import { withStepTiming } from "../utils/timing";
 
-const AUTH_DIR = path.resolve(__dirname, "../.auth");
 const STATE_PATH = path.join(AUTH_DIR, "state.json");
-const CREDENTIALS_PATH = path.join(AUTH_DIR, "user.json");
-
-/**
- * Load persisted Playwright credentials or generate a deterministic fallback.
- *
- * Storing the generated credentials on disk allows subsequent setup runs to
- * reuse the same account and, together with the storage-state reuse logic,
- * avoids hitting the registration flow unless the underlying session expired.
- */
-function loadCredentials() {
-  if (fs.existsSync(CREDENTIALS_PATH)) {
-    const raw = fs.readFileSync(CREDENTIALS_PATH, "utf-8");
-    const parsed = JSON.parse(raw) as { email: string; password: string };
-    if (parsed.email && parsed.password) {
-      return parsed;
-    }
-  }
-
-  const email = process.env.E2E_USER_EMAIL ?? `e2e-${Date.now()}@playwright.com`;
-  const password =
-    process.env.E2E_USER_PASSWORD ?? `E2e-${randomBytes(6).toString("hex")}!`;
-
-  const creds = { email, password };
-  fs.mkdirSync(AUTH_DIR, { recursive: true });
-  fs.writeFileSync(CREDENTIALS_PATH, JSON.stringify(creds, null, 2));
-  return creds;
-}
 
 /**
  * Ensure we hold a valid credentials session by visiting the login form and
@@ -337,7 +316,23 @@ setup("authenticate", async ({ browser }) => {
     return;
   }
 
-  const credentials = loadCredentials();
+  let regeneratedCredentials = false;
+  const credentials = loadCredentials({
+    onRegenerated: ({ reason }) => {
+      regeneratedCredentials = true;
+
+      /**
+       * When the automation user changes we clear the cached storage state and
+       * session cookie snapshot to avoid replaying a session tied to the
+       * previous identity. Skipping the cleanup kept Playwright retries stuck on
+       * 403 responses because the regenerated credentials no longer matched the
+       * persisted cookie jar.
+       */
+      fs.rmSync(STATE_PATH, { force: true });
+      clearPersistedSessionCookies();
+      console.warn("Playwright regenerated automation credentials", { reason });
+    },
+  });
   await withStepTiming({
     label: "ensure automation account exists",
     thresholdMs: 10_000,
@@ -375,5 +370,24 @@ setup("authenticate", async ({ browser }) => {
     expect(fs.existsSync(STATE_PATH)).toBe(true);
   } finally {
     await context.close();
+  }
+
+  if (regeneratedCredentials) {
+    /**
+     * Guard-rail: ensure the freshly generated credentials were persisted by
+     * reading them back. Doing so keeps the TODO from regressing silently should
+     * the credential helper stop writing to disk in the future.
+     */
+    const latestRaw = fs.readFileSync(CREDENTIALS_PATH, "utf-8");
+    try {
+      const snapshot = JSON.parse(latestRaw) as { email?: string; password?: string };
+      expect(snapshot.email).toBe(credentials.email);
+      expect(snapshot.password).toBe(credentials.password);
+    } catch (error) {
+      throw new Error(
+        "The regenerated Playwright credentials could not be read back from disk",
+        error instanceof Error ? { cause: error } : undefined
+      );
+    }
   }
 });

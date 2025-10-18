@@ -75,9 +75,19 @@ export default function Page() {
     }
   }, [state.redirectTo, state.status, router, updateSession]);
 
-  const handleSubmit = (formData: FormData) => {
-    setEmail(formData.get("email") as string);
-    formAction(formData);
+  const handleSubmit = async (formData: FormData) => {
+    const submittedEmail = formData.get("email");
+    if (typeof submittedEmail === "string") {
+      setEmail(submittedEmail);
+    }
+
+    /**
+     * Forward the submission to the server action and surface the resulting
+     * promise so React can keep the pending state in sync with the
+     * `<SubmitButton />` spinner. Returning the awaited call also guarantees the
+     * success effect sees the updated state before we attempt to redirect.
+     */
+    await formAction(formData);
   };
 
   return (

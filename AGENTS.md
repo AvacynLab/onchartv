@@ -12,10 +12,29 @@ Voici ta **liste de tâches exhaustive**, agent. Elle est calée sur la **derni�
 
 ---
 
+## Plan de correction (2025-10-30)
+
+1. **Finance – artefacts backtest**
+   * [x] Vérifier que la requête backtest renvoie bien un unique artefact `finance-backtest-artifact`.
+   * [x] Corriger les doublons/absences en garantissant une clé stable et un rendu conditionnel explicite.
+   * [x] Couvrir le scénario par un test ciblé (composant ou route) validant l’unicité et la disponibilité de la table des trades.
+2. **Chat – réédition de message**
+   * [x] Inspecter le flux `editMessage` pour s’assurer que la réponse assistant est propagée après modification.
+   * [x] Sécuriser la logique de streaming côté client et côté test helper (`ChatPage.waitForChatApiResponse`).
+   * [x] Ajouter une couverture test (unit ou integration) pour éviter une régression silencieuse.
+3. **Session – enregistrement utilisateur**
+   * [x] Diagnostiquer pourquoi la création d’un compte ne redirige plus vers `/chat`.
+   * [x] Harmoniser la réponse du handler `register` et l’attente Playwright (toast + redirection).
+   * [x] Vérifier via test E2E ciblé ou test API que la redirection est assurée.
+
+---
+
+---
+
 ## 0) Préparation & nettoyage (local)
 
 * [ ] Supprime les résidus d’anciennes runs : `.next/`, `node_modules/`, `playwright-report/`, `playwright-results/`.
-* [ ] Réinstalle et rebâtis : `pnpm install` puis `pnpm build`.
+* [x] Réinstalle et rebâtis : `pnpm install` puis `pnpm build`.
   **DoD** : build local OK, pas d’erreurs TypeScript.
 
 ---
@@ -248,11 +267,41 @@ Pour **chaque** route :
 ## Validation finale
 
 * [ ] Local : `/chat` → “Montre BTCUSD 1D avec SMA(50/200)” → chart interactif **sans overlay**, détails au clic OK.
-* [ ] `pnpm test` (unit) → **verts**.
+* [x] `pnpm test` (unit) → **verts**.
 * [ ] `pnpm e2e` → **verts** (finance + accessibilité); traces **sans** “Application error: a client-side exception…”.
 * [ ] CI → **vert**; rapports et artefacts disponibles.
 
 ---
+
+## Points en suspens
+
+1. ✅ `pnpm build` relancé (log > `/tmp/build.log`) et succès confirmé via `tail -n 50 /tmp/build.log` le 2025-11-03.
+2. Les tests E2E restent à exécuter (`pnpm e2e`). Le setup nécessite que Playwright soit installé (fait via `pnpm exec playwright install --with-deps chromium`).
+3. Vérifier que les autres sections du plan (auth flow, finance E2E) sont toujours à l’état attendu.
+4. La suite complète `tests/unit/pages/chat-page.spec.ts` reste très lourde (OOM > 200s). Seule l’assertion ciblée "reconnaît le retour d'un message assistant recréé après une édition" a été rejouée pour valider la nouvelle couverture.
+
+## Tests complémentaires recommandés
+
+- [x] Ajouter un scénario couvrant un cache JSON incomplet dans `tests/unit/db/queries.spec.ts` (manquant jusqu’ici).
+- [x] Intégrer un test d’intégration Playwright qui corrompt `tests/.auth/user.json` pour valider la résilience de `loadCredentials()` (voir `tests/e2e/setup/credentials-resilience.test.ts`).
+
+## Informations utiles
+
+- Les nouvelles dépendances (`@tanstack/react-query`, `lightweight-charts`, etc.) ont été installées via `pnpm install`; ne pas réinitialiser `node_modules/`.
+- Tests unitaires déjà exécutés : `pnpm exec vitest run tests/unit/db/queries.spec.ts tests/unit/utils/load-credentials.spec.ts` et l’assertion ciblée de `tests/unit/pages/chat-page.spec.ts`.
+- Naviguer dans `tests/utils/load-credentials.ts` pour toute modification future côté setup Playwright.
+- `loadCredentials` accepte un callback `onRegenerated` pour nettoyer `state.json`/cookies lorsque le cache change : voir `tests/setup/auth.setup.ts`.
+
+## TODOs ciblés
+
+- [x] `tests/unit/db/queries.spec.ts`: vérifier si d’autres cas d’erreur (JSON mal formé non vide) doivent être couverts (lignes ~120-140).
+- [x] `tests/setup/auth.setup.ts`: confirmer que l’appel à `loadCredentials()` est correctement géré lors des reruns (aucune régression signalée, mais garder un œil sur les logs Playwright).
+- [x] Relancer `pnpm build` et archiver les 20 dernières lignes de sortie pour le compte-rendu CI (fait le 2025-11-03).
+
+## Problèmes / quirks connus
+
+- Le reset de la base mémoire (`__resetInMemoryDbForTests`) journalise un warning « Failed to reset persisted Playwright users » quand le fichier JSON n’existe pas : c’est attendu avec l’approche actuelle.
+- Les commandes Next.js génèrent énormément d’output ; utiliser une redirection vers fichier pour éviter les limites de taille dans ce sandbox.
 
 Si tu veux un lot de **patchs diff prêts à coller** pour les fichiers clés (`app/(chat)/error.tsx`, `app/(chat)/api/chat/route.ts`, `lib/ratelimit.ts`, `components/finance/finance-chart-artifact.tsx`, `tests/setup/auth.setup.ts`, et les routes finance), je te les fournis dans la foulée.
 
@@ -274,3 +323,10 @@ Si tu veux un lot de **patchs diff prêts à coller** pour les fichiers clés (`
 - **2025-10-28** — Ajout d’un override testable pour masquer les artefacts finance côté Messages, journalisation explicite des artefacts filtrés, et correction du handler NextAuth credentials pour bannir l’usage de `any`; couverture Vitest mise à jour (`messages.spec.tsx`).
 - **2025-10-29** — Introduction d’un schéma discriminant pour les artefacts persistés (`lib/artifacts/types.ts`), branchement de `convertToUIMessages` sur la nouvelle union, exécution de `pnpm install --frozen-lockfile`, et ajout de tests Vitest couvrant le wrapper (`artifacts.types.spec.ts`, `messages.spec.tsx`, `ai/messages.spec.ts`).
 - **2025-10-30** — Harmonisation des journaux : ajout de `logInfo`, conservation des empreintes anonymisées dans les logs finance, mise à jour du seed Postgres pour émettre un journal structuré, et rafraîchissement des tests Vitest (`logging`, `finance.api-utils`, `db/seed`).
+- **2025-10-31** — Déduplication des artefacts finance côté `convertToUIMessages` et `components/messages`, ajout d’un hash déterministe pour éviter les doublons, écriture des tests ciblés (`tests/unit/ai/messages.spec.ts`, `tests/unit/components/messages.spec.tsx`) et exécution de `pnpm exec vitest run …` pour valider le comportement.
+- **2025-11-01** — Élimination des doublons de parts finance côté `components/messages`, ajout d’un test RTL couvrant le scénario de streaming et renforcement du helper Playwright (`isGenerationComplete`) pour attendre le retour d’un message assistant avant les assertions, puis exécution de `pnpm exec vitest run tests/unit/components/messages.spec.tsx`.
+- **2025-11-02** — Durcissement de l’hydratation Playwright : journal structuré pour les enregistrements incomplets, tests Vitest couvrant les caches vides/incomplets (`tests/unit/db/queries.spec.ts`, `tests/unit/utils/load-credentials.spec.ts`), et ajout d’une couverture ciblée de `ChatPage.waitForUiStreamingFallback` validée via `pnpm exec vitest run -t "reconnaît le retour" tests/unit/pages/chat-page.spec.ts`.
+- **2025-11-03** — Confirmation du correctif de déduplication finance (`components/messages.tsx`, `lib/utils.ts`), ajout du test jsdom d’inscription (`tests/unit/components/auth/register-page.spec.tsx`), exécution de `pnpm exec vitest run tests/unit/components/messages.spec.tsx tests/unit/components/auth/register-page.spec.tsx --reporter=basic`, puis relance réussie de `pnpm build` avec capture des 50 dernières lignes.
+- **2025-11-04** — Ajout d’un test Playwright résilience (`tests/e2e/setup/credentials-resilience.test.ts`) qui corrompt `tests/.auth/user.json`, vérifie la régénération via `loadCredentials()`, purge le snapshot `state.json`, et restaure le cache initial.
+- **2025-11-05** — Durcissement de `tests/setup/auth.setup.ts` : ajout du callback `onRegenerated` dans `loadCredentials`, purge automatique de `state.json` et du cookie Playwright lors d’un changement d’utilisateur, lecture de contrôle du cache et extension des tests unitaires (`tests/unit/utils/load-credentials.spec.ts`).
+- **2025-11-06** — Stabilisation du pont vers `lib/logging` : cache global tenant compte des `vi.spyOn`, ajustements de `loadPersistedUsers` pour réémettre les avertissements avec l’instance espionnée, et passage complet de `pnpm test` confirmant les cas JSON corrompus/incomplets (`tests/unit/db/queries*.spec.ts`).
