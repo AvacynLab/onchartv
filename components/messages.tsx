@@ -5,6 +5,7 @@ import React, { Fragment, memo, useEffect, useRef } from "react";
 import { useMessages } from "@/hooks/use-messages";
 import type { Vote } from "@/lib/db/schema";
 import type { ChatMessage } from "@/lib/types";
+import { stableStringifyForHash } from "@/lib/utils";
 import { useDataStream } from "./data-stream-provider";
 import { Conversation, ConversationContent } from "./elements/conversation";
 import { Greeting } from "./greeting";
@@ -293,6 +294,8 @@ function PureMessages({
             }
 
             const invalidArtifacts: InvalidArtifactLog[] = [];
+            const seenArtifactKeys = new Set<string>();
+
             const sanitizedArtifacts: FinanceArtifact[] = financeFeatureEnabled
               ? artifactCandidates.reduce<FinanceArtifact[]>((acc, candidate, artifactIndex) => {
                   const parsed = parseFinanceArtifact(
@@ -303,10 +306,18 @@ function PureMessages({
                     candidate.typeHint
                   );
 
-                  if (parsed) {
-                    acc.push(parsed);
+                  if (!parsed) {
+                    return acc;
                   }
 
+                  const artifactFingerprint = `${parsed.type}:${stableStringifyForHash(parsed)}`;
+
+                  if (seenArtifactKeys.has(artifactFingerprint)) {
+                    return acc;
+                  }
+
+                  seenArtifactKeys.add(artifactFingerprint);
+                  acc.push(parsed);
                   return acc;
                 }, [])
               : [];
