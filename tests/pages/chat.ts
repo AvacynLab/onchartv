@@ -471,10 +471,6 @@ export class ChatPage {
              */
             return true;
           }
-
-          if (loadingCount === 0 && !stopVisible) {
-            return true;
-          }
         }
 
         return false;
@@ -862,9 +858,16 @@ export class ChatPage {
   }
 
   async getRecentAssistantMessage() {
-    const messageElements = await this.page
-      .getByTestId("message-assistant")
-      .all();
+    const assistantLocator = this.page.getByTestId("message-assistant");
+
+    /**
+     * Inline edit regenerations temporarily clear the assistant bubble before
+     * the new response attaches.  Wait for the element collection to repopulate
+     * so downstream assertions never observe an empty timeline.
+     */
+    await expect(assistantLocator).not.toHaveCount(0, { timeout: 60_000 });
+
+    const messageElements = await assistantLocator.all();
     const lastMessageElement = messageElements.at(-1);
 
     if (!lastMessageElement) {
@@ -1865,6 +1868,16 @@ export class ChatPage {
       }
 
       if (signalCount > baselineChatSignalCount) {
+        return;
+      }
+
+      if (assistantCount < baseline.count) {
+        /**
+         * Inline edit submissions briefly clear the trailing assistant reply
+         * before reattaching a fresh bubble.  Detect the drop immediately so
+         * the fallback acknowledges that streaming kicked off instead of
+         * idling until the replacement content finishes rendering.
+         */
         return;
       }
 
