@@ -29,7 +29,39 @@ Voici ta **liste de tâches exhaustive**, agent. Elle est calée sur la **derni�
 
 ---
 
+## Plan de correction complémentaire (2025-11-08)
+
+Objectif : éliminer les trois échecs Playwright toujours présents dans les logs CI du 2025-11-08 (`finance artefacts accessibility`, `chat edit/resubmit`, `register new account`). Chaque lot précise le diagnostic attendu, les investigations à mener et le livrable de validation.
+
+1. **Finance — accessibilité des artefacts backtest**
+   * [ ] Reproduire localement l’absence de `data-testid="finance-backtest-artifact"` dans le flux `/finance/backtest` (journal côté serveur + capture DOM dans Playwright).
+   * [ ] Inspecter le pipeline de rendu (`lib/ai/messages`, `components/messages`, artefacts finance) pour identifier les conditions qui filtrent l’artefact (hash déduplication, visibilité conditionnelle, gating par feature flag).
+   * [ ] Corriger la condition fautive (ou l’ordre des opérations) pour garantir qu’au moins un artefact backtest est monté et focusable, puis ajouter un test (RTL ou unit) validant l’accessibilité (présence du tableau des trades).
+   * [ ] Vérifier via Playwright ciblé (`tests/e2e/accessibility.spec.ts`) que l’artefact est visible et focusable.
+
+2. **Chat — réédition et redémarrage du streaming**
+   * [ ] Instrumenter `ChatPage.waitForUiStreamingFallback` et les composants front (`components/chat.tsx`, `components/messages.tsx`) afin de comprendre pourquoi le compteur de messages assistants n’évolue plus après une édition (logs temporaires côté Playwright + console côté client).
+   * [ ] Ajuster la logique de polling (prise en compte des transitions pending/streaming, nouveaux events SSE) pour lever le timeout et garantir qu’une nouvelle réponse assistant est affichée.
+   * [ ] Couvrir le scénario par un test automatisé (Vitest jsdom ou Playwright ciblé) qui édite un message et confirme l’apparition du nouveau contenu.
+   * [ ] Rejouer `tests/e2e/chat.test.ts:83` pour valider la correction.
+
+3. **Session — inscription utilisateur et redirection**
+   * [ ] Utiliser Playwright (ou le mode debug) pour observer la requête `register` et les redirections afin de comprendre pourquoi la zone de composition n’est plus montée (vérifier également la création du chat initial côté API).
+   * [ ] Harmoniser la promesse serveur (action/register + navigation) : garantir que la création du compte déclenche la génération du premier chat et que la page `/chat/:id` est affichée avant les assertions Playwright.
+   * [ ] Étendre `tests/unit/components/auth/register-page.spec.tsx` ou ajouter un test d’intégration pour capturer le flux « succès ».
+   * [ ] Valider via `tests/e2e/session.test.ts:56` que la redirection affiche bien le composer (`getByPlaceholder("Send a message...")`).
+
+4. **Validation finale**
+   * [ ] Exécuter `pnpm exec playwright test tests/e2e/accessibility.spec.ts tests/e2e/chat.test.ts:83 tests/e2e/session.test.ts:56` (ou les blocs équivalents) jusqu’à obtenir un résultat vert.
+   * [ ] Relancer `pnpm e2e` complet et archiver les principales statistiques (`[#timing]`, captures en cas d’échec) pour le journal CI.
+
+**Notes**
+
+- Les captures Playwright existantes (voir `playwright-results/...`) restent utiles pour comparer l’avant/après.
+- Prioriser la reproductibilité locale avant de modifier les composants : ajouter des logs `console.debug` temporaires si nécessaire, mais les supprimer avant le commit final.
+
 ---
+
 
 ## 0) Préparation & nettoyage (local)
 
@@ -331,3 +363,4 @@ Si tu veux un lot de **patchs diff prêts à coller** pour les fichiers clés (`
 - **2025-11-05** — Durcissement de `tests/setup/auth.setup.ts` : ajout du callback `onRegenerated` dans `loadCredentials`, purge automatique de `state.json` et du cookie Playwright lors d’un changement d’utilisateur, lecture de contrôle du cache et extension des tests unitaires (`tests/unit/utils/load-credentials.spec.ts`).
 - **2025-11-06** — Stabilisation du pont vers `lib/logging` : cache global tenant compte des `vi.spyOn`, ajustements de `loadPersistedUsers` pour réémettre les avertissements avec l’instance espionnée, et passage complet de `pnpm test` confirmant les cas JSON corrompus/incomplets (`tests/unit/db/queries*.spec.ts`).
 - **2025-11-07** — Restauration automatique du snapshot `state.json` après le test Playwright de résilience des identifiants afin que les suites routes/E2E retrouvent la session authentifiée, et assouplissement du détecteur de streaming (`tests/pages/chat.ts`) pour considérer les vidages de bulles assistants comme un signal valide. Vérifié via `pnpm exec vitest run tests/unit/utils/load-credentials.spec.ts --reporter=basic`.
+- **2025-11-08** — Analyse des échecs Playwright persistants (finance backtest a11y, chat edit/resubmit, register redirect) et élaboration d’un plan d’attaque détaillé avec étapes d’investigation, correctifs ciblés et validation finale.
