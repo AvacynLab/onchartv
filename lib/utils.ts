@@ -357,33 +357,77 @@ export function convertToUIMessages(messages: DBMessage[]): ChatMessage[] {
       .map(artifactToDataPart)
       .filter((part): part is UIMessagePart<CustomUIDataTypes, ChatTools> => part !== null);
 
-    const seenFinancePartKeys = new Set<string>();
+    type FinancePartRegistryEntry = {
+      isTransient: boolean;
+      replace: (
+        nextPart: UIMessagePart<CustomUIDataTypes, ChatTools>,
+        nextIsTransient: boolean,
+      ) => void;
+    };
+
+    /**
+     * Keep track of the finance payloads already surfaced so that repeated
+     * streaming updates do not render duplicate artefacts. The registry also
+     * remembers whether the retained part was emitted as a transient placeholder
+     * so a later non-transient payload can replace it in-place.
+     */
+    const financePartRegistry = new Map<string, FinancePartRegistryEntry>();
 
     const registerFinancePart = (
-      part: UIMessagePart<CustomUIDataTypes, ChatTools>
-    ): boolean => {
+      collection: UIMessagePart<CustomUIDataTypes, ChatTools>[],
+      part: UIMessagePart<CustomUIDataTypes, ChatTools>,
+    ) => {
       if (!part || typeof part !== 'object') {
-        return true;
+        collection.push(part);
+        return;
       }
 
       const partType = typeof part.type === 'string' ? part.type : null;
+
       if (!partType || !partType.startsWith(FINANCE_DATA_PART_PREFIX)) {
-        return true;
+        collection.push(part);
+        return;
       }
 
       const payload = (part as { data?: unknown }).data;
       const fingerprint = `${partType}:${stableStringifyForHash(payload)}`;
+      const transientFlag = (part as { transient?: unknown }).transient;
+      const isTransient = typeof transientFlag === 'boolean' ? transientFlag : false;
 
-      if (seenFinancePartKeys.has(fingerprint)) {
-        return false;
+      const existingEntry = financePartRegistry.get(fingerprint);
+
+      if (!existingEntry) {
+        const index = collection.push(part) - 1;
+
+        const entry: FinancePartRegistryEntry = {
+          isTransient,
+          replace(nextPart, nextIsTransient) {
+            collection[index] = nextPart;
+            entry.isTransient = nextIsTransient;
+          },
+        };
+
+        financePartRegistry.set(fingerprint, entry);
+        return;
       }
 
-      seenFinancePartKeys.add(fingerprint);
-      return true;
+      if (existingEntry.isTransient && !isTransient) {
+        existingEntry.replace(part, isTransient);
+        return;
+      }
+
+      if (!existingEntry.isTransient && isTransient) {
+        return;
+      }
+
+      // Duplicate payloads with the same persistence state are ignored.
     };
 
-    const dedupedBaseParts = baseParts.filter(registerFinancePart);
-    const dedupedArtifactParts = artifactParts.filter(registerFinancePart);
+    const dedupedBaseParts: UIMessagePart<CustomUIDataTypes, ChatTools>[] = [];
+    const dedupedArtifactParts: UIMessagePart<CustomUIDataTypes, ChatTools>[] = [];
+
+    baseParts.forEach((part) => registerFinancePart(dedupedBaseParts, part));
+    artifactParts.forEach((part) => registerFinancePart(dedupedArtifactParts, part));
 
     return {
       id: message.id,

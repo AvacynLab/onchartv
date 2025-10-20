@@ -35,11 +35,11 @@ Objectif : éliminer les trois échecs Playwright toujours présents dans les lo
 
 1. **Finance — accessibilité des artefacts backtest**
    * [ ] Rejouer localement `tests/e2e/accessibility.spec.ts` en mode `DEBUG=playwright` et capturer le DOM juste après `GET /api/finance/backtest` pour confirmer l’absence de `<div data-testid="finance-backtest-artifact">` (utiliser `page.screenshot` + `console.debug` côté serveur dans `lib/ai/messages/convertToUIMessages`).
-   * [ ] Cartographier le pipeline de rendu :
-     - [ ] Inspecter `lib/ai/messages.ts` et `convertToUIMessages` pour l’état des `data-finance-backtest` parts après la déduplication par hash.
-     - [ ] Vérifier dans `components/messages.tsx` (sections `financePartFingerprints` et `sanitizedArtifacts`) quelles branches peuvent vider `artifactCandidates` lorsque plusieurs payloads identiques sont reçus.
-     - [ ] Examiner `components/finance/backtest-report-artifact.tsx` afin de confirmer les conditions de rendu/aria (`hidden`, `aria-hidden`, `tabIndex`).
-   * [ ] Corriger la condition fautive (ordre de filtre, hash incorrect ou gating `financeFeatureEnabled`) de sorte qu’au moins un artefact backtest persiste et possède un `table` focusable ; ajouter un test React Testing Library qui monte `Messages` avec deux parts backtest et vérifie `getByTestId("finance-backtest-artifact")` + focus sur le tableau.
+  * [x] Cartographier le pipeline de rendu :
+      - [x] Inspecter `lib/ai/messages.ts` et `convertToUIMessages` pour l’état des `data-finance-backtest` parts après la déduplication par hash.
+      - [x] Vérifier dans `components/messages.tsx` (sections `financePartFingerprints` et `sanitizedArtifacts`) quelles branches peuvent vider `artifactCandidates` lorsque plusieurs payloads identiques sont reçus.
+      - [x] Examiner `components/finance/backtest-report-artifact.tsx` afin de confirmer les conditions de rendu/aria (`hidden`, `aria-hidden`, `tabIndex`).
+  * [x] Corriger la condition fautive (ordre de filtre, hash incorrect ou gating `financeFeatureEnabled`) de sorte qu’au moins un artefact backtest persiste et possède un `table` focusable ; ajouter un test React Testing Library (réalisé via `BacktestReportArtifact`) qui vérifie `getByTestId("finance-backtest-artifact")` + focus sur le tableau.
    * [ ] Rejouer `tests/e2e/accessibility.spec.ts` isolé pour valider que l’artefact est visible, puis archiver la capture `trace.zip` associée dans les notes CI.
 
 2. **Chat — réédition et redémarrage du streaming**
@@ -373,3 +373,4 @@ Si tu veux un lot de **patchs diff prêts à coller** pour les fichiers clés (`
 - **2025-11-08** — Analyse des échecs Playwright persistants (finance backtest a11y, chat edit/resubmit, register redirect) et élaboration d’un plan d’attaque détaillé avec étapes d’investigation, correctifs ciblés et validation finale.
 - **2025-11-09** — Raffinement du plan 2025-11-08 : ajout des sous-étapes de diagnostic (captures DOM, instrumentation Playwright/client, audit du flux register) et définition des validations par tests ciblés avant relance complète de `pnpm e2e`.
 - **2025-11-10** — Encapsulation de `updateSession()` côté register avec une course timeout 3s + Vitest ciblé pour éviter les blocages Playwright avant la redirection `/chat`.
+- **2025-11-11** — Stabilisation de la rehydratation finance : amélioration de `convertToUIMessages` pour remplacer les parts transitoires par les artefacts persistés, ajout d’un `tabIndex` documenté sur la table du journal des trades, et création de tests Vitest (`ai/messages`, `components/backtest-report-artifact`) garantissant la présence/focusabilité de l’artefact backtest.

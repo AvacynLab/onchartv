@@ -139,6 +139,40 @@ describe("convertToUIMessages", () => {
     );
   });
 
+  it("remplace les placeholders transitoires par les artefacts persistés", () => {
+    const createdAt = new Date("2025-03-02T12:00:00Z");
+    const backtest = buildBacktestArtifact();
+
+    const message: DBMessage = {
+      id: "msg-transient",
+      chatId: "chat-transient",
+      role: "assistant",
+      parts: [
+        { type: "text", text: "Backtest terminé" },
+        {
+          type: "data-financeBacktest",
+          data: backtest,
+          transient: true,
+        },
+      ],
+      attachments: [],
+      artifacts: [{ type: backtest.type, payload: backtest }],
+      createdAt,
+    } as DBMessage;
+
+    const [uiMessage] = convertToUIMessages([message]);
+
+    const financeParts = uiMessage.parts.filter(
+      (part) => part.type === "data-financeBacktest"
+    );
+
+    expect(financeParts).toHaveLength(1);
+    expect(financeParts[0]).toEqual(
+      expect.objectContaining({ data: backtest })
+    );
+    expect((financeParts[0] as { transient?: boolean }).transient).not.toBe(true);
+  });
+
   it("ignore les artefacts finance invalides en loggant un avertissement", () => {
     const warnSpy = vi
       .spyOn(logging, "logWarning")
