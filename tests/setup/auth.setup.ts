@@ -10,6 +10,7 @@ import {
 } from "@playwright/test";
 
 import { hasAuthSessionCookie } from "../utils/auth-session";
+import { hasValidAuthSession } from "../utils/session-validation";
 import {
   clearPersistedSessionCookies,
   persistSessionCookies,
@@ -65,7 +66,7 @@ async function ensureLoggedIn(
    * avoid hitting the `/login` form and re-triggering a flurry of
    * `GET /api/auth/session` requests during hermetic runs.
    */
-  if (await hasExistingSession(context)) {
+  if (await hasExistingSession(context, baseURL)) {
     return;
   }
 
@@ -209,7 +210,9 @@ async function ensureLoggedIn(
     await Promise.all([waitForRedirect, signInButton.click()]);
 
     await expect
-      .poll(async () => hasExistingSession(context), { timeout: 15_000 })
+      .poll(async () => hasExistingSession(context, baseURL), {
+        timeout: 15_000,
+      })
       .toBeTruthy();
 
     await expect
@@ -275,8 +278,21 @@ async function ensureAutomationAccount(
   }
 }
 
-async function hasExistingSession(context: BrowserContext): Promise<boolean> {
-  return hasAuthSessionCookie(await context.cookies());
+async function hasExistingSession(
+  context: BrowserContext,
+  baseURL: string
+): Promise<boolean> {
+  return hasValidAuthSession({
+    readCookies: () => context.cookies(),
+    fetchSession: (url) =>
+      context.request.get(url, {
+        headers: { accept: "application/json" },
+      }),
+    baseURL,
+    logger: (message, details) => {
+      console.warn(message, details);
+    },
+  });
 }
 
 const getBaseURL = () =>
@@ -293,36 +309,44 @@ async function reuseStoredSession(browser: Browser, baseURL: string) {
     return false;
   }
 
-  const context = await browser.newContext({ storageState: STATE_PATH });
+  let context: BrowserContext | undefined;
 
   try {
-    const sessionResponse = await context.request.get(
-      `${baseURL}/api/auth/session`
-    );
+    context = await browser.newContext({ storageState: STATE_PATH });
 
-    if (!sessionResponse.ok()) {
+    const sessionIsValid = await hasValidAuthSession({
+      readCookies: () => context.cookies(),
+      fetchSession: (url) =>
+        context.request.get(url, {
+          headers: { accept: "application/json" },
+        }),
+      baseURL,
+      logger: (message, details) => {
+        console.warn(message, { ...details, scope: "reuseStoredSession" });
+      },
+    });
+
+    if (!sessionIsValid) {
       return false;
     }
 
-    const session: unknown = await sessionResponse.json();
-
-    if (
-      !session ||
-      typeof session !== "object" ||
-      !("user" in session) ||
-      !session.user ||
-      typeof session.user !== "object" ||
-      !("id" in session.user)
-    ) {
-      return false;
-    }
-
+    /**
+     * Refresh the persisted storage state so long-lived CI jobs keep extending
+     * the session expiration. The call mirrors the behaviour of the manual
+     * login flow which rewrites the snapshot after successfully authenticating
+     * the automation account.
+     */
     await context.storageState({ path: STATE_PATH });
     return true;
-  } catch {
+  } catch (error) {
+    console.warn("Failed to reuse stored Playwright session", {
+      cause: error instanceof Error ? error.message : String(error),
+    });
     return false;
   } finally {
-    await context.close();
+    if (context) {
+      await context.close();
+    }
   }
 }
 
