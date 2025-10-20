@@ -1946,8 +1946,16 @@ export class ChatPage {
 
       if (assistantCount > 0) {
         const latestAssistant = assistantLocator.nth(assistantCount - 1);
-        const [latestId, latestText, latestArtifactCount] = await Promise.all([
+        const [
+          latestId,
+          latestStatus,
+          latestText,
+          latestArtifactCount,
+        ] = await Promise.all([
           latestAssistant.getAttribute("data-message-id").catch(() => null),
+          latestAssistant
+            .getAttribute("data-message-status")
+            .catch(() => null),
           latestAssistant
             .getByTestId("message-content")
             .innerText()
@@ -1958,6 +1966,16 @@ export class ChatPage {
             .count()
             .catch(() => 0),
         ]);
+
+        if (typeof latestStatus === "string" && latestStatus === "streaming") {
+          /**
+           * Inline edits reuse the existing assistant bubble while toggling its
+           * lifecycle flag to `streaming`.  Treat that attribute change as
+           * progress so the fallback no longer requires a DOM removal or text
+           * mutation to acknowledge the regeneration.
+           */
+          return;
+        }
 
         if (latestId && latestId !== baseline.latestMessageId) {
           return;

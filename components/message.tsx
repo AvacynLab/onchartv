@@ -160,6 +160,14 @@ const PurePreviewMessage = ({
       data-role={message.role}
       data-testid={`message-${message.role}`}
       data-message-id={message.id}
+      /**
+       * Surface the message lifecycle so Playwright helpers can detect inline
+       * edit regenerations even when the DOM reuses the existing assistant
+       * bubble.  The status comes from the Vercel AI SDK (`"streaming"`,
+       * `"completed"`, …) and gives end-to-end tests a deterministic signal
+       * without depending on transient spinners.
+       */
+      data-message-status={message.status ?? undefined}
       initial={{ opacity: 0 }}
     >
       <div
