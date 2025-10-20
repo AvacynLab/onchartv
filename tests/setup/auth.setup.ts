@@ -312,12 +312,16 @@ async function reuseStoredSession(browser: Browser, baseURL: string) {
   let context: BrowserContext | undefined;
 
   try {
-    context = await browser.newContext({ storageState: STATE_PATH });
+    const activeContext = await browser.newContext({ storageState: STATE_PATH });
+
+    // Conservez la référence pour le bloc `finally` tout en offrant au corps
+    // principal un alias non nullable que TypeScript peut suivre sans assertions.
+    context = activeContext;
 
     const sessionIsValid = await hasValidAuthSession({
-      readCookies: () => context.cookies(),
+      readCookies: () => activeContext.cookies(),
       fetchSession: (url) =>
-        context.request.get(url, {
+        activeContext.request.get(url, {
           headers: { accept: "application/json" },
         }),
       baseURL,
