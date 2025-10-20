@@ -20,6 +20,30 @@ import { DEFAULT_ONBOARDING_SUGGESTION } from "../constants";
 import { logWarning } from "@/lib/logging";
 import { logPlaywrightStreamDebug } from "@/lib/playwright-debug";
 
+function isStringFragment(fragment: unknown): fragment is string {
+  return typeof fragment === "string";
+}
+
+function hasTextFragment(fragment: unknown): fragment is { text: string } {
+  return (
+    fragment != null &&
+    typeof fragment === "object" &&
+    "text" in fragment &&
+    typeof (fragment as { text?: unknown }).text === "string"
+  );
+}
+
+function hasInputTextFragment(
+  fragment: unknown
+): fragment is { input_text: string } {
+  return (
+    fragment != null &&
+    typeof fragment === "object" &&
+    "input_text" in fragment &&
+    typeof (fragment as { input_text?: unknown }).input_text === "string"
+  );
+}
+
 type CreateOpenAI = typeof import("@ai-sdk/openai").createOpenAI;
 
 const DEFAULT_MAX_OUTPUT_TOKENS = 4_096;
@@ -355,30 +379,22 @@ function buildPlaywrightChunks({
         index,
         role: message?.role ?? "unknown",
         contentSummary: Array.isArray(message?.content)
-          ? message.content
+          ? (message.content as unknown[])
               .map((fragment) => {
                 if (fragment == null) {
                   return null;
                 }
 
-                if (typeof fragment === "string") {
+                if (isStringFragment(fragment)) {
                   return fragment.slice(0, 80);
                 }
 
-                if (
-                  typeof fragment === "object" &&
-                  "text" in fragment &&
-                  typeof (fragment as { text?: unknown }).text === "string"
-                ) {
-                  return (fragment as { text: string }).text.slice(0, 80);
+                if (hasTextFragment(fragment)) {
+                  return fragment.text.slice(0, 80);
                 }
 
-                if (
-                  typeof fragment === "object" &&
-                  "input_text" in fragment &&
-                  typeof (fragment as { input_text?: unknown }).input_text === "string"
-                ) {
-                  return (fragment as { input_text: string }).input_text.slice(0, 80);
+                if (hasInputTextFragment(fragment)) {
+                  return fragment.input_text.slice(0, 80);
                 }
 
                 return fragment;
@@ -406,30 +422,22 @@ function buildPlaywrightChunks({
     () => ({
       role: recentMessage.role,
       contentSummary: Array.isArray(recentMessage.content)
-        ? recentMessage.content
+        ? (recentMessage.content as unknown[])
             .map((fragment) => {
               if (fragment == null) {
                 return null;
               }
 
-              if (typeof fragment === "string") {
+              if (isStringFragment(fragment)) {
                 return fragment.slice(0, 80);
               }
 
-              if (
-                typeof fragment === "object" &&
-                "text" in fragment &&
-                typeof (fragment as { text?: unknown }).text === "string"
-              ) {
-                return (fragment as { text: string }).text.slice(0, 80);
+              if (hasTextFragment(fragment)) {
+                return fragment.text.slice(0, 80);
               }
 
-              if (
-                typeof fragment === "object" &&
-                "input_text" in fragment &&
-                typeof (fragment as { input_text?: unknown }).input_text === "string"
-              ) {
-                return (fragment as { input_text: string }).input_text.slice(0, 80);
+              if (hasInputTextFragment(fragment)) {
+                return fragment.input_text.slice(0, 80);
               }
 
               return fragment;

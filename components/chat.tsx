@@ -383,7 +383,7 @@ export function Chat({
      * `null` sans heurter le typage strict de TypeScript (5.6+ interdirait
      * l'accès à `.length` sur un union non raffiné dans une expression `||`).
      */
-    if (!patchesToLog) {
+    if (!Array.isArray(patchesToLog)) {
       /**
        * Aucun correctif à journaliser lorsque le normaliseur n'a généré aucun
        * patch (ou que la fonction de préparation a court-circuité). Nous
@@ -393,7 +393,9 @@ export function Chat({
       return;
     }
 
-    if (patchesToLog.length === 0) {
+    const patches = patchesToLog as IdentifierPatch[];
+
+    if (patches.length === 0) {
       /**
        * Même lorsqu'un tableau est renvoyé, il peut être vide. Nous évitons un
        * for-of inutile et laissons la boucle principale se déclencher uniquement
@@ -402,7 +404,7 @@ export function Chat({
       return;
     }
 
-    for (const patch of patchesToLog) {
+    for (const patch of patches) {
       logWarning(
         "chat:messages",
         "[Chat] synthesised fallback identifier for streamed message",

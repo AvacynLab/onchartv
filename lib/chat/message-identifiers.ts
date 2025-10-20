@@ -122,7 +122,7 @@ export function normaliseMessageIdentifiers({
         try {
           Object.assign(message as ChatMessage, { id });
           if (clonedArray) {
-            clonedArray[index] = message as ChatMessage;
+            ensureClonedArray()[index] = message as ChatMessage;
           }
           continue;
         } catch (error) {
@@ -136,7 +136,7 @@ export function normaliseMessageIdentifiers({
     }
 
     if (clonedArray) {
-      clonedArray[index] = message as ChatMessage;
+      ensureClonedArray()[index] = message as ChatMessage;
     }
   }
 
