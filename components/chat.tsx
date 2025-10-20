@@ -377,7 +377,13 @@ export function Chat({
       return prepared.messages;
     });
 
-    if (!Array.isArray(patchesToLog) || patchesToLog.length === 0) {
+    /**
+     * Lorsque le normalisateur n'applique aucun correctif nous sortons tôt :
+     * l'opérateur optionnel permet de couvrir le cas où `patchesToLog` reste
+     * `null` sans heurter le typage strict de TypeScript (5.6+ interdirait
+     * l'accès à `.length` sur un union non raffiné dans une expression `||`).
+     */
+    if (!patchesToLog || patchesToLog.length === 0) {
       return;
     }
 
