@@ -383,7 +383,22 @@ export function Chat({
      * `null` sans heurter le typage strict de TypeScript (5.6+ interdirait
      * l'accès à `.length` sur un union non raffiné dans une expression `||`).
      */
-    if (!patchesToLog || patchesToLog.length === 0) {
+    if (!patchesToLog) {
+      /**
+       * Aucun correctif à journaliser lorsque le normaliseur n'a généré aucun
+       * patch (ou que la fonction de préparation a court-circuité). Nous
+       * sortons tôt pour éviter d'accéder à `.length` tant que TypeScript n'a
+       * pas raffiné l'union vers `IdentifierPatch[]`.
+       */
+      return;
+    }
+
+    if (patchesToLog.length === 0) {
+      /**
+       * Même lorsqu'un tableau est renvoyé, il peut être vide. Nous évitons un
+       * for-of inutile et laissons la boucle principale se déclencher uniquement
+       * lorsque des identifiants synthétiques ont réellement été créés.
+       */
       return;
     }
 
