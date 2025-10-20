@@ -310,15 +310,28 @@ export function Chat({
             )
           : null;
 
+        /**
+         * Conserver une référence typée vers les parties "text" du SDK nous
+         * permet de bénéficier du raffinement TypeScript tout en conservant la
+         * souplesse du filtre runtime utilisé pour les diagnostics Playwright.
+         */
+        type TextPart = Extract<
+          NonNullable<ChatMessage["parts"]>[number],
+          { type: "text"; text?: string }
+        >;
+
         const textPreview = Array.isArray(message?.parts)
           ? message!.parts
-              .filter(
-                (part): part is { type: string; text?: string } =>
-                  Boolean(part) &&
-                  typeof part === "object" &&
+              .filter((part): part is TextPart => {
+                if (!part || typeof part !== "object") {
+                  return false;
+                }
+
+                return (
                   "type" in part &&
                   (part as { type?: unknown }).type === "text"
-              )
+                );
+              })
               .map((part) => (part.text ?? "").slice(0, 80))
           : null;
 
