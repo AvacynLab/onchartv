@@ -16,11 +16,13 @@ import type { StructuredLogEntry } from "@/lib/logging";
 import * as featureFlags from "@/lib/feature-flags";
 
 import { DataStreamProvider } from "@/components/data-stream-provider";
+import type { DBMessage } from "@/lib/db/schema";
 import type { ChatMessage } from "@/lib/types";
 import type {
   FinanceBacktestArtifact,
   FinanceChartArtifact,
 } from "@/lib/finance/types";
+import { convertToUIMessages } from "@/lib/utils";
 
 const noop = () => {};
 
@@ -132,6 +134,9 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+  delete (globalThis as {
+    __PLAYWRIGHT_STREAM_DEBUG__?: unknown;
+  }).__PLAYWRIGHT_STREAM_DEBUG__;
 });
 
 afterAll(() => {
@@ -401,6 +406,91 @@ describe("Messages", () => {
     ).toBe(false);
   });
 
+  it("journalise l'état de normalisation lorsque le debug stream est actif", () => {
+    vi.stubEnv("NEXT_PUBLIC_FEATURE_FINANCE", "true");
+    (globalThis as {
+      __PLAYWRIGHT_STREAM_DEBUG__?: unknown;
+    }).__PLAYWRIGHT_STREAM_DEBUG__ = true;
+
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    const artifact: FinanceBacktestArtifact = {
+      type: "finance.backtest",
+      runId: "debug-log",
+      symbol: "AAPL",
+      timeframe: "1D",
+      period: { from: "2024-03-01", to: "2024-03-31" },
+      strategy: {
+        type: "sma-crossover",
+        params: { fastPeriod: 5, slowPeriod: 20 },
+      },
+      metrics: {
+        totalReturn: 0.08,
+        cagr: 0.12,
+        maxDrawdown: 0.05,
+        winRate: 0.6,
+        averageWin: 1800,
+        averageLoss: -900,
+        sharpe: 0.95,
+        profitFactor: 1.6,
+        trades: 4,
+      },
+      equityCurve: [{ t: 1709251200, e: 10_000 }],
+      trades: [
+        {
+          entryTimestamp: 1709251200,
+          entryPrice: 160,
+          exitTimestamp: 1709856000,
+          exitPrice: 168,
+          quantity: 10,
+          grossPnl: 80,
+          netPnl: 78,
+        },
+      ],
+      commentary: "debug payload",
+    };
+
+    const message = {
+      id: "assistant-debug",
+      role: "assistant",
+      metadata: { createdAt: new Date().toISOString() },
+      parts: [
+        { id: "text", type: "text", text: "Synthèse du backtest" },
+        { type: "data-financeBacktest", data: artifact },
+      ],
+      artifacts: [
+        {
+          type: "finance.backtest",
+          payload: artifact,
+        },
+      ],
+    } as unknown as ChatMessage;
+
+    render(
+      <Messages
+        chatId="chat-finance"
+        isArtifactVisible={false}
+        isReadonly={false}
+        messages={[message]}
+        regenerate={noop as any}
+        selectedModelId="model"
+        setMessages={noop as any}
+        status="streaming"
+        votes={undefined}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[messages.stream-debug] message-normalised"),
+      expect.objectContaining({
+        messageId: "assistant-debug",
+        sanitizedArtifactCount: 1,
+        financeFingerprintCount: 1,
+      })
+    );
+  });
+
   it("filtre les doublons de parts finance injectés pendant le streaming", () => {
     vi.stubEnv("NEXT_PUBLIC_FEATURE_FINANCE", "true");
 
@@ -476,6 +566,119 @@ describe("Messages", () => {
     );
 
     expect(financeParts).toHaveLength(1);
+  });
+
+  it("conserve l'artefact backtest après un rendu séquentiel", () => {
+    vi.stubEnv("NEXT_PUBLIC_FEATURE_FINANCE", "true");
+
+    const chartArtifact: FinanceChartArtifact = {
+      type: "finance.chart",
+      symbol: "BTCUSD",
+      timeframe: "1D",
+      range: { from: "2024-01-01", to: "2024-01-31" },
+      ohlcv: [
+        { t: 1704067200, o: 42_000, h: 43_100, l: 41_800, c: 42_750, v: 9_001 },
+      ],
+      overlays: [],
+    };
+
+    const backtestArtifact: FinanceBacktestArtifact = {
+      type: "finance.backtest",
+      runId: "sequential-backtest",
+      symbol: "AAPL",
+      timeframe: "1D",
+      period: { from: "2018-01-01", to: "2020-12-31" },
+      strategy: { type: "sma-crossover", params: { fastPeriod: 50, slowPeriod: 200 } },
+      metrics: {
+        totalReturn: -0.12,
+        cagr: -0.08,
+        maxDrawdown: 0.22,
+        winRate: 0.48,
+        averageWin: 2100,
+        averageLoss: -1100,
+        sharpe: 0.6,
+        profitFactor: 1.2,
+        trades: 7,
+      },
+      equityCurve: [{ t: 1514764800, e: 95_000 }],
+      trades: [
+        {
+          entryTimestamp: 1514764800,
+          entryPrice: 150,
+          exitTimestamp: 1517443200,
+          exitPrice: 142,
+          quantity: 12,
+          grossPnl: -96,
+          netPnl: -102,
+        },
+      ],
+      commentary: "Sequential backtest payload",
+    };
+
+    /**
+     * Simule la récupération depuis la base en convertissant les enregistrements
+     * via `convertToUIMessages`. Cela reproduit la chaîne réelle (persisté → UI)
+     * et garantit que les data parts finance sont générées comme en production.
+     */
+    const dbMessages = [
+      {
+        id: "assistant-chart",
+        chatId: "chat-finance",
+        role: "assistant",
+        parts: [
+          { type: "text", text: "Voici le graphique demandé" },
+          { type: "data-financeChart", data: chartArtifact },
+        ],
+        attachments: [],
+        artifacts: [{ type: chartArtifact.type, payload: chartArtifact }],
+        createdAt: new Date(),
+      },
+      {
+        id: "assistant-backtest",
+        chatId: "chat-finance",
+        role: "assistant",
+        parts: [
+          { type: "text", text: "Synthèse du backtest" },
+        ],
+        attachments: [],
+        artifacts: [{ type: backtestArtifact.type, payload: backtestArtifact }],
+        createdAt: new Date(),
+      },
+    ] as unknown as DBMessage[];
+
+    const messages = convertToUIMessages(dbMessages);
+
+    render(
+      <Messages
+        chatId="chat-finance"
+        isArtifactVisible={false}
+        isReadonly={false}
+        messages={messages}
+        regenerate={noop as any}
+        selectedModelId="model"
+        setMessages={noop as any}
+        status="idle"
+        votes={undefined}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    const backtestInvocation = previewMessageSpy.mock.calls.find(
+      ([props]) => props.message?.id === "assistant-backtest"
+    )?.[0] as { message?: ChatMessage } | undefined;
+
+    expect(backtestInvocation?.message?.artifacts).toEqual([backtestArtifact]);
+
+    const backtestPartExists = backtestInvocation?.message?.parts?.some((part) => {
+      if (part?.type !== "data-financeBacktest") {
+        return false;
+      }
+
+      const payload = (part as { data?: FinanceBacktestArtifact }).data;
+      return payload?.runId === "sequential-backtest";
+    });
+
+    expect(backtestPartExists).toBe(true);
   });
 
   it("affiche les messages valides et ignore les votes manquants", () => {

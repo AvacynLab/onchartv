@@ -97,18 +97,65 @@ async function ensureLoggedIn(
        * user-facing login flow would exercise and keeps the warm-up compatible
        * with strict HttpOnly/SameSite policies enforced by NextAuth.
        */
-      await context.addCookies(
-        cookies.map((cookie) => ({
+      const fallbackUrl = new URL("/", baseURL);
+
+      const normalisedCookies = cookies.map((cookie) => {
+        let resolvedUrl = fallbackUrl;
+        try {
+          resolvedUrl = new URL(cookie.url ?? fallbackUrl.toString());
+        } catch (error) {
+          console.warn("Failed to normalise credential cookie URL", {
+            cause: error instanceof Error ? error.message : String(error),
+            cookieName: cookie.name,
+          });
+        }
+
+        const rawPath = cookie.path?.trim();
+        const candidatePath = rawPath && rawPath.length > 0
+          ? rawPath
+          : resolvedUrl.pathname ?? "/";
+        const path = candidatePath.length === 0
+          ? "/"
+          : candidatePath.startsWith("/")
+            ? candidatePath
+            : `/${candidatePath.replace(/^\/+/, "")}`;
+
+        return {
           name: cookie.name,
           value: cookie.value,
-          url: cookie.url,
-          path: cookie.path,
+          /**
+           * Provide the origin-level URL so Playwright infers the default path
+           * while still scoping the cookie to the automation dashboard. Passing
+           * both a URL and a manual path triggers a validation error in
+           * `browserContext.addCookies`, hence we rely on the origin and keep
+           * the normalised path purely for diagnostics below.
+           */
+          url: resolvedUrl.origin,
           expires: cookie.expires,
           httpOnly: cookie.httpOnly,
           secure: cookie.secure,
           sameSite: cookie.sameSite,
-        }))
-      );
+          path,
+        } satisfies (Parameters<typeof context.addCookies>[0][number] & {
+          path: string;
+        });
+      });
+
+      try {
+        const cookiesForContext = normalisedCookies.map(({ path, ...rest }) => rest);
+        await context.addCookies(cookiesForContext);
+      } catch (error) {
+        console.warn("Failed to apply credential cookies to Playwright context", {
+          cause: error instanceof Error ? error.message : String(error),
+          cookieNames: cookies.map(({ name }) => name),
+          cookieMetadata: normalisedCookies.map(({ name, url, path }) => ({
+            name,
+            url,
+            path,
+          })),
+        });
+        throw error;
+      }
     },
   });
 
@@ -118,14 +165,22 @@ async function ensureLoggedIn(
 
   await page.goto(`${baseURL}/login`);
 
-  await expect(page.getByPlaceholder("user@acme.com")).toBeVisible({
-    /**
-     * Verifying the form fields helps us fail fast when the login route
-     * regresses (for example, due to a renamed label) instead of timing out
-     * later while typing into a missing locator.
-     */
-    timeout: 15_000,
-  });
+  const emailField = page.getByPlaceholder("user@acme.com");
+
+  await expect
+    .poll(async () => emailField.isVisible().catch(() => false), {
+      /**
+       * Hydration can temporarily unmount the login form before the client
+       * navigation settles.  Poll the field visibility instead of relying on a
+       * single `toBeVisible` assertion so Playwright retries until the input is
+       * actually painted, which keeps the helper resilient to slow CI runners.
+       */
+      timeout: 15_000,
+      message:
+        "Email field never became visible on the login page during auth setup",
+    })
+    .toBe(true);
+
   await expect(page.getByLabel("Password")).toBeVisible({ timeout: 15_000 });
 
   if (page.url().endsWith("/login")) {

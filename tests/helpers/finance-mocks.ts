@@ -651,6 +651,12 @@ export async function setupFinanceApiMocks(
 
     const result = runBacktest(candles, params);
 
+    const normalisedPeriod = {
+      /** Preserve the canonical ISO shape expected by the finance artefact schema. */
+      from: new Date(from * 1000).toISOString(),
+      to: new Date(to * 1000).toISOString(),
+    };
+
     intercepts.backtest += 1;
 
     await route.fulfill({
@@ -661,7 +667,7 @@ export async function setupFinanceApiMocks(
         runId: `bt_mock_${symbol.toLowerCase()}`,
         symbol,
         timeframe: (body.timeframe ?? "1D").toUpperCase(),
-        period: { from, to },
+        period: normalisedPeriod,
         strategy: {
           id: `strategy_${symbol.toLowerCase()}`,
           versionId: `strategy_${symbol.toLowerCase()}_v1`,

@@ -112,6 +112,75 @@ describe("finance queries", () => {
     queries = reloadedQueries;
   });
 
+  it("creates an onboarding chat with a default assistant greeting", async () => {
+    await queries.createUser("seed@example.com", "UltraSecret1!");
+    const [createdUser] = await queries.getUser("seed@example.com");
+
+    expect(createdUser).toBeDefined();
+
+    const result = await queries.createInitialChat({
+      userId: createdUser!.id,
+    });
+
+    expect(result.chatId).toBeTruthy();
+    expect(result.messageId).toBeTruthy();
+    expect(result.createdAt).toBeInstanceOf(Date);
+
+    const seededChat = await queries.getChatById({ id: result.chatId });
+    expect(seededChat?.userId).toBe(createdUser!.id);
+    expect(seededChat?.title).toBe("Welcome to Onchart");
+
+    const seededMessages = await queries.getMessagesByChatId({
+      id: result.chatId,
+    });
+    expect(seededMessages).toHaveLength(1);
+    const [assistantMessage] = seededMessages;
+    expect(assistantMessage?.role).toBe("assistant");
+
+    const textPart = Array.isArray(assistantMessage?.parts)
+      ? (
+          assistantMessage?.parts as Array<{ type: string; text?: string }>
+        ).find((part) => part.type === "text")
+      : undefined;
+
+    expect(textPart?.text).toBe(queries.DEFAULT_INITIAL_CHAT_GREETING);
+  });
+
+  it("allows overriding the greeting and timestamp when seeding the chat", async () => {
+    await queries.createUser("custom@example.com", "UltraSecret2!");
+    const [createdUser] = await queries.getUser("custom@example.com");
+
+    expect(createdUser).toBeDefined();
+
+    const referenceDate = new Date("2024-03-15T12:30:00.000Z");
+    const customGreeting = "Welcome aboard! Let's analyse some tickers.";
+
+    const result = await queries.createInitialChat({
+      userId: createdUser!.id,
+      greeting: customGreeting,
+      createdAt: referenceDate,
+      title: "Custom onboarding",
+    });
+
+    expect(result.createdAt.toISOString()).toBe(referenceDate.toISOString());
+    expect(result.title).toBe("Custom onboarding");
+
+    const seededMessages = await queries.getMessagesByChatId({
+      id: result.chatId,
+    });
+    const [assistantMessage] = seededMessages;
+    const textPart = Array.isArray(assistantMessage?.parts)
+      ? (
+          assistantMessage?.parts as Array<{ type: string; text?: string }>
+        ).find((part) => part.type === "text")
+      : undefined;
+
+    expect(textPart?.text).toBe(customGreeting);
+    expect(new Date(assistantMessage!.createdAt).toISOString()).toBe(
+      referenceDate.toISOString()
+    );
+  });
+
   it("ignore les utilisateurs persistés lorsque le cache JSON est vide", async () => {
     const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 

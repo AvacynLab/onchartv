@@ -7,9 +7,20 @@ import { persistSessionCookies } from "../utils/session-persistence";
 const waitForChatDashboard = async (page: Page) => {
   const composer = page.getByPlaceholder("Send a message...");
 
-  // Once the textarea is rendered ensure the Playwright assertion API also
-  // sees it as visible so downstream tests can safely interact with it.
-  await expect(composer).toBeVisible({ timeout: 60_000 });
+  /**
+   * Authenticate flows perform a client-side redirect towards `/chat` as soon
+   * as the session cookie is refreshed.  During the transition the textarea is
+   * briefly unmounted which used to trip the direct `toBeVisible()` assertion.
+   * Poll the locator instead so we only proceed once the chat composer is
+   * actually visible in the DOM.
+   */
+  await expect
+    .poll(async () => composer.isVisible().catch(() => false), {
+      message:
+        "Chat composer never became visible after navigating to the dashboard",
+      timeout: 60_000,
+    })
+    .toBe(true);
 
   /**
    * Successful logins redirect users to either `/` or the latest `/chat/:id`.

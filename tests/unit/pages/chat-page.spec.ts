@@ -445,6 +445,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
       latestArtifactCount: 0,
       latestMessageId: null,
       latestMessageText: "",
+      latestMessageStatus: null,
     };
     (chatPage as any).pendingUserMessageCount = 0;
     (chatPage as any).pendingStopButtonWasVisible = false;
@@ -953,6 +954,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
         latestArtifactCount: 0,
         latestMessageId: null,
         latestMessageText: "",
+        latestMessageStatus: null,
       };
       (chatPage as any).pendingSendButtonWasVisible = true;
       (chatPage as any).pendingStopButtonWasVisible = false;
@@ -1080,6 +1082,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
       latestArtifactCount: 0,
       latestMessageId: "assistant-1",
       latestMessageText: "Thinking...",
+      latestMessageStatus: "completed",
     } as const;
 
     await expect(
@@ -1202,6 +1205,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
       latestArtifactCount: 0,
       latestMessageId: null,
       latestMessageText: "",
+      latestMessageStatus: null,
     } as const;
 
   await (chatPage as any).waitForUiStreamingFallback({
@@ -1307,6 +1311,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
       latestArtifactCount: 0,
       latestMessageId: null,
       latestMessageText: "",
+      latestMessageStatus: null,
     } as const;
 
   await (chatPage as any).waitForUiStreamingFallback({
@@ -1449,6 +1454,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
       latestArtifactCount: 0,
       latestMessageId: "assistant-1",
       latestMessageText: "Original reply",
+      latestMessageStatus: "completed",
     } as const;
 
     await (chatPage as any).waitForUiStreamingFallback({
@@ -1586,6 +1592,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
       latestArtifactCount: 0,
       latestMessageId: "assistant-1",
       latestMessageText: "Original reply",
+      latestMessageStatus: "completed",
     } as const;
 
     await (chatPage as any).waitForUiStreamingFallback({
@@ -1692,6 +1699,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
       latestArtifactCount: 0,
       latestMessageId: null,
       latestMessageText: "",
+      latestMessageStatus: null,
     } as const;
 
   await (chatPage as any).waitForUiStreamingFallback({
@@ -1708,6 +1716,293 @@ describe("ChatPage.waitForChatApiResponse", () => {
 
     expect(sendVisible).toHaveBeenCalledTimes(2);
     expect(sendEnabled).toHaveBeenCalledTimes(2);
+    expect(waitForTimeout).toHaveBeenCalled();
+  });
+
+  it("détecte un changement de statut assistant comme signal de streaming", async () => {
+    const toastWaitFor = vi.fn().mockImplementation(
+      () => new Promise(() => {})
+    );
+    const toastInnerText = vi.fn().mockResolvedValue("");
+    const assistantCount = vi.fn().mockResolvedValue(1);
+    const latestAssistantGetAttribute = vi.fn().mockImplementation(
+      async (attribute: string) => {
+        if (attribute === "data-message-id") {
+          return "assistant-1";
+        }
+
+        if (attribute === "data-message-status") {
+          return "in_progress";
+        }
+
+        return null;
+      }
+    );
+    const latestAssistantText = vi.fn().mockResolvedValue("Original reply");
+    const latestAssistantArtifactCount = vi.fn().mockResolvedValue(0);
+    const latestAssistantLocator = {
+      getAttribute: latestAssistantGetAttribute,
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "message-content") {
+          return { innerText: latestAssistantText };
+        }
+        throw new Error(`Unexpected assistant test id: ${testId}`);
+      }),
+      locator: vi.fn(() => ({ count: latestAssistantArtifactCount })),
+    };
+    const spinnerCount = vi.fn().mockResolvedValue(0);
+    const stopVisible = vi.fn().mockResolvedValue(false);
+    const sendVisible = vi.fn().mockResolvedValue(true);
+    const sendEnabled = vi.fn().mockResolvedValue(true);
+    const userCount = vi.fn().mockResolvedValue(1);
+    const evaluateSignals = vi.fn().mockResolvedValue(0);
+    const composerValue = vi.fn().mockResolvedValue("Edited message contents");
+    const suggestedActionsVisible = vi.fn().mockResolvedValue(false);
+    const waitForTimeout = vi.fn().mockResolvedValue(undefined);
+
+    const page = {
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "toast") {
+          return {
+            waitFor: toastWaitFor,
+            innerText: toastInnerText,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant") {
+          return {
+            count: assistantCount,
+            nth: vi.fn(() => latestAssistantLocator),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant-loading") {
+          return {
+            count: spinnerCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "stop-button") {
+          return {
+            isVisible: stopVisible,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "send-button") {
+          return {
+            isVisible: sendVisible,
+            isEnabled: sendEnabled,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-user") {
+          return {
+            count: userCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: composerValue,
+            press: vi.fn().mockResolvedValue(undefined),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "suggested-actions") {
+          return {
+            isVisible: suggestedActionsVisible,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        throw new Error(`Unexpected test id: ${testId}`);
+      }),
+      locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+          return {
+            first: () => ({
+              waitFor: toastWaitFor,
+              innerText: toastInnerText,
+            }),
+          } as unknown as ReturnType<Page["locator"]>;
+        }
+
+        throw new Error(`Unexpected locator access: ${selector}`);
+      }),
+      waitForTimeout: waitForTimeout as unknown as Page["waitForTimeout"],
+      evaluate: evaluateSignals as unknown as Page["evaluate"],
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+    const baselineSnapshot = {
+      count: 1,
+      latestArtifactCount: 0,
+      latestMessageId: "assistant-1",
+      latestMessageText: "Original reply",
+      latestMessageStatus: "completed",
+    } as const;
+
+    await (chatPage as any).waitForUiStreamingFallback({
+      baseline: baselineSnapshot,
+      baselineUserMessageCount: 1,
+      baselineStopButtonVisible: false,
+      baselineSendButtonVisible: true,
+      baselineSendButtonEnabled: true,
+      baselineChatSignalCount: 0,
+      baselineComposerValue: "Edited message contents",
+      baselineSuggestedActionsVisible: false,
+      timeoutMs: 5_000,
+    });
+
+    expect(latestAssistantGetAttribute).toHaveBeenCalledWith("data-message-status");
+  });
+
+  it("reconnaît le retour d'un message assistant recréé après une édition", async () => {
+    const toastWaitFor = vi.fn().mockImplementation(
+      () => new Promise(() => {})
+    );
+    const toastInnerText = vi.fn().mockResolvedValue("");
+    const assistantCount = vi
+      .fn()
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(0)
+      .mockResolvedValue(1);
+    const latestAssistantGetAttribute = vi.fn().mockImplementation(
+      async (attribute: string) => {
+        if (attribute === "data-message-id") {
+          return "assistant-new";
+        }
+
+        if (attribute === "data-message-status") {
+          return "completed";
+        }
+
+        return null;
+      }
+    );
+    const latestAssistantText = vi
+      .fn()
+      .mockResolvedValue("Updated assistant reply");
+    const latestAssistantArtifactCount = vi.fn().mockResolvedValue(0);
+    const latestAssistantLocator = {
+      getAttribute: latestAssistantGetAttribute,
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "message-content") {
+          return { innerText: latestAssistantText };
+        }
+        throw new Error(`Unexpected assistant test id: ${testId}`);
+      }),
+      locator: vi.fn(() => ({ count: latestAssistantArtifactCount })),
+    };
+    const spinnerCount = vi.fn().mockResolvedValue(0);
+    const stopVisible = vi.fn().mockResolvedValue(false);
+    const sendVisible = vi.fn().mockResolvedValue(true);
+    const sendEnabled = vi.fn().mockResolvedValue(true);
+    const userCount = vi.fn().mockResolvedValue(1);
+    const evaluateSignals = vi.fn().mockResolvedValue(0);
+    const composerValue = vi
+      .fn()
+      .mockResolvedValue("Edited message contents");
+    const suggestedActionsVisible = vi.fn().mockResolvedValue(false);
+    const waitForTimeout = vi.fn().mockResolvedValue(undefined);
+
+    const page = {
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "toast") {
+          return {
+            waitFor: toastWaitFor,
+            innerText: toastInnerText,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant") {
+          return {
+            count: assistantCount,
+            nth: vi.fn().mockReturnValue(latestAssistantLocator),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant-loading") {
+          return {
+            count: spinnerCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "stop-button") {
+          return {
+            isVisible: stopVisible,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "send-button") {
+          return {
+            isVisible: sendVisible,
+            isEnabled: sendEnabled,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-user") {
+          return {
+            count: userCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: composerValue,
+            press: vi.fn().mockResolvedValue(undefined),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "suggested-actions") {
+          return {
+            isVisible: suggestedActionsVisible,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        throw new Error(`Unexpected test id: ${testId}`);
+      }),
+      locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+          return {
+            first: () => ({
+              waitFor: toastWaitFor,
+              innerText: toastInnerText,
+            }),
+          } as unknown as ReturnType<Page["locator"]>;
+        }
+
+        throw new Error(`Unexpected locator access: ${selector}`);
+      }),
+      waitForTimeout: waitForTimeout as unknown as Page["waitForTimeout"],
+      evaluate: evaluateSignals as unknown as Page["evaluate"],
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+    const baselineSnapshot = {
+      count: 1,
+      latestArtifactCount: 0,
+      latestMessageId: "assistant-original",
+      latestMessageText: "Initial reply",
+      latestMessageStatus: "completed",
+    } as const;
+
+    await expect(
+      (chatPage as any).waitForUiStreamingFallback({
+        baseline: baselineSnapshot,
+        baselineUserMessageCount: 1,
+        baselineStopButtonVisible: false,
+        baselineSendButtonVisible: true,
+        baselineSendButtonEnabled: true,
+        baselineChatSignalCount: 0,
+        baselineComposerValue: "Edited message contents",
+        baselineSuggestedActionsVisible: false,
+        timeoutMs: 5_000,
+      })
+    ).resolves.toBeUndefined();
+
+    expect(assistantCount).toHaveBeenCalledTimes(3);
+    expect(latestAssistantGetAttribute).toHaveBeenCalled();
+    expect(latestAssistantText).toHaveBeenCalled();
     expect(waitForTimeout).toHaveBeenCalled();
   });
 
@@ -1950,6 +2245,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
       latestArtifactCount: 0,
       latestMessageId: null,
       latestMessageText: "",
+      latestMessageStatus: null,
     } as const;
 
     await expect(
@@ -2076,6 +2372,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
       latestArtifactCount: 0,
       latestMessageId: null,
       latestMessageText: "",
+      latestMessageStatus: null,
     } as const;
 
     await expect(
@@ -2193,6 +2490,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
       latestArtifactCount: 0,
       latestMessageId: null,
       latestMessageText: "",
+      latestMessageStatus: null,
     } as const;
 
     await expect(
@@ -2300,6 +2598,7 @@ describe("ChatPage.waitForChatApiResponse", () => {
       latestArtifactCount: 0,
       latestMessageId: null,
       latestMessageText: "",
+      latestMessageStatus: null,
     } as const;
 
   await (chatPage as any).waitForUiStreamingFallback({
@@ -2316,6 +2615,309 @@ describe("ChatPage.waitForChatApiResponse", () => {
 
     expect(userCount).toHaveBeenCalledTimes(2);
     expect(waitForTimeout).toHaveBeenCalled();
+  });
+});
+
+describe("ChatPage.isGenerationComplete", () => {
+  type WaitForFunctionPredicateArgs = {
+    initialAssistantCount: number;
+    initialLatestMessageId: string | null;
+    initialLatestMessage: string;
+    initialArtifactCount: number;
+    initialLatestMessageStatus: string | null;
+    baselineSignalCount: number;
+    baselineStopButtonVisible: boolean;
+    baselineSendButtonVisible: boolean;
+    baselineSendButtonEnabled: boolean;
+    baselineUserMessageCount: number;
+    baselineComposerValue: string;
+    expectedComposerPrefill: string | null;
+    baselineSuggestedActionsVisible: boolean;
+  };
+
+  it("considers the assistant loading placeholder as a streaming signal", async () => {
+    const assistantLocator = {} as Locator;
+    const recorded: {
+      predicate?: (args: WaitForFunctionPredicateArgs) => unknown;
+      baseline?: WaitForFunctionPredicateArgs;
+      options?: { timeout?: number };
+    } = {};
+
+    const waitForFunction = vi
+      .fn(
+        async (
+          predicate: (args: WaitForFunctionPredicateArgs) => unknown,
+          baseline: WaitForFunctionPredicateArgs,
+          options?: { timeout?: number }
+        ) => {
+          recorded.predicate = predicate;
+          recorded.baseline = baseline;
+          recorded.options = options;
+          throw new Error("abort-after-predicate");
+        }
+      )
+      .mockName("page.waitForFunction");
+
+    const page = {
+      getByTestId: vi
+        .fn((testId: string) => {
+          if (testId === "message-assistant") {
+            return assistantLocator;
+          }
+
+          throw new Error(`Unexpected test id lookup: ${testId}`);
+        })
+        .mockName("page.getByTestId"),
+      waitForFunction: waitForFunction as unknown as Page["waitForFunction"],
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+    (chatPage as any).pendingAssistantSnapshot = {
+      count: 1,
+      latestArtifactCount: 0,
+      latestMessageId: "assistant-1",
+      latestMessageText: "Existing reply",
+      latestMessageStatus: "completed",
+    };
+
+    await expect(chatPage.isGenerationComplete()).rejects.toThrow(
+      "abort-after-predicate"
+    );
+
+    expect(waitForFunction).toHaveBeenCalledTimes(1);
+    expect(recorded.options).toEqual({ timeout: 60_000 });
+    const predicate = recorded.predicate;
+    const baseline = recorded.baseline;
+    expect(predicate).toBeDefined();
+    expect(baseline).toBeDefined();
+
+    const assistantContent = { innerText: "Existing reply" } as const;
+    const assistantNode = {
+      getAttribute: vi
+        .fn((attribute: string) => {
+          if (attribute === "data-message-id") {
+            return baseline!.initialLatestMessageId;
+          }
+
+          if (attribute === "data-message-status") {
+            return baseline!.initialLatestMessageStatus;
+          }
+
+          return null;
+        })
+        .mockName("assistant.getAttribute"),
+      querySelector: vi
+        .fn((selector: string) => {
+          if (selector === '[data-testid="message-content"]') {
+            return assistantContent;
+          }
+
+          return null;
+        })
+        .mockName("assistant.querySelector"),
+      querySelectorAll: vi
+        .fn(() => [])
+        .mockName("assistant.querySelectorAll"),
+    } satisfies Partial<HTMLElement>;
+
+    const placeholderNode = {} as HTMLElement;
+    const originalDocument = (globalThis as { document?: Document }).document;
+    const originalWindow = (globalThis as { window?: Window }).window;
+    const patchedWindow = originalWindow ?? ({} as Window & {
+      getComputedStyle: (element: Element) => CSSStyleDeclaration;
+    });
+    const originalGetComputedStyle = patchedWindow.getComputedStyle;
+    const originalSignals = (patchedWindow as unknown as {
+      __PLAYWRIGHT_CHAT_SIGNALS__?: Array<unknown>;
+    }).__PLAYWRIGHT_CHAT_SIGNALS__;
+
+    patchedWindow.getComputedStyle = vi
+      .fn(() => ({ visibility: "hidden" } as CSSStyleDeclaration))
+      .mockName("window.getComputedStyle");
+    (patchedWindow as unknown as {
+      __PLAYWRIGHT_CHAT_SIGNALS__?: Array<unknown>;
+    }).__PLAYWRIGHT_CHAT_SIGNALS__ = [];
+
+    (globalThis as any).window = patchedWindow;
+    (globalThis as any).document = {
+      querySelector: vi
+        .fn((selector: string) => {
+          if (selector === '[data-testid="toast"]') {
+            return null;
+          }
+
+          if (selector === '[data-testid="stop-button"]') {
+            return null;
+          }
+
+          if (selector === '[data-testid="send-button"]') {
+            return null;
+          }
+
+          if (selector === '[data-testid="suggested-actions"]') {
+            return null;
+          }
+
+          if (selector === "textarea[data-testid='multimodal-input']") {
+            return {
+              value: recorded.baseline?.baselineComposerValue ?? "",
+            } as unknown as HTMLTextAreaElement;
+          }
+
+          return null;
+        })
+        .mockName("document.querySelector"),
+      querySelectorAll: vi
+        .fn((selector: string) => {
+          if (selector === '[data-testid="message-assistant"]') {
+            return [assistantNode as HTMLElement];
+          }
+
+          if (selector === '[data-testid="message-assistant-loading"]') {
+            return [placeholderNode];
+          }
+
+          if (selector === '[data-testid="message-user"]') {
+            const count = recorded.baseline?.baselineUserMessageCount ?? 0;
+            return Array.from({ length: count }, () => ({}) as HTMLElement);
+          }
+
+          return [];
+        })
+        .mockName("document.querySelectorAll"),
+    } as unknown as Document;
+
+    try {
+      const result = predicate!(baseline!);
+      expect(result).toBe(true);
+    } finally {
+      if (originalDocument) {
+        (globalThis as any).document = originalDocument;
+      } else {
+        delete (globalThis as any).document;
+      }
+
+      if (originalWindow) {
+        patchedWindow.getComputedStyle = originalGetComputedStyle!;
+        (patchedWindow as unknown as {
+          __PLAYWRIGHT_CHAT_SIGNALS__?: Array<unknown>;
+        }).__PLAYWRIGHT_CHAT_SIGNALS__ = originalSignals;
+        (globalThis as any).window = originalWindow;
+      } else {
+        delete (globalThis as any).window;
+      }
+    }
+  });
+
+  it("treats chat signal increments as streaming progress", async () => {
+    const assistantLocator = {} as Locator;
+    const recorded: {
+      predicate?: (args: WaitForFunctionPredicateArgs) => unknown;
+      baseline?: WaitForFunctionPredicateArgs;
+    } = {};
+
+    const waitForFunction = vi
+      .fn(
+        async (
+          predicate: (args: WaitForFunctionPredicateArgs) => unknown,
+          baseline: WaitForFunctionPredicateArgs
+        ) => {
+          recorded.predicate = predicate;
+          recorded.baseline = baseline;
+          throw new Error("abort-after-predicate");
+        }
+      )
+      .mockName("page.waitForFunction");
+
+    const page = {
+      getByTestId: vi
+        .fn((testId: string) => {
+          if (testId === "message-assistant") {
+            return assistantLocator;
+          }
+
+          throw new Error(`Unexpected test id lookup: ${testId}`);
+        })
+        .mockName("page.getByTestId"),
+      waitForFunction: waitForFunction as unknown as Page["waitForFunction"],
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+    (chatPage as any).pendingAssistantSnapshot = {
+      count: 1,
+      latestArtifactCount: 0,
+      latestMessageId: "assistant-1",
+      latestMessageText: "Existing reply",
+      latestMessageStatus: "completed",
+    };
+
+    await expect(chatPage.isGenerationComplete()).rejects.toThrow(
+      "abort-after-predicate"
+    );
+
+    const predicate = recorded.predicate;
+    const baseline = recorded.baseline;
+    expect(predicate).toBeDefined();
+    expect(baseline).toBeDefined();
+
+    const assistantNode = {
+      getAttribute: vi.fn(() => baseline!.initialLatestMessageId),
+      querySelector: vi.fn(() => ({ innerText: "Existing reply" })),
+      querySelectorAll: vi.fn(() => []),
+    } satisfies Partial<HTMLElement>;
+
+    const originalDocument = (globalThis as { document?: Document }).document;
+    const originalWindow = (globalThis as { window?: Window }).window;
+    const patchedWindow = originalWindow ?? ({} as Window & {
+      getComputedStyle: (element: Element) => CSSStyleDeclaration;
+    });
+    const originalSignals = (patchedWindow as unknown as {
+      __PLAYWRIGHT_CHAT_SIGNALS__?: Array<unknown>;
+    }).__PLAYWRIGHT_CHAT_SIGNALS__;
+
+    (patchedWindow as unknown as {
+      __PLAYWRIGHT_CHAT_SIGNALS__?: Array<unknown>;
+    }).__PLAYWRIGHT_CHAT_SIGNALS__ = [Symbol("baseline")];
+
+    (globalThis as any).window = patchedWindow;
+    (globalThis as any).document = {
+      querySelector: vi.fn(() => null),
+      querySelectorAll: vi
+        .fn((selector: string) => {
+          if (selector === '[data-testid="message-assistant"]') {
+            return [assistantNode as HTMLElement];
+          }
+          return [];
+        })
+        .mockName("document.querySelectorAll"),
+    } as unknown as Document;
+
+    try {
+      const windowWithSignals = patchedWindow as unknown as {
+        __PLAYWRIGHT_CHAT_SIGNALS__?: Array<unknown>;
+      };
+      windowWithSignals.__PLAYWRIGHT_CHAT_SIGNALS__ = [
+        Symbol("baseline"),
+        Symbol("increment"),
+      ];
+      const result = predicate!(baseline!);
+      expect(result).toBe(true);
+    } finally {
+      if (originalDocument) {
+        (globalThis as any).document = originalDocument;
+      } else {
+        delete (globalThis as any).document;
+      }
+
+      if (originalWindow) {
+        (patchedWindow as unknown as {
+          __PLAYWRIGHT_CHAT_SIGNALS__?: Array<unknown>;
+        }).__PLAYWRIGHT_CHAT_SIGNALS__ = originalSignals;
+        (globalThis as any).window = originalWindow;
+      } else {
+        delete (globalThis as any).window;
+      }
+    }
   });
 });
 
@@ -2652,6 +3254,7 @@ describe("ChatPage generation helpers", () => {
       latestArtifactCount: 0,
       latestMessageId: null,
       latestMessageText: "",
+      latestMessageStatus: null,
     });
     expect(assistantLocator.count).toHaveBeenCalledOnce();
   });
@@ -2714,6 +3317,7 @@ describe("ChatPage generation helpers", () => {
       latestArtifactCount: 2,
       latestMessageId: 'assistant-1',
       latestMessageText: "Hello world",
+      latestMessageStatus: "completed",
     });
     expect(assistantLocator.count).toHaveBeenCalledOnce();
     expect(assistantLocator.nth).toHaveBeenCalledWith(2);
@@ -2774,6 +3378,7 @@ describe("ChatPage generation helpers", () => {
       latestArtifactCount: 0,
       latestMessageId: null,
       latestMessageText: "",
+      latestMessageStatus: null,
     } as const;
 
     const captureSpy = vi
@@ -2873,6 +3478,7 @@ describe("ChatPage generation helpers", () => {
         latestArtifactCount: 0,
         latestMessageId: null,
         latestMessageText: "",
+        latestMessageStatus: null,
       });
     const prepareSpy = vi.spyOn(chatPage as any, "prepareForGeneration");
     const composerSpy = vi
@@ -2957,6 +3563,7 @@ describe("ChatPage generation helpers", () => {
         latestArtifactCount: 0,
         latestMessageId: null,
         latestMessageText: "",
+        latestMessageStatus: null,
       });
     const prepareSpy = vi.spyOn(chatPage as any, "prepareForGeneration");
     const composerSpy = vi
@@ -3060,6 +3667,7 @@ describe("ChatPage generation helpers", () => {
       latestArtifactCount: 0,
       latestMessageId: null,
       latestMessageText: "",
+      latestMessageStatus: null,
     } as const;
 
     const captureSpy = vi
@@ -3202,6 +3810,7 @@ describe("ChatPage generation helpers", () => {
         latestArtifactCount: 0,
         latestMessageId: null,
         latestMessageText: "",
+        latestMessageStatus: null,
       });
 
     const originalExpect = ChatPage.expect;
@@ -3344,6 +3953,7 @@ describe("ChatPage generation helpers", () => {
       latestArtifactCount: 0,
       latestMessageId: null,
       latestMessageText: "",
+      latestMessageStatus: null,
     } as const;
 
     const captureSpy = vi

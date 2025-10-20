@@ -357,6 +357,27 @@ export function convertToUIMessages(messages: DBMessage[]): ChatMessage[] {
       .map(artifactToDataPart)
       .filter((part): part is UIMessagePart<CustomUIDataTypes, ChatTools> => part !== null);
 
+    /**
+     * Surface additional diagnostics when Playwright debugging is enabled so we
+     * can inspect the artefact pipeline directly from the server logs. Using
+     * `console.debug` keeps the signal lightweight while matching the
+     * `DEBUG=playwright` convention documented in the remediation plan.
+     */
+    const shouldEmitPlaywrightDebug = Boolean(
+      process.env.DEBUG?.split(",").some((token) => token.trim().includes("playwright")),
+    );
+
+    const emitPlaywrightDebug = (details: Record<string, unknown>) => {
+      if (!shouldEmitPlaywrightDebug) {
+        return;
+      }
+
+      console.debug("[convertToUIMessages] finance artefact snapshot", {
+        messageId: message.id,
+        ...details,
+      });
+    };
+
     type FinancePartRegistryEntry = {
       isTransient: boolean;
       replace: (
@@ -428,6 +449,13 @@ export function convertToUIMessages(messages: DBMessage[]): ChatMessage[] {
 
     baseParts.forEach((part) => registerFinancePart(dedupedBaseParts, part));
     artifactParts.forEach((part) => registerFinancePart(dedupedArtifactParts, part));
+
+    emitPlaywrightDebug({
+      basePartCount: baseParts.length,
+      artifactPartCount: artifactParts.length,
+      dedupedBasePartCount: dedupedBaseParts.length,
+      dedupedArtifactPartCount: dedupedArtifactParts.length,
+    });
 
     return {
       id: message.id,

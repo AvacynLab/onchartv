@@ -228,6 +228,17 @@ function getOrCreateInMemoryStore(): InMemoryStore {
   return shared;
 }
 
+/** Default title applied to the onboarding chat created for brand-new accounts. */
+const DEFAULT_INITIAL_CHAT_TITLE = "Welcome to Onchart";
+
+/**
+ * Friendly assistant greeting seeded into every brand-new chat so newly
+ * registered users immediately land on a populated conversation that confirms
+ * the workspace is ready for follow-up prompts.
+ */
+export const DEFAULT_INITIAL_CHAT_GREETING =
+  "Hello there! I'm your Onchart assistant. I can run market backtests, summarise documents, and answer follow-up questions.";
+
 /**
  * Persist Playwright-created credentials to disk so that independent Next.js
  * compilation graphs (server actions, route handlers, middleware) can converge
@@ -908,6 +919,109 @@ export async function saveMessages({ messages }: { messages: DBMessage[] }) {
     return await database.insert(message).values(messages);
   } catch (_error) {
     throw new ChatSDKError("bad_request:database", "Failed to save messages");
+  }
+}
+
+type CreateInitialChatInput = {
+  /** Identifier of the freshly created regular user. */
+  userId: string;
+  /** Optional override for the onboarding chat title. */
+  title?: string;
+  /**
+   * Custom assistant greeting injected into the seeded conversation. Tests can
+   * override this to validate specific copy without mutating the default
+   * product string.
+   */
+  greeting?: string;
+  /** Optional timestamp used to seed the chat and assistant message. */
+  createdAt?: Date;
+};
+
+type CreateInitialChatResult = {
+  /** Identifier of the seeded chat. */
+  chatId: string;
+  /** Identifier of the assistant greeting message. */
+  messageId: string;
+  /** Timestamp associated with both the chat and the assistant greeting. */
+  createdAt: Date;
+  /**
+   * Final title applied to the chat, useful for tests that want to assert the
+   * default label without reaching back into the database.
+   */
+  title: string;
+};
+
+/**
+ * Provision a deterministic onboarding chat for newly registered accounts so
+ * the chat sidebar and `/chat/:id` route have concrete data to render right
+ * after the credentials flow completes.
+ */
+export async function createInitialChat({
+  userId,
+  title = DEFAULT_INITIAL_CHAT_TITLE,
+  greeting = DEFAULT_INITIAL_CHAT_GREETING,
+  createdAt = new Date(),
+}: CreateInitialChatInput): Promise<CreateInitialChatResult> {
+  const chatId = generateUUID();
+  const messageId = generateUUID();
+  const timestamp = new Date(createdAt);
+
+  if (isTestEnvironment()) {
+    const store = getInMemoryStore();
+
+    const chatRecord: Chat = {
+      id: chatId,
+      createdAt: timestamp,
+      userId,
+      title,
+      visibility: "private",
+      lastContext: null,
+    };
+
+    store.chats.set(chatId, chatRecord);
+
+    store.messages.set(messageId, {
+      id: messageId,
+      chatId,
+      role: "assistant",
+      parts: [{ type: "text", text: greeting }],
+      attachments: [],
+      artifacts: [],
+      createdAt: timestamp,
+    });
+
+    return { chatId, messageId, createdAt: timestamp, title };
+  }
+
+  try {
+    const database = getRequiredDatabase();
+
+    await database.transaction(async (transaction) => {
+      await transaction.insert(chat).values({
+        id: chatId,
+        createdAt: timestamp,
+        userId,
+        title,
+        visibility: "private",
+      });
+
+      await transaction.insert(message).values({
+        id: messageId,
+        chatId,
+        role: "assistant",
+        parts: [{ type: "text", text: greeting }],
+        attachments: [],
+        artifacts: [],
+        createdAt: timestamp,
+      });
+    });
+
+    return { chatId, messageId, createdAt: timestamp, title };
+  } catch (_error) {
+    throw new ChatSDKError(
+      "bad_request:database",
+      "Failed to create initial chat"
+    );
   }
 }
 

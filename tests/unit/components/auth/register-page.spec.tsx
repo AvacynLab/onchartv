@@ -40,6 +40,8 @@ vi.mock("next/form", () => ({
 }));
 
 const replaceMock = vi.fn();
+const assignMock = vi.fn();
+let originalLocation: Location;
 vi.mock("next/navigation", () => ({
   useRouter: () => ({
     replace: replaceMock,
@@ -107,10 +109,25 @@ describe("RegisterPage", () => {
     registerActionMock.mockReset();
     updateSessionMock.mockReset();
     replaceMock.mockReset();
+    assignMock.mockReset();
+    originalLocation = window.location;
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: {
+        assign: assignMock,
+        href: "http://localhost/register",
+        origin: "http://localhost",
+        pathname: "/register",
+      } as unknown as Location,
+    });
   });
 
   afterEach(() => {
     setTimeoutSpy.mockRestore();
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: originalLocation,
+    });
   });
 
   it("refreshes the session and redirects to chat after a successful registration", async () => {
@@ -139,5 +156,13 @@ describe("RegisterPage", () => {
     await waitFor(() => {
       expect(replaceMock).toHaveBeenCalledWith("/chat/registered");
     });
+
+    await waitFor(() => {
+      expect(assignMock).toHaveBeenCalledWith("http://localhost/chat/registered");
+    });
+
+    expect(assignMock.mock.calls[0]?.[0]).toBe(
+      "http://localhost/chat/registered"
+    );
   });
 });

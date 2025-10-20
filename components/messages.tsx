@@ -17,6 +17,7 @@ import {
 import { financeMessageArtifactSchema } from "@/lib/artifacts/types";
 import * as featureFlags from "@/lib/feature-flags";
 import { logWarning } from "@/lib/logging";
+import { logPlaywrightStreamDebug } from "@/lib/playwright-debug";
 
 type MessagesProps = {
   chatId: string;
@@ -411,6 +412,21 @@ function PureMessages({
                 }, [])
               : [];
 
+            if (
+              financeFeatureEnabled &&
+              artifactCandidates.length > 0 &&
+              sanitizedArtifacts.length === 0
+            ) {
+              logWarning(
+                "chat:messages",
+                "[Messages] finance artefact candidates dropped after parsing",
+                {
+                  artifactCandidateCount: artifactCandidates.length,
+                  messageId: message.id,
+                }
+              );
+            }
+
             if (!financeFeatureEnabled && artifactCandidates.length > 0) {
               /**
                * When finance experiences are disabled the UI must stay silent
@@ -431,6 +447,16 @@ function PureMessages({
             } as ChatMessage;
 
             const invalidCount = financeFeatureEnabled ? invalidArtifacts.length : 0;
+
+            logPlaywrightStreamDebug("messages", "message-normalised", () => ({
+              messageId: message.id,
+              artifactCandidateCount: artifactCandidates.length,
+              sanitizedArtifactCount: sanitizedArtifacts.length,
+              financeFingerprintCount: financePartFingerprints.size,
+              deduplicatedPartCount: deduplicatedParts.length,
+              invalidArtifactCount: invalidCount,
+              financeFeatureEnabled,
+            }));
 
             return (
               <Fragment key={message.id}>
