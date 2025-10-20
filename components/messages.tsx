@@ -18,6 +18,7 @@ import { financeMessageArtifactSchema } from "@/lib/artifacts/types";
 import * as featureFlags from "@/lib/feature-flags";
 import { logWarning } from "@/lib/logging";
 import { logPlaywrightStreamDebug } from "@/lib/playwright-debug";
+import { deriveAssistantMessageStatus } from "@/lib/chat/message-status";
 
 type MessagesProps = {
   chatId: string;
@@ -156,6 +157,20 @@ function PureMessages({
    */
   const safeMessages = Array.isArray(messages) ? messages : messages ?? [];
   const safeVotes = Array.isArray(votes) ? votes : votes ?? [];
+
+  /**
+   * Locate the last assistant reply so we can surface a deterministic
+   * lifecycle attribute for inline regenerations that reuse the same DOM
+   * container.
+   */
+  const latestAssistantIndex = (() => {
+    for (let index = safeMessages.length - 1; index >= 0; index -= 1) {
+      if (safeMessages[index]?.role === "assistant") {
+        return index;
+      }
+    }
+    return -1;
+  })();
 
   /**
    * Evaluate the finance flag once per render. Tests can inject
@@ -446,6 +461,22 @@ function PureMessages({
               parts: deduplicatedParts,
             } as ChatMessage;
 
+            const derivedStatus = deriveAssistantMessageStatus({
+              index,
+              latestAssistantIndex,
+              chatStatus: status,
+              messageStatus: normalisedMessage.status,
+              role: normalisedMessage.role,
+            });
+
+            const messageForRender =
+              derivedStatus && derivedStatus !== normalisedMessage.status
+                ? ({
+                    ...normalisedMessage,
+                    status: derivedStatus,
+                  } as ChatMessage)
+                : normalisedMessage;
+
             const invalidCount = financeFeatureEnabled ? invalidArtifacts.length : 0;
 
             logPlaywrightStreamDebug("messages", "message-normalised", () => ({
@@ -466,7 +497,7 @@ function PureMessages({
                     status === "streaming" && safeMessages.length - 1 === index
                   }
                   isReadonly={isReadonly}
-                  message={normalisedMessage}
+                  message={messageForRender}
                   regenerate={regenerate}
                   requiresScrollPadding={
                     hasSentMessage && index === safeMessages.length - 1
