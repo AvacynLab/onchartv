@@ -471,10 +471,6 @@ export class ChatPage {
              */
             return true;
           }
-
-          if (loadingCount === 0 && !stopVisible) {
-            return true;
-          }
         }
 
         return false;
@@ -487,6 +483,15 @@ export class ChatPage {
       },
       { timeout: 60_000 }
     );
+
+    /**
+     * Inline edit submissions temporarily clear the trailing assistant reply
+     * before the regeneration begins streaming. Ensure a fresh assistant
+     * bubble is attached before continuing so downstream helpers never observe
+     * an empty timeline (which previously triggered "No assistant message"
+     * errors in the Playwright harness).
+     */
+    await expect(assistantMessages).not.toHaveCount(0, { timeout: 60_000 });
 
     /**
      * The assistant stream reuses the same container while piping tool results
@@ -853,9 +858,16 @@ export class ChatPage {
   }
 
   async getRecentAssistantMessage() {
-    const messageElements = await this.page
-      .getByTestId("message-assistant")
-      .all();
+    const assistantLocator = this.page.getByTestId("message-assistant");
+
+    /**
+     * Inline edit regenerations temporarily clear the assistant bubble before
+     * the new response attaches.  Wait for the element collection to repopulate
+     * so downstream assertions never observe an empty timeline.
+     */
+    await expect(assistantLocator).not.toHaveCount(0, { timeout: 60_000 });
+
+    const messageElements = await assistantLocator.all();
     const lastMessageElement = messageElements.at(-1);
 
     if (!lastMessageElement) {
@@ -1859,6 +1871,16 @@ export class ChatPage {
         return;
       }
 
+      if (assistantCount < baseline.count) {
+        /**
+         * Inline edit submissions briefly clear the trailing assistant reply
+         * before reattaching a fresh bubble.  Detect the drop immediately so
+         * the fallback acknowledges that streaming kicked off instead of
+         * idling until the replacement content finishes rendering.
+         */
+        return;
+      }
+
       if (spinnerCount > 0) {
         return;
       }
@@ -1924,8 +1946,16 @@ export class ChatPage {
 
       if (assistantCount > 0) {
         const latestAssistant = assistantLocator.nth(assistantCount - 1);
-        const [latestId, latestText, latestArtifactCount] = await Promise.all([
+        const [
+          latestId,
+          latestStatus,
+          latestText,
+          latestArtifactCount,
+        ] = await Promise.all([
           latestAssistant.getAttribute("data-message-id").catch(() => null),
+          latestAssistant
+            .getAttribute("data-message-status")
+            .catch(() => null),
           latestAssistant
             .getByTestId("message-content")
             .innerText()
@@ -1937,11 +1967,21 @@ export class ChatPage {
             .catch(() => 0),
         ]);
 
+        if (typeof latestStatus === "string" && latestStatus === "streaming") {
+          /**
+           * Inline edits reuse the existing assistant bubble while toggling its
+           * lifecycle flag to `streaming`.  Treat that attribute change as
+           * progress so the fallback no longer requires a DOM removal or text
+           * mutation to acknowledge the regeneration.
+           */
+          return;
+        }
+
         if (latestId && latestId !== baseline.latestMessageId) {
           return;
         }
 
-        if (latestText && latestText !== baseline.latestMessageText) {
+        if (latestText !== baseline.latestMessageText) {
           return;
         }
 

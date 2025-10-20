@@ -985,7 +985,17 @@ describe("ChatPage.waitForChatApiResponse", () => {
     const toastInnerText = vi.fn().mockResolvedValue("");
     const assistantCount = vi.fn().mockResolvedValue(1);
     const latestAssistant = {
-      getAttribute: vi.fn().mockResolvedValue("assistant-1"),
+      getAttribute: vi.fn().mockImplementation(async (attribute: string) => {
+        if (attribute === "data-message-id") {
+          return "assistant-1";
+        }
+
+        if (attribute === "data-message-status") {
+          return "completed";
+        }
+
+        return null;
+      }),
       getByTestId: vi.fn().mockReturnValue({
         innerText: vi.fn().mockResolvedValue("Thinking..."),
       }),
@@ -1315,6 +1325,285 @@ describe("ChatPage.waitForChatApiResponse", () => {
     expect(waitForTimeout).toHaveBeenCalled();
   });
 
+  it("considers an assistant removal as a streaming hint", async () => {
+    const toastWaitFor = vi.fn().mockImplementation(
+      () => new Promise(() => {})
+    );
+    const toastInnerText = vi.fn().mockResolvedValue("");
+    const assistantCount = vi
+      .fn()
+      .mockResolvedValueOnce(1)
+      .mockResolvedValueOnce(0)
+      .mockResolvedValue(0);
+    const latestAssistantGetAttribute = vi.fn().mockImplementation(
+      async (attribute: string) => {
+        if (attribute === "data-message-id") {
+          return "assistant-1";
+        }
+
+        if (attribute === "data-message-status") {
+          return "completed";
+        }
+
+        return null;
+      }
+    );
+    const latestAssistantText = vi.fn().mockResolvedValue("Original reply");
+    const latestAssistantArtifactCount = vi.fn().mockResolvedValue(0);
+    const latestAssistantLocator = {
+      getAttribute: latestAssistantGetAttribute,
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "message-content") {
+          return { innerText: latestAssistantText };
+        }
+        throw new Error(`Unexpected assistant test id: ${testId}`);
+      }),
+      locator: vi.fn(() => ({ count: latestAssistantArtifactCount })),
+    };
+    const assistantLocator = {
+      count: assistantCount,
+      nth: vi.fn(() => latestAssistantLocator),
+    };
+    const spinnerCount = vi.fn().mockResolvedValue(0);
+    const stopVisible = vi.fn().mockResolvedValue(false);
+    const sendVisible = vi.fn().mockResolvedValue(true);
+    const sendEnabled = vi.fn().mockResolvedValue(true);
+    const userCount = vi.fn().mockResolvedValue(1);
+    const evaluateSignals = vi.fn().mockResolvedValue(0);
+    const composerValue = vi.fn().mockResolvedValue("Edited message contents");
+    const suggestedActionsVisible = vi.fn().mockResolvedValue(false);
+    const waitForTimeout = vi.fn().mockResolvedValue(undefined);
+
+    const page = {
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "toast") {
+          return {
+            waitFor: toastWaitFor,
+            innerText: toastInnerText,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant") {
+          return assistantLocator as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant-loading") {
+          return {
+            count: spinnerCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "stop-button") {
+          return {
+            isVisible: stopVisible,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "send-button") {
+          return {
+            isVisible: sendVisible,
+            isEnabled: sendEnabled,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-user") {
+          return {
+            count: userCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: composerValue,
+            press: vi.fn().mockResolvedValue(undefined),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "suggested-actions") {
+          return {
+            isVisible: suggestedActionsVisible,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        throw new Error(`Unexpected test id: ${testId}`);
+      }),
+      locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+          return {
+            first: () => ({
+              waitFor: toastWaitFor,
+              innerText: toastInnerText,
+            }),
+          } as unknown as ReturnType<Page["locator"]>;
+        }
+
+        throw new Error(`Unexpected locator access: ${selector}`);
+      }),
+      waitForTimeout: waitForTimeout as unknown as Page["waitForTimeout"],
+      evaluate: evaluateSignals as unknown as Page["evaluate"],
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+    const baselineSnapshot = {
+      count: 1,
+      latestArtifactCount: 0,
+      latestMessageId: "assistant-1",
+      latestMessageText: "Original reply",
+    } as const;
+
+    await (chatPage as any).waitForUiStreamingFallback({
+      baseline: baselineSnapshot,
+      baselineUserMessageCount: 1,
+      baselineStopButtonVisible: false,
+      baselineSendButtonVisible: true,
+      baselineSendButtonEnabled: true,
+      baselineChatSignalCount: 0,
+      baselineComposerValue: "Edited message contents",
+      baselineSuggestedActionsVisible: false,
+      timeoutMs: 5_000,
+    });
+
+    expect(assistantCount).toHaveBeenCalledTimes(2);
+    expect(waitForTimeout).toHaveBeenCalled();
+  });
+
+  it("reconnait l'état streaming exposé sur la bulle assistant", async () => {
+    const toastWaitFor = vi.fn().mockImplementation(
+      () => new Promise(() => {})
+    );
+    const toastInnerText = vi.fn().mockResolvedValue("");
+    const assistantCount = vi.fn().mockResolvedValue(1);
+    const latestAssistantGetAttribute = vi.fn().mockImplementation(
+      async (attribute: string) => {
+        if (attribute === "data-message-id") {
+          return "assistant-1";
+        }
+
+        if (attribute === "data-message-status") {
+          return "streaming";
+        }
+
+        return null;
+      }
+    );
+    const latestAssistantText = vi.fn().mockResolvedValue("Original reply");
+    const latestAssistantArtifactCount = vi.fn().mockResolvedValue(0);
+    const latestAssistantLocator = {
+      getAttribute: latestAssistantGetAttribute,
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "message-content") {
+          return { innerText: latestAssistantText };
+        }
+        throw new Error(`Unexpected assistant test id: ${testId}`);
+      }),
+      locator: vi.fn(() => ({ count: latestAssistantArtifactCount })),
+    };
+    const spinnerCount = vi.fn().mockResolvedValue(0);
+    const stopVisible = vi.fn().mockResolvedValue(false);
+    const sendVisible = vi.fn().mockResolvedValue(true);
+    const sendEnabled = vi.fn().mockResolvedValue(true);
+    const userCount = vi.fn().mockResolvedValue(1);
+    const evaluateSignals = vi.fn().mockResolvedValue(0);
+    const composerValue = vi.fn().mockResolvedValue("Edited message contents");
+    const suggestedActionsVisible = vi.fn().mockResolvedValue(false);
+    const waitForTimeout = vi.fn().mockResolvedValue(undefined);
+
+    const page = {
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "toast") {
+          return {
+            waitFor: toastWaitFor,
+            innerText: toastInnerText,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant") {
+          return {
+            count: assistantCount,
+            nth: vi.fn().mockReturnValue(latestAssistantLocator),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant-loading") {
+          return {
+            count: spinnerCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "stop-button") {
+          return {
+            isVisible: stopVisible,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "send-button") {
+          return {
+            isVisible: sendVisible,
+            isEnabled: sendEnabled,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-user") {
+          return {
+            count: userCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: composerValue,
+            press: vi.fn().mockResolvedValue(undefined),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "suggested-actions") {
+          return {
+            isVisible: suggestedActionsVisible,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        throw new Error(`Unexpected test id: ${testId}`);
+      }),
+      locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+          return {
+            first: () => ({
+              waitFor: toastWaitFor,
+              innerText: toastInnerText,
+            }),
+          } as unknown as ReturnType<Page["locator"]>;
+        }
+
+        throw new Error(`Unexpected locator access: ${selector}`);
+      }),
+      waitForTimeout: waitForTimeout as unknown as Page["waitForTimeout"],
+      evaluate: evaluateSignals as unknown as Page["evaluate"],
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+    const baselineSnapshot = {
+      count: 1,
+      latestArtifactCount: 0,
+      latestMessageId: "assistant-1",
+      latestMessageText: "Original reply",
+    } as const;
+
+    await (chatPage as any).waitForUiStreamingFallback({
+      baseline: baselineSnapshot,
+      baselineUserMessageCount: 1,
+      baselineStopButtonVisible: false,
+      baselineSendButtonVisible: true,
+      baselineSendButtonEnabled: true,
+      baselineChatSignalCount: 0,
+      baselineComposerValue: "Edited message contents",
+      baselineSuggestedActionsVisible: false,
+      timeoutMs: 5_000,
+    });
+
+    expect(assistantCount).toHaveBeenCalled();
+    expect(waitForTimeout).not.toHaveBeenCalled();
+  });
+
   it("treats a disabled send button as evidence of streaming", async () => {
     const toastWaitFor = vi.fn().mockImplementation(
       () => new Promise(() => {})
@@ -1419,6 +1708,155 @@ describe("ChatPage.waitForChatApiResponse", () => {
 
     expect(sendVisible).toHaveBeenCalledTimes(2);
     expect(sendEnabled).toHaveBeenCalledTimes(2);
+    expect(waitForTimeout).toHaveBeenCalled();
+  });
+
+  it("reconnaît le retour d'un message assistant recréé après une édition", async () => {
+    const toastWaitFor = vi.fn().mockImplementation(
+      () => new Promise(() => {})
+    );
+    const toastInnerText = vi.fn().mockResolvedValue("");
+    const assistantCount = vi
+      .fn()
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(0)
+      .mockResolvedValue(1);
+    const latestAssistantGetAttribute = vi.fn().mockImplementation(
+      async (attribute: string) => {
+        if (attribute === "data-message-id") {
+          return "assistant-new";
+        }
+
+        if (attribute === "data-message-status") {
+          return "completed";
+        }
+
+        return null;
+      }
+    );
+    const latestAssistantText = vi
+      .fn()
+      .mockResolvedValue("Updated assistant reply");
+    const latestAssistantArtifactCount = vi.fn().mockResolvedValue(0);
+    const latestAssistantLocator = {
+      getAttribute: latestAssistantGetAttribute,
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "message-content") {
+          return { innerText: latestAssistantText };
+        }
+        throw new Error(`Unexpected assistant test id: ${testId}`);
+      }),
+      locator: vi.fn(() => ({ count: latestAssistantArtifactCount })),
+    };
+    const spinnerCount = vi.fn().mockResolvedValue(0);
+    const stopVisible = vi.fn().mockResolvedValue(false);
+    const sendVisible = vi.fn().mockResolvedValue(true);
+    const sendEnabled = vi.fn().mockResolvedValue(true);
+    const userCount = vi.fn().mockResolvedValue(1);
+    const evaluateSignals = vi.fn().mockResolvedValue(0);
+    const composerValue = vi
+      .fn()
+      .mockResolvedValue("Edited message contents");
+    const suggestedActionsVisible = vi.fn().mockResolvedValue(false);
+    const waitForTimeout = vi.fn().mockResolvedValue(undefined);
+
+    const page = {
+      getByTestId: vi.fn((testId: string) => {
+        if (testId === "toast") {
+          return {
+            waitFor: toastWaitFor,
+            innerText: toastInnerText,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant") {
+          return {
+            count: assistantCount,
+            nth: vi.fn().mockReturnValue(latestAssistantLocator),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-assistant-loading") {
+          return {
+            count: spinnerCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "stop-button") {
+          return {
+            isVisible: stopVisible,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "send-button") {
+          return {
+            isVisible: sendVisible,
+            isEnabled: sendEnabled,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "message-user") {
+          return {
+            count: userCount,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "multimodal-input") {
+          return {
+            inputValue: composerValue,
+            press: vi.fn().mockResolvedValue(undefined),
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        if (testId === "suggested-actions") {
+          return {
+            isVisible: suggestedActionsVisible,
+          } as unknown as ReturnType<Page["getByTestId"]>;
+        }
+
+        throw new Error(`Unexpected test id: ${testId}`);
+      }),
+      locator: vi.fn((selector: string) => {
+        if (selector === '[data-testid="toast"], #automation-toast-bridge') {
+          return {
+            first: () => ({
+              waitFor: toastWaitFor,
+              innerText: toastInnerText,
+            }),
+          } as unknown as ReturnType<Page["locator"]>;
+        }
+
+        throw new Error(`Unexpected locator access: ${selector}`);
+      }),
+      waitForTimeout: waitForTimeout as unknown as Page["waitForTimeout"],
+      evaluate: evaluateSignals as unknown as Page["evaluate"],
+    } satisfies Partial<Page>;
+
+    const chatPage = new ChatPage(page as Page);
+    const baselineSnapshot = {
+      count: 1,
+      latestArtifactCount: 0,
+      latestMessageId: "assistant-original",
+      latestMessageText: "Initial reply",
+    } as const;
+
+    await expect(
+      (chatPage as any).waitForUiStreamingFallback({
+        baseline: baselineSnapshot,
+        baselineUserMessageCount: 1,
+        baselineStopButtonVisible: false,
+        baselineSendButtonVisible: true,
+        baselineSendButtonEnabled: true,
+        baselineChatSignalCount: 0,
+        baselineComposerValue: "Edited message contents",
+        baselineSuggestedActionsVisible: false,
+        timeoutMs: 5_000,
+      })
+    ).resolves.toBeUndefined();
+
+    expect(assistantCount).toHaveBeenCalledTimes(3);
+    expect(latestAssistantGetAttribute).toHaveBeenCalled();
+    expect(latestAssistantText).toHaveBeenCalled();
     expect(waitForTimeout).toHaveBeenCalled();
   });
 
@@ -2226,7 +2664,17 @@ describe("ChatPage generation helpers", () => {
       count: vi.fn().mockResolvedValue(2),
     };
     const lastAssistantMessage = {
-      getAttribute: vi.fn().mockResolvedValue("assistant-1"),
+      getAttribute: vi.fn().mockImplementation(async (attribute: string) => {
+        if (attribute === "data-message-id") {
+          return "assistant-1";
+        }
+
+        if (attribute === "data-message-status") {
+          return "completed";
+        }
+
+        return null;
+      }),
       getByTestId: vi
         .fn()
         .mockImplementation((testId: string) => {

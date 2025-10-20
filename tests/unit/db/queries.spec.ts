@@ -1,3 +1,5 @@
+import fs from "node:fs";
+
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
@@ -12,6 +14,7 @@ import type {
 } from "../../../lib/db/queries";
 import { ChatSDKError } from "../../../lib/errors";
 import { resolveCredentialsUser } from "../../../lib/auth/credentials-verify";
+import * as logging from "../../../lib/logging";
 import type {
   BacktestMetrics,
   BacktestTrade,
@@ -73,6 +76,114 @@ describe("finance queries", () => {
 
     reloadedQueries.__resetInMemoryDbForTests();
     queries = reloadedQueries;
+  });
+
+  it("shares transient chat messages across module reloads", async () => {
+    const chatId = "module-reload-chat";
+    const createdAt = new Date("2024-02-01T00:00:00.000Z");
+
+    await queries.saveMessages({
+      messages: [
+        {
+          id: "user-reload",
+          chatId,
+          role: "user",
+          parts: [{ type: "text", text: "Initial prompt" }],
+          attachments: [],
+          artifacts: [],
+          createdAt,
+        },
+      ],
+    });
+
+    let messages = await queries.getMessagesByChatId({ id: chatId });
+    expect(messages).toHaveLength(1);
+
+    vi.resetModules();
+    vi.mock("server-only", () => ({}));
+
+    const reloadedQueries = await import("../../../lib/db/queries");
+    messages = await reloadedQueries.getMessagesByChatId({ id: chatId });
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.id).toBe("user-reload");
+
+    reloadedQueries.__resetInMemoryDbForTests();
+    queries = reloadedQueries;
+  });
+
+  it("ignore les utilisateurs persistés lorsque le cache JSON est vide", async () => {
+    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const existsSpy = vi.spyOn(fs, "existsSync").mockReturnValue(true);
+    const readSpy = vi.spyOn(fs, "readFileSync").mockReturnValue("   ");
+
+    queries.__resetInMemoryDbForTests();
+    const users = await queries.getUser("stale@example.com");
+    expect(users).toEqual([]);
+
+    const matchingCall = consoleSpy.mock.calls.find(
+      ([label, payload]) =>
+        label === "[db:queries]" &&
+        typeof payload === "object" &&
+        payload !== null &&
+        "message" in payload &&
+        (payload as { message?: unknown }).message ===
+          "Skipped hydrating Playwright users because the persisted cache was empty"
+    );
+
+    expect(matchingCall).toBeDefined();
+
+    readSpy.mockRestore();
+    existsSpy.mockRestore();
+    consoleSpy.mockRestore();
+  });
+
+  it("journalise un avertissement lorsqu'un enregistrement persisté est incomplet", async () => {
+    const warnSpy = vi
+      .spyOn(logging, "logWarning")
+      .mockImplementation(() => ({
+        context: "db:queries",
+        level: "warn",
+        message: "stub",
+        timestamp: new Date().toISOString(),
+      }));
+
+    const existsSpy = vi.spyOn(fs, "existsSync").mockReturnValue(true);
+    const validRecord = {
+      id: "user-valid",
+      email: "valid@example.com",
+      password: "$2a$04$hash",
+      plaintext: "PlainSecret1!",
+    };
+    const invalidRecord = {
+      id: "",
+      email: "missing-id@example.com",
+      password: null,
+    };
+    const readSpy = vi
+      .spyOn(fs, "readFileSync")
+      .mockReturnValue(JSON.stringify([validRecord, invalidRecord]));
+
+    queries.__resetInMemoryDbForTests();
+
+    const [user] = await queries.getUser("valid@example.com");
+
+    expect(user?.id).toBe(validRecord.id);
+    expect(user?.email).toBe(validRecord.email);
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "db:queries",
+      "Skipped persisted Playwright user records missing required fields",
+      expect.objectContaining({
+        cachePath: expect.stringContaining("playwright-users.json"),
+        skippedRecords: 1,
+      })
+    );
+
+    readSpy.mockRestore();
+    existsSpy.mockRestore();
+    warnSpy.mockRestore();
   });
 
   it("allows credentials verification after failed attempts refresh the user hash", async () => {
