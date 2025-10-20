@@ -85,11 +85,24 @@ export type CustomUIDataTypes = {
   financeScreen: FinanceScreenArtifact;
 };
 
+/**
+ * Lifecycle states that the Vercel AI SDK emits while streaming chat bubbles.
+ * The SDK currently toggles between well-known string literals such as
+ * `"streaming"` and `"completed"`, yet the surface is intentionally open so
+ * future releases can add more statuses (for tool-calling, hand-offs, …).
+ * Using a nominal string intersection preserves autocomplete for the existing
+ * states without preventing downstream callers from handling new values.
+ */
+export type ChatMessageStatus =
+  | "streaming"
+  | "completed"
+  | (string & {});
+
 export type ChatMessage = UIMessage<
   MessageMetadata,
   CustomUIDataTypes,
   ChatTools
->;
+> & { status?: ChatMessageStatus };
 
 export type Attachment = {
   name: string;

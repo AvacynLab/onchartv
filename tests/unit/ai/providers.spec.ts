@@ -183,6 +183,57 @@ describe("ai provider configuration", () => {
     expect(aggregated).toContain("It's just blue duh!");
   });
 
+  it("prefers user prompts appended after tool responses", async () => {
+    process.env.PLAYWRIGHT = "true";
+    process.env.NEXT_PHASE = "phase-production-build";
+
+    const { myProvider } = await import("@/lib/ai/providers");
+    const chatModel = myProvider.languageModel("chat-model");
+
+    const prompt: ModelMessage[] = [
+      TEST_PROMPTS.USER_GRASS,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "It's just green duh!" }],
+      },
+      {
+        /**
+         * Simulate the inline finance mocks returning a chart artefact before
+         * we submit a clarification. The regression caused the tool payload to
+         * overshadow the edited question.
+         */
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "call_finance_chart",
+            toolName: "tool.finance.chart.fetch",
+            output: { type: "json", value: { overlays: [] } },
+          },
+        ],
+      },
+      TEST_PROMPTS.USER_SKY,
+    ];
+
+    const { stream } = await chatModel.doStream({ prompt } as any);
+    const reader = stream.getReader();
+    let aggregated = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      const chunk = value as LanguageModelV2StreamPart | null;
+      if (chunk?.type === "text-delta") {
+        aggregated += String(chunk.delta ?? "");
+      }
+    }
+
+    expect(aggregated).toContain("It's just blue duh!");
+  });
+
   it("prefers the latest text fragment when edited prompts include multiple parts", async () => {
     process.env.PLAYWRIGHT = "true";
     process.env.NEXT_PHASE = "phase-production-build";
