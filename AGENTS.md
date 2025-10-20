@@ -53,6 +53,7 @@ Objectif : éliminer les trois échecs Playwright toujours présents dans les lo
    * [ ] Exécuter `tests/e2e/session.test.ts:56` seul en conservant le `trace.zip` et relever :
        - [ ] la réponse de l’action `/register` (`network` tab) et le payload JSON retourné,
        - [ ] les éventuels toasts ou erreurs de validation dans la console.
+   * [x] Limiter la tentative de `updateSession()` à 3s côté client avant de lancer `router.replace` pour éviter les blocages Playwright (2025-11-10).
    * [ ] Vérifier côté serveur (`app/(auth)/register/page.tsx`, `app/(auth)/register/actions.ts`) que le flux crée un chat initial via `createInitialChat` et appelle `redirect` après `revalidatePath`; contrôler la cohérence avec `tests/setup/auth.setup.ts` (callbacks `onRegenerated`).
    * [ ] Introduire, si nécessaire, un `await ensureChatSurface` post-action ou un `router.refresh` côté client pour forcer l’affichage du composer ; documenter ce comportement dans un test RTL (`tests/unit/components/auth/register-page.spec.tsx`).
    * [ ] Rejouer `tests/e2e/session.test.ts:56` et vérifier que `waitForChatDashboard` voit bien `getByPlaceholder("Send a message...")` dans les 60s ; si besoin, ajuster le helper pour attendre la création du premier chat (`expect.poll` sur `message-assistant`).
@@ -371,3 +372,4 @@ Si tu veux un lot de **patchs diff prêts à coller** pour les fichiers clés (`
 - **2025-11-07** — Restauration automatique du snapshot `state.json` après le test Playwright de résilience des identifiants afin que les suites routes/E2E retrouvent la session authentifiée, et assouplissement du détecteur de streaming (`tests/pages/chat.ts`) pour considérer les vidages de bulles assistants comme un signal valide. Vérifié via `pnpm exec vitest run tests/unit/utils/load-credentials.spec.ts --reporter=basic`.
 - **2025-11-08** — Analyse des échecs Playwright persistants (finance backtest a11y, chat edit/resubmit, register redirect) et élaboration d’un plan d’attaque détaillé avec étapes d’investigation, correctifs ciblés et validation finale.
 - **2025-11-09** — Raffinement du plan 2025-11-08 : ajout des sous-étapes de diagnostic (captures DOM, instrumentation Playwright/client, audit du flux register) et définition des validations par tests ciblés avant relance complète de `pnpm e2e`.
+- **2025-11-10** — Encapsulation de `updateSession()` côté register avec une course timeout 3s + Vitest ciblé pour éviter les blocages Playwright avant la redirection `/chat`.

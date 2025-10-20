@@ -16,6 +16,7 @@ import { type RegisterActionState, register } from "../actions";
  * ample time to attach in hermetic runs.
  */
 const TOAST_GRACE_PERIOD_MS = 5000;
+const SESSION_REFRESH_TIMEOUT_MS = 3000;
 
 export default function Page() {
   const router = useRouter();
@@ -50,14 +51,35 @@ export default function Page() {
         /**
          * Refresh the credentials session before redirecting to the dashboard
          * so authenticated routes stay accessible during the subsequent
-         * Playwright steps.
+         * Playwright steps.  Cap the wait time so CI does not stall when the
+         * dev server takes longer than expected to resolve the update request.
          */
         const destination = state.redirectTo ?? "/chat";
 
-        try {
-          await updateSession();
-        } catch (error) {
-          console.error("Failed to refresh session before redirecting", error);
+        if (typeof updateSession === "function") {
+          const refreshPromise = updateSession();
+          let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
+          try {
+            await Promise.race([
+              refreshPromise.catch((error) => {
+                console.error(
+                  "Failed to refresh session before redirecting",
+                  error
+                );
+              }),
+              new Promise<void>((resolve) => {
+                timeoutHandle = setTimeout(
+                  resolve,
+                  SESSION_REFRESH_TIMEOUT_MS
+                );
+              }),
+            ]);
+          } finally {
+            if (timeoutHandle) {
+              clearTimeout(timeoutHandle);
+            }
+          }
         }
 
         /**
