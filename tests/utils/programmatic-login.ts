@@ -27,6 +27,8 @@ export type AutomationCookie = {
   name: string;
   value: string;
   url: string;
+  /** Optional domain emitted by the `Set-Cookie` header. */
+  domain?: string;
   path?: string;
   expires?: number;
   httpOnly?: boolean;
@@ -117,9 +119,7 @@ function parseSetCookie(cookieHeader: string, baseURL: string): AutomationCookie
         break;
       }
       case "domain": {
-        // Domain-scoped cookies are compatible with Playwright when a URL is
-        // provided. We do not propagate the attribute to keep the injected
-        // cookie definition minimal.
+        cookie.domain = attributeValue;
         break;
       }
       case "expires": {
@@ -237,6 +237,15 @@ export async function loginWithCredentialsCallback(
         email,
         password,
       },
+      /**
+       * Prevent Playwright from following the 302 that NextAuth emits even when
+       * `redirect=false` is provided. Allowing the redirect caused the helper
+       * to await the `/chat` navigation which frequently exceeded the
+       * 15&nbsp;s timeout while the dev server was still compiling.  Limiting the
+       * redirect chain keeps the callback hermetic and mirrors the behaviour we
+       * expect from the JSON response mode.
+       */
+      maxRedirects: 0,
       timeout: 15_000,
     });
 

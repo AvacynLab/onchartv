@@ -12,6 +12,7 @@ const stopMock = vi.fn();
 const regenerateMock = vi.fn();
 const resumeStreamMock = vi.fn();
 const toastMock = vi.fn();
+const logPlaywrightStreamDebugMock = vi.fn();
 
 let mockMessages: ChatMessage[] | undefined;
 let mockStatus: "idle" | "loading" | "streaming" | "submitted";
@@ -27,6 +28,12 @@ let searchParamsMock: { get: (key: string) => string | null } | null = null;
 
 vi.mock("@/components/toast", () => ({
   toast: (...args: unknown[]) => toastMock(...args),
+}));
+
+vi.mock("@/lib/playwright-debug", () => ({
+  logPlaywrightStreamDebug: (
+    ...args: Parameters<typeof logPlaywrightStreamDebugMock>
+  ) => logPlaywrightStreamDebugMock(...args),
 }));
 
 vi.mock("@/hooks/use-chat-visibility", () => ({
@@ -192,6 +199,7 @@ beforeEach(() => {
   regenerateMock.mockReset();
   resumeStreamMock.mockReset();
   toastMock.mockReset();
+  logPlaywrightStreamDebugMock.mockReset();
   setDataStreamMock.mockReset();
   shouldExposeDataStream = true;
   searchParamsMock = null;
@@ -447,5 +455,32 @@ describe("Chat", () => {
     });
 
     expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("journalise le nombre de messages après l'initialisation du hook", () => {
+    render(
+      <Chat
+        autoResume={false}
+        id="chat-instrumentation"
+        initialChatModel="model"
+        initialLastContext={undefined}
+        initialMessages={[]}
+        initialVisibilityType="private"
+        isReadonly={false}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    expect(logPlaywrightStreamDebugMock).toHaveBeenCalledWith(
+      "chat-component",
+      "status-change",
+      expect.any(Function)
+    );
+
+    const payloadFactory = logPlaywrightStreamDebugMock.mock.calls.at(-1)?.[2];
+    expect(typeof payloadFactory).toBe("function");
+
+    const payload = payloadFactory?.();
+    expect(payload).toEqual({ status: "idle", messageCount: 0 });
   });
 });

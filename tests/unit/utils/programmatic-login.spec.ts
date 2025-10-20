@@ -160,6 +160,7 @@ describe("loginWithCredentialsCallback", () => {
 
     const [, options] = postSpy.mock.calls[0];
     expect(options?.form).toMatchObject({ redirect: "false", json: "true" });
+    expect(options?.maxRedirects).toBe(0);
   });
 
   it("polls for the session cookie and logs when none is issued", async () => {

@@ -16,6 +16,7 @@ import { ChatSDKError } from "@/lib/errors";
 import type { Attachment, ChatMessage, MessageMetadata } from "@/lib/types";
 import { messageMetadataSchema } from "@/lib/types";
 import type { AppUsage } from "@/lib/usage";
+import { logPlaywrightStreamDebug } from "@/lib/playwright-debug";
 import { fetcher, fetchWithErrorHandlers, generateUUID } from "@/lib/utils";
 import {
   ChatComposerPrefillOptions,
@@ -181,6 +182,17 @@ export function Chat({
         return;
       }
 
+      logPlaywrightStreamDebug("chat-component", "data-part", () => ({
+        partType:
+          typeof dataPart === "object" && dataPart && "type" in dataPart
+            ? (dataPart as { type?: unknown }).type
+            : typeof dataPart,
+        hasData:
+          typeof dataPart === "object" && dataPart && "data" in dataPart
+            ? Boolean((dataPart as { data?: unknown }).data)
+            : false,
+      }));
+
       setDataStream((previousParts) => {
         const safePreviousParts = Array.isArray(previousParts)
           ? previousParts
@@ -207,6 +219,21 @@ export function Chat({
       }
     },
   });
+
+  /**
+   * Nous capturons le nombre de messages après l'initialisation du hook
+   * `useChat` pour éviter tout accès à des variables non définies pendant la
+   * phase de montage SSR (observé lors des tests Playwright ciblant la page
+   * d'accessibilité finance).
+   */
+  const messageCount = Array.isArray(messages) ? messages.length : 0;
+
+  useEffect(() => {
+    logPlaywrightStreamDebug("chat-component", "status-change", () => ({
+      status,
+      messageCount,
+    }));
+  }, [status, messageCount]);
 
   const searchParams = useSearchParams();
   /**

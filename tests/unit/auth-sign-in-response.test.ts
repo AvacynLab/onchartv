@@ -39,7 +39,7 @@ test.describe("didSignInSucceed", () => {
     );
 
     const redirectResponse = new Response(null, {
-      status: 200,
+      status: 302,
       headers: { Location: "http://localhost:3000/login?callbackUrl=%2F" },
     });
 
@@ -53,6 +53,19 @@ test.describe("didSignInSucceed", () => {
       didSignInSucceed({ ok: true, url: "/login" }),
       false,
       "Objects pointing to the login route should be treated as failures",
+    );
+  });
+
+  test("treats redirect responses pointing to the dashboard as successes", () => {
+    const redirectResponse = new Response(null, {
+      status: 302,
+      headers: { Location: "http://localhost:3000/chat/abc123" },
+    });
+
+    assert.equal(
+      didSignInSucceed(redirectResponse),
+      true,
+      "Redirects towards the chat dashboard should mark the login as successful",
     );
   });
 });

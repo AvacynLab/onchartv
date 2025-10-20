@@ -269,12 +269,21 @@ export async function POST(request: Request): Promise<Response> {
       equityCurve: result.equityCurve,
     });
 
+    /**
+     * Convert the persisted epoch range back to ISO strings so downstream
+     * consumers (UI + tests) receive the same shape as the chat tools emit.
+     */
+    const responsePeriod = {
+      from: new Date(range.from * 1000).toISOString(),
+      to: new Date(range.to * 1000).toISOString(),
+    };
+
     return Response.json({
       type: "finance.backtest",
       runId: run.id,
       symbol: metadata.symbol,
       timeframe,
-      period: range,
+      period: responsePeriod,
       strategy: {
         id: strategyId,
         versionId: strategyVersion.id,
