@@ -34,22 +34,28 @@ Voici ta **liste de tâches exhaustive**, agent. Elle est calée sur la **derni�
 Objectif : éliminer les trois échecs Playwright toujours présents dans les logs CI du 2025-11-08 (`finance artefacts accessibility`, `chat edit/resubmit`, `register new account`). Chaque lot précise le diagnostic attendu, les investigations à mener et le livrable de validation.
 
 1. **Finance — accessibilité des artefacts backtest**
-   * [ ] Reproduire localement l’absence de `data-testid="finance-backtest-artifact"` dans le flux `/finance/backtest` (journal côté serveur + capture DOM dans Playwright).
-   * [ ] Inspecter le pipeline de rendu (`lib/ai/messages`, `components/messages`, artefacts finance) pour identifier les conditions qui filtrent l’artefact (hash déduplication, visibilité conditionnelle, gating par feature flag).
-   * [ ] Corriger la condition fautive (ou l’ordre des opérations) pour garantir qu’au moins un artefact backtest est monté et focusable, puis ajouter un test (RTL ou unit) validant l’accessibilité (présence du tableau des trades).
-   * [ ] Vérifier via Playwright ciblé (`tests/e2e/accessibility.spec.ts`) que l’artefact est visible et focusable.
+   * [ ] Rejouer localement `tests/e2e/accessibility.spec.ts` en mode `DEBUG=playwright` et capturer le DOM juste après `GET /api/finance/backtest` pour confirmer l’absence de `<div data-testid="finance-backtest-artifact">` (utiliser `page.screenshot` + `console.debug` côté serveur dans `lib/ai/messages/convertToUIMessages`).
+   * [ ] Cartographier le pipeline de rendu :
+     - [ ] Inspecter `lib/ai/messages.ts` et `convertToUIMessages` pour l’état des `data-finance-backtest` parts après la déduplication par hash.
+     - [ ] Vérifier dans `components/messages.tsx` (sections `financePartFingerprints` et `sanitizedArtifacts`) quelles branches peuvent vider `artifactCandidates` lorsque plusieurs payloads identiques sont reçus.
+     - [ ] Examiner `components/finance/backtest-report-artifact.tsx` afin de confirmer les conditions de rendu/aria (`hidden`, `aria-hidden`, `tabIndex`).
+   * [ ] Corriger la condition fautive (ordre de filtre, hash incorrect ou gating `financeFeatureEnabled`) de sorte qu’au moins un artefact backtest persiste et possède un `table` focusable ; ajouter un test React Testing Library qui monte `Messages` avec deux parts backtest et vérifie `getByTestId("finance-backtest-artifact")` + focus sur le tableau.
+   * [ ] Rejouer `tests/e2e/accessibility.spec.ts` isolé pour valider que l’artefact est visible, puis archiver la capture `trace.zip` associée dans les notes CI.
 
 2. **Chat — réédition et redémarrage du streaming**
-   * [ ] Instrumenter `ChatPage.waitForUiStreamingFallback` et les composants front (`components/chat.tsx`, `components/messages.tsx`) afin de comprendre pourquoi le compteur de messages assistants n’évolue plus après une édition (logs temporaires côté Playwright + console côté client).
-   * [ ] Ajuster la logique de polling (prise en compte des transitions pending/streaming, nouveaux events SSE) pour lever le timeout et garantir qu’une nouvelle réponse assistant est affichée.
-   * [ ] Couvrir le scénario par un test automatisé (Vitest jsdom ou Playwright ciblé) qui édite un message et confirme l’apparition du nouveau contenu.
-   * [ ] Rejouer `tests/e2e/chat.test.ts:83` pour valider la correction.
+   * [ ] Ajouter une instrumentation temporaire dans `tests/pages/chat.ts` (`console.info` avec horodatage) autour de `prepareForGeneration`, `waitForUiStreamingFallback` et `pollForStreamingChange` pour observer les valeurs `assistantCount`, `signalCount`, `spinnerCount` pendant l’édition (retirer les logs avant commit final).
+   * [ ] Comparer ces mesures avec les événements côté client : instrumenter `components/chat.tsx` et `components/messages.tsx` pour journaliser la succession `pending → streaming → completed` et détecter si le SSE `token` s’arrête avant que `messages` soit réhydraté.
+   * [ ] Adapter la logique `pollForStreamingChange` : vérifier la prise en compte des états `spinnerCount === 0` mais `assistantCount === baseline.count` en présence d’un message avec `latestMessageId` identique ; considérer l’écoute de `data-message-status="streaming"` ou du compteur `__PLAYWRIGHT_CHAT_SIGNALS__`.
+   * [ ] Ajouter un test ciblé (Vitest jsdom dans `tests/unit/pages/chat-page.spec.ts` ou Playwright minimal) qui édite un message et s’assure que `getRecentAssistantMessage().content` évolue.
+   * [ ] Rejouer `tests/e2e/chat.test.ts:83` avec `DEBUG=pw:api` pour confirmer la disparition du timeout, puis supprimer les journaux temporaires.
 
 3. **Session — inscription utilisateur et redirection**
-   * [ ] Utiliser Playwright (ou le mode debug) pour observer la requête `register` et les redirections afin de comprendre pourquoi la zone de composition n’est plus montée (vérifier également la création du chat initial côté API).
-   * [ ] Harmoniser la promesse serveur (action/register + navigation) : garantir que la création du compte déclenche la génération du premier chat et que la page `/chat/:id` est affichée avant les assertions Playwright.
-   * [ ] Étendre `tests/unit/components/auth/register-page.spec.tsx` ou ajouter un test d’intégration pour capturer le flux « succès ».
-   * [ ] Valider via `tests/e2e/session.test.ts:56` que la redirection affiche bien le composer (`getByPlaceholder("Send a message...")`).
+   * [ ] Exécuter `tests/e2e/session.test.ts:56` seul en conservant le `trace.zip` et relever :
+       - [ ] la réponse de l’action `/register` (`network` tab) et le payload JSON retourné,
+       - [ ] les éventuels toasts ou erreurs de validation dans la console.
+   * [ ] Vérifier côté serveur (`app/(auth)/register/page.tsx`, `app/(auth)/register/actions.ts`) que le flux crée un chat initial via `createInitialChat` et appelle `redirect` après `revalidatePath`; contrôler la cohérence avec `tests/setup/auth.setup.ts` (callbacks `onRegenerated`).
+   * [ ] Introduire, si nécessaire, un `await ensureChatSurface` post-action ou un `router.refresh` côté client pour forcer l’affichage du composer ; documenter ce comportement dans un test RTL (`tests/unit/components/auth/register-page.spec.tsx`).
+   * [ ] Rejouer `tests/e2e/session.test.ts:56` et vérifier que `waitForChatDashboard` voit bien `getByPlaceholder("Send a message...")` dans les 60s ; si besoin, ajuster le helper pour attendre la création du premier chat (`expect.poll` sur `message-assistant`).
 
 4. **Validation finale**
    * [ ] Exécuter `pnpm exec playwright test tests/e2e/accessibility.spec.ts tests/e2e/chat.test.ts:83 tests/e2e/session.test.ts:56` (ou les blocs équivalents) jusqu’à obtenir un résultat vert.
@@ -364,3 +370,4 @@ Si tu veux un lot de **patchs diff prêts à coller** pour les fichiers clés (`
 - **2025-11-06** — Stabilisation du pont vers `lib/logging` : cache global tenant compte des `vi.spyOn`, ajustements de `loadPersistedUsers` pour réémettre les avertissements avec l’instance espionnée, et passage complet de `pnpm test` confirmant les cas JSON corrompus/incomplets (`tests/unit/db/queries*.spec.ts`).
 - **2025-11-07** — Restauration automatique du snapshot `state.json` après le test Playwright de résilience des identifiants afin que les suites routes/E2E retrouvent la session authentifiée, et assouplissement du détecteur de streaming (`tests/pages/chat.ts`) pour considérer les vidages de bulles assistants comme un signal valide. Vérifié via `pnpm exec vitest run tests/unit/utils/load-credentials.spec.ts --reporter=basic`.
 - **2025-11-08** — Analyse des échecs Playwright persistants (finance backtest a11y, chat edit/resubmit, register redirect) et élaboration d’un plan d’attaque détaillé avec étapes d’investigation, correctifs ciblés et validation finale.
+- **2025-11-09** — Raffinement du plan 2025-11-08 : ajout des sous-étapes de diagnostic (captures DOM, instrumentation Playwright/client, audit du flux register) et définition des validations par tests ciblés avant relance complète de `pnpm e2e`.
