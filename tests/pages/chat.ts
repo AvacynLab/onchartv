@@ -2157,6 +2157,16 @@ export class ChatPage {
         return;
       }
 
+      if (assistantCount < baseline.count) {
+        /**
+         * Inline edit submissions briefly clear the trailing assistant reply
+         * before reattaching a fresh bubble.  Detect the drop immediately so
+         * the fallback acknowledges that streaming kicked off instead of
+         * idling until the replacement content finishes rendering.
+         */
+        return;
+      }
+
       if (spinnerCount > 0) {
         logResolution("spinner-visible", { spinnerCount });
         return;
@@ -2294,6 +2304,16 @@ export class ChatPage {
             logResolution("latest-status-initialised", { latestStatus });
             return;
           }
+        }
+
+        if (typeof latestStatus === "string" && latestStatus === "streaming") {
+          /**
+           * Inline edits reuse the existing assistant bubble while toggling its
+           * lifecycle flag to `streaming`.  Treat that attribute change as
+           * progress so the fallback no longer requires a DOM removal or text
+           * mutation to acknowledge the regeneration.
+           */
+          return;
         }
 
         if (latestId && latestId !== baseline.latestMessageId) {
