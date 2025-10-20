@@ -367,28 +367,32 @@ function resolveLatestRelevantMessage(
   prompt: ModelMessage[]
 ): ModelMessage | null {
   /**
-   * Tool responses arrive immediately before the assistant synthesises the
-   * final answer. Prioritise those payloads so the inline mocks can emit
-   * follow-up text without re-triggering the tool dispatch. When no tool
-   * result is present we fall back to the latest user-authored message so edit
-   * flows honour the freshly submitted prompt. The terminal entry remains the
-   * final fallback to keep the fixtures permissive for any future payload
-   * shapes.
+   * Tool responses generally precede the assistant’s final reply, but edit
+   * flows append a fresh user message after the tool output. We track the last
+   * observed indices for user and tool roles so we can prefer the edited
+   * prompt when it truly appears after a tool run, while still keeping the tool
+   * payload handy when no override exists. The terminal entry remains a
+   * fallback to keep the mocks tolerant of future payload permutations.
    */
-  for (let index = prompt.length - 1; index >= 0; index -= 1) {
+  let lastUserIndex = -1;
+  let lastToolIndex = -1;
+
+  for (let index = 0; index < prompt.length; index += 1) {
     const candidate = prompt[index];
 
-    if (candidate.role === "tool") {
-      return candidate;
+    if (candidate?.role === "user") {
+      lastUserIndex = index;
+    } else if (candidate?.role === "tool") {
+      lastToolIndex = index;
     }
   }
 
-  for (let index = prompt.length - 1; index >= 0; index -= 1) {
-    const candidate = prompt[index];
+  if (lastUserIndex > lastToolIndex && lastUserIndex >= 0) {
+    return prompt[lastUserIndex] ?? null;
+  }
 
-    if (candidate.role === "user") {
-      return candidate;
-    }
+  if (lastToolIndex >= 0) {
+    return prompt[lastToolIndex] ?? null;
   }
 
   return prompt.at(-1) ?? null;
