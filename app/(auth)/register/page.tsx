@@ -16,6 +16,9 @@ import { type RegisterActionState, register } from "../actions";
  * ample time to attach in hermetic runs.
  */
 const TOAST_GRACE_PERIOD_MS = 5000;
+const SESSION_REFRESH_TIMEOUT_MS = 3000;
+const HARD_REDIRECT_DELAY_MS = 750;
+const IMMEDIATE_REDIRECT_DELAY_MS = 250;
 
 export default function Page() {
   const router = useRouter();
@@ -43,6 +46,10 @@ export default function Page() {
         description: "Failed validating your submission!",
       });
     } else if (state.status === "success") {
+      console.info("[register] registration succeeded – preparing redirect", {
+        redirectTo: state.redirectTo,
+      });
+
       toast({ type: "success", description: "Account created successfully!" });
 
       setIsSuccessful(true);
@@ -50,14 +57,96 @@ export default function Page() {
         /**
          * Refresh the credentials session before redirecting to the dashboard
          * so authenticated routes stay accessible during the subsequent
-         * Playwright steps.
+         * Playwright steps.  Cap the wait time so CI does not stall when the
+         * dev server takes longer than expected to resolve the update request.
          */
         const destination = state.redirectTo ?? "/chat";
 
+        const ensureHardRedirect = () => {
+          if (typeof window === "undefined") {
+            return;
+          }
+
+          try {
+            const targetUrl = new URL(destination, window.location.origin).href;
+            if (window.location.href !== targetUrl) {
+              console.info("[register] enforcing window-level redirect", {
+                destination: targetUrl,
+              });
+              const navigator = window.location;
+
+              if (typeof navigator.replace === "function") {
+                navigator.replace(targetUrl);
+              } else if (typeof navigator.assign === "function") {
+                navigator.assign(targetUrl);
+              } else {
+                navigator.href = targetUrl;
+              }
+            }
+          } catch (error) {
+            console.error("[register] failed to compute hard redirect target", error);
+          }
+        };
+
+        if (typeof updateSession === "function") {
+          const refreshPromise = updateSession();
+          let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
+          try {
+            await Promise.race([
+              refreshPromise.catch((error) => {
+                console.error(
+                  "Failed to refresh session before redirecting",
+                  error
+                );
+              }),
+              new Promise<void>((resolve) => {
+                timeoutHandle = setTimeout(
+                  resolve,
+                  SESSION_REFRESH_TIMEOUT_MS
+                );
+              }),
+            ]);
+          } finally {
+            if (timeoutHandle) {
+              clearTimeout(timeoutHandle);
+            }
+          }
+        }
+
+        /**
+         * Kick off the soft navigation as soon as the session refresh step
+         * completes so `/chat` begins hydrating while the toast remains
+         * visible.  The delayed hard redirect below still acts as a safety net
+         * in case the client transition never commits.
+         */
         try {
-          await updateSession();
+          router.replace(destination);
+          console.info("[register] scheduled router.replace for dashboard", {
+            destination,
+          });
+          /**
+           * Kick off the window-level redirect immediately so navigation begins even if
+           * the Next.js router never commits (for example when hydration stalls during
+           * hermetic Playwright runs). The delayed timeouts below remain as safety nets
+           * should the direct call be pre-empted by another transition.
+           */
+          ensureHardRedirect();
         } catch (error) {
-          console.error("Failed to refresh session before redirecting", error);
+          console.error("[register] router.replace failed", error);
+        }
+
+        /**
+         * Trigger a defensive hard redirect in case the Next.js router fails to
+         * commit the navigation (for example during flaky hydration on CI).
+         * The delayed fallback gives the client transition time to complete
+         * while still guaranteeing we eventually land on the chat dashboard.
+         */
+        if (typeof window !== "undefined") {
+          window.setTimeout(ensureHardRedirect, IMMEDIATE_REDIRECT_DELAY_MS);
+          window.setTimeout(ensureHardRedirect, HARD_REDIRECT_DELAY_MS);
+        } else {
+          console.warn("[register] window object unavailable – cannot enforce redirect");
         }
 
         /**
@@ -69,15 +158,23 @@ export default function Page() {
         await new Promise((resolve) =>
           setTimeout(resolve, TOAST_GRACE_PERIOD_MS)
         );
-
-        router.replace(destination);
       })();
     }
   }, [state.redirectTo, state.status, router, updateSession]);
 
-  const handleSubmit = (formData: FormData) => {
-    setEmail(formData.get("email") as string);
-    formAction(formData);
+  const handleSubmit = async (formData: FormData) => {
+    const submittedEmail = formData.get("email");
+    if (typeof submittedEmail === "string") {
+      setEmail(submittedEmail);
+    }
+
+    /**
+     * Forward the submission to the server action and surface the resulting
+     * promise so React can keep the pending state in sync with the
+     * `<SubmitButton />` spinner. Returning the awaited call also guarantees the
+     * success effect sees the updated state before we attempt to redirect.
+     */
+    await formAction(formData);
   };
 
   return (

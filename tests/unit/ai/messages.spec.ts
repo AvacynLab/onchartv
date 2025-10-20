@@ -110,6 +110,138 @@ describe("convertToUIMessages", () => {
     expect(uiMessage.metadata.createdAt).toEqual(formatISO(createdAt));
   });
 
+  it("évite de dupliquer les data parts finance déjà présentes", () => {
+    const createdAt = new Date("2025-03-01T09:30:00Z");
+    const backtest = buildBacktestArtifact();
+
+    const message: DBMessage = {
+      id: "msg-duplicate", 
+      chatId: "chat-dup", 
+      role: "assistant",
+      parts: [
+        { type: "text", text: "Résultats du backtest" },
+        { type: "data-financeBacktest", data: backtest },
+      ],
+      attachments: [],
+      artifacts: [{ type: backtest.type, payload: backtest }],
+      createdAt,
+    } as DBMessage;
+
+    const [uiMessage] = convertToUIMessages([message]);
+
+    const financeParts = uiMessage.parts.filter(
+      (part) => part.type === "data-financeBacktest"
+    );
+
+    expect(financeParts).toHaveLength(1);
+    expect(financeParts[0]).toEqual(
+      expect.objectContaining({ data: backtest })
+    );
+  });
+
+  it("remplace les placeholders transitoires par les artefacts persistés", () => {
+    const createdAt = new Date("2025-03-02T12:00:00Z");
+    const backtest = buildBacktestArtifact();
+
+    const message: DBMessage = {
+      id: "msg-transient",
+      chatId: "chat-transient",
+      role: "assistant",
+      parts: [
+        { type: "text", text: "Backtest terminé" },
+        {
+          type: "data-financeBacktest",
+          data: backtest,
+          transient: true,
+        },
+      ],
+      attachments: [],
+      artifacts: [{ type: backtest.type, payload: backtest }],
+      createdAt,
+    } as DBMessage;
+
+    const [uiMessage] = convertToUIMessages([message]);
+
+    const financeParts = uiMessage.parts.filter(
+      (part) => part.type === "data-financeBacktest"
+    );
+
+    expect(financeParts).toHaveLength(1);
+    expect(financeParts[0]).toEqual(
+      expect.objectContaining({ data: backtest })
+    );
+    expect((financeParts[0] as { transient?: boolean }).transient).not.toBe(true);
+  });
+
+  it("coerce les bornes de période numériques en chaînes ISO", () => {
+    const createdAt = new Date("2025-03-03T09:30:00Z");
+    const numericBacktest = {
+      ...buildBacktestArtifact(),
+      period: { from: 1_700_000_000, to: 1_700_086_400 },
+    } as unknown as FinanceBacktestArtifact;
+
+    const message: DBMessage = {
+      id: "msg-numeric-period",
+      chatId: "chat-numeric",
+      role: "assistant",
+      parts: [{ type: "text", text: "Période numérique" }],
+      attachments: [],
+      artifacts: [{ type: numericBacktest.type, payload: numericBacktest }],
+      createdAt,
+    } as DBMessage;
+
+    const [uiMessage] = convertToUIMessages([message]);
+    const financePart = uiMessage.parts.find(
+      (part) => part.type === "data-financeBacktest"
+    );
+
+    expect(financePart).toBeDefined();
+    const payload = (financePart as { data: FinanceBacktestArtifact }).data;
+    expect(typeof payload.period.from).toBe("string");
+    expect(typeof payload.period.to).toBe("string");
+    expect(payload.period.from).toBe(new Date(1_700_000_000 * 1000).toISOString());
+    expect(payload.period.to).toBe(new Date(1_700_086_400 * 1000).toISOString());
+  });
+
+  it("journalise un snapshot Playwright lorsque DEBUG cible playwright", () => {
+    const createdAt = new Date("2025-03-03T08:30:00Z");
+    const backtest = buildBacktestArtifact();
+    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+    const previousDebug = process.env.DEBUG;
+
+    process.env.DEBUG = "api,playwright";
+
+    const message: DBMessage = {
+      id: "msg-playwright", 
+      chatId: "chat-debug", 
+      role: "assistant",
+      parts: [
+        { type: "text", text: "Backtest prêt" },
+      ],
+      attachments: [],
+      artifacts: [{ type: backtest.type, payload: backtest }],
+      createdAt,
+    } as DBMessage;
+
+    convertToUIMessages([message]);
+
+    expect(debugSpy).toHaveBeenCalledWith(
+      "[convertToUIMessages] finance artefact snapshot",
+      expect.objectContaining({
+        messageId: "msg-playwright",
+        artifactPartCount: 1,
+      }),
+    );
+
+    debugSpy.mockRestore();
+
+    if (previousDebug === undefined) {
+      delete process.env.DEBUG;
+    } else {
+      process.env.DEBUG = previousDebug;
+    }
+  });
+
   it("ignore les artefacts finance invalides en loggant un avertissement", () => {
     const warnSpy = vi
       .spyOn(logging, "logWarning")

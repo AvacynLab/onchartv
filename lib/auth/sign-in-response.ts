@@ -78,7 +78,9 @@ export function didSignInSucceed(
   }
 
   if (result instanceof Response) {
-    if (!result.ok) {
+    const status = result.status;
+
+    if (status >= 400) {
       return false;
     }
 

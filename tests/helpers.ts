@@ -370,7 +370,7 @@ export async function createAuthenticatedContext({
       {
         name: "chat-model",
         value: preferredModel.id,
-        url: `${cookieUrl.origin}/`,
+        url: cookieUrl.origin,
       },
     ]);
   }

@@ -665,6 +665,13 @@ export function BacktestReportArtifact({
             aria-describedby="trade-journal-caption"
             id={tableId}
             className="min-w-full text-left text-sm"
+            /*
+             * Allow keyboard users to focus the trade journal even when the
+             * surrounding container is scrollable so arrow keys and screen
+             * readers can traverse the table content without relying on a
+             * mouse.
+             */
+            tabIndex={0}
           >
             <caption
               className="sr-only"

@@ -433,14 +433,49 @@ export type FinanceNewsArtifact = z.infer<typeof financeNewsArtifactSchema>;
  * Aggregated payload produced by the TypeScript backtest engine and streamed as
  * an artefact. The UI will render metrics, equity curve, and trades.
  */
+/**
+ * Normalise the `finance.backtest` period boundaries so persisted artefacts
+ * remain readable even when upstream payloads provide epoch seconds. The schema
+ * accepts either ISO strings (the format emitted by the chat tools) or numeric
+ * epochs (observed in certain legacy API responses) and always returns a
+ * trimmed ISO string.
+ */
+const buildBacktestPeriodBoundarySchema = (field: string) =>
+  z
+    .union([
+      z
+        .string({ required_error: `${field} is required` })
+        .transform((value, ctx) => {
+          const trimmed = value.trim();
+
+          if (trimmed.length === 0) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `${field} must not be empty`,
+            });
+            return z.NEVER;
+          }
+
+          return trimmed;
+        }),
+      z
+        .number({ required_error: `${field} is required` })
+        .finite({ message: `${field} must be a finite number` })
+        .transform((value) => {
+          const normalised = Math.floor(value);
+          return new Date(normalised * 1000).toISOString();
+        }),
+    ])
+    .transform((value) => value);
+
 export const financeBacktestArtifactSchema = z.object({
   type: z.literal("finance.backtest"),
   runId: z.string({ required_error: "runId is required" }),
   symbol: financeSymbolSchema,
   timeframe: z.string({ required_error: "timeframe is required" }),
   period: z.object({
-    from: z.string({ required_error: "period.from is required" }),
-    to: z.string({ required_error: "period.to is required" }),
+    from: buildBacktestPeriodBoundarySchema("period.from"),
+    to: buildBacktestPeriodBoundarySchema("period.to"),
   }),
   strategy: backtestStrategySchema,
   metrics: backtestMetricsSchema,

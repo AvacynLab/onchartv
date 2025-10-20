@@ -11,6 +11,7 @@ import {
 import { z } from "zod";
 import { chatModels, type ChatModel } from "@/lib/ai/models";
 import { DEFAULT_ONBOARDING_SUGGESTION } from "@/lib/constants";
+import { logPlaywrightStreamDebug } from "@/lib/playwright-debug";
 
 /**
  * Validate that the current page URL ends with a chat identifier without
@@ -36,6 +37,13 @@ const CHAT_STREAM_PATH_REGEX = /^\/api\/chat\/[\w-]+\/stream$/;
  */
 const TOAST_LOCATOR = '[data-testid="toast"], #automation-toast-bridge';
 
+const logStreamingProbe = <Payload extends Record<string, unknown> | null>(
+  event: string,
+  payload: () => Payload,
+): void => {
+  logPlaywrightStreamDebug("chat", event, payload, { withTimestamp: true });
+};
+
 /**
  * Hostnames that are considered internal to the application when Playwright is
  * driving the Next.js dev server. Restricting network assertions to this
@@ -59,6 +67,13 @@ type AssistantSnapshot = {
   count: number;
   latestMessageId: string | null;
   latestMessageText: string;
+  /**
+   * Mirror the lifecycle status exposed via `data-message-status` so the
+   * streaming fallback can react to inline edits that reuse the same assistant
+   * bubble while toggling between "completed", "streaming", and other
+   * intermediate states.
+   */
+  latestMessageStatus: string | null;
   latestArtifactCount: number;
 };
 
@@ -381,9 +396,28 @@ export class ChatPage {
       latestMessageId: initialLatestMessageId,
       latestMessageText: initialLatestMessage,
       latestArtifactCount: initialArtifactCount,
+      latestMessageStatus: initialLatestMessageStatus,
     } =
       this.pendingAssistantSnapshot ??
       (await this.captureAssistantSnapshot());
+
+    /**
+     * Reuse the cached UI snapshot captured prior to the submission so the
+     * predicate executed inside the browser context can diff the DOM against a
+     * deterministic baseline.  Falling back to zero/false keeps defensive
+     * defaults for legacy call sites that may invoke `isGenerationComplete`
+     * without calling `prepareForGeneration` first (for example during unit
+     * tests).
+     */
+    const baselineSignalCount = this.pendingChatSignalCount ?? 0;
+    const baselineStopButtonVisible = this.pendingStopButtonWasVisible ?? false;
+    const baselineSendButtonVisible = this.pendingSendButtonWasVisible ?? false;
+    const baselineSendButtonEnabled = this.pendingSendButtonWasEnabled ?? false;
+    const baselineUserMessageCount = this.pendingUserMessageCount ?? 0;
+    const baselineComposerValue = this.pendingComposerValue ?? "";
+    const baselineSuggestedActionsVisible =
+      this.pendingSuggestedActionsWereVisible ?? false;
+    const expectedComposerPrefill = this.pendingComposerPrefill ?? null;
 
     this.pendingAssistantSnapshot = null;
     /**
@@ -407,12 +441,30 @@ export class ChatPage {
         initialLatestMessageId: string | null;
         initialLatestMessage: string;
         initialArtifactCount: number;
+        initialLatestMessageStatus: string | null;
+        baselineSignalCount: number;
+        baselineStopButtonVisible: boolean;
+        baselineSendButtonVisible: boolean;
+        baselineSendButtonEnabled: boolean;
+        baselineUserMessageCount: number;
+        baselineComposerValue: string;
+        expectedComposerPrefill: string | null;
+        baselineSuggestedActionsVisible: boolean;
       }) => {
         const {
           initialAssistantCount,
           initialLatestMessageId,
           initialLatestMessage,
           initialArtifactCount,
+          initialLatestMessageStatus,
+          baselineSignalCount,
+          baselineStopButtonVisible,
+          baselineSendButtonVisible,
+          baselineSendButtonEnabled,
+          baselineUserMessageCount,
+          baselineComposerValue,
+          expectedComposerPrefill,
+          baselineSuggestedActionsVisible,
         } = args;
 
         const toast = document.querySelector<HTMLElement>('[data-testid="toast"]');
@@ -421,6 +473,35 @@ export class ChatPage {
           throw new Error(
             `Chat surfaced an error toast while waiting for the assistant response: ${toastText}`
           );
+        }
+
+        const resolveVisibility = (element: Element | null): boolean => {
+          if (!element || !(element instanceof HTMLElement)) {
+            return false;
+          }
+
+          const style = window.getComputedStyle(element);
+          if (style.display === 'none' || style.visibility === 'hidden') {
+            return false;
+          }
+
+          if (element.offsetParent === null && style.position !== 'fixed') {
+            const rect = element.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+          }
+
+          return true;
+        };
+
+        const globalWindow = window as typeof window & {
+          __PLAYWRIGHT_CHAT_SIGNALS__?: Array<unknown>;
+        };
+        const signalCount = Array.isArray(globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__)
+          ? globalWindow.__PLAYWRIGHT_CHAT_SIGNALS__.length
+          : 0;
+
+        if (signalCount > baselineSignalCount) {
+          return true;
         }
 
         const assistantNodes = Array.from(
@@ -432,12 +513,31 @@ export class ChatPage {
           return true;
         }
 
+        if (currentCount < initialAssistantCount) {
+          return true;
+        }
+
         if (currentCount === initialAssistantCount && currentCount > 0) {
           const latestAssistant = assistantNodes[currentCount - 1];
           const latestMessageId = latestAssistant.getAttribute('data-message-id');
+          const latestStatus = latestAssistant.getAttribute('data-message-status');
 
           if (latestMessageId && latestMessageId !== initialLatestMessageId) {
             return true;
+          }
+
+          if (typeof latestStatus === 'string') {
+            if (latestStatus === 'streaming') {
+              return true;
+            }
+
+            if (initialLatestMessageStatus) {
+              if (latestStatus !== initialLatestMessageStatus) {
+                return true;
+              }
+            } else if (latestStatus.length > 0) {
+              return true;
+            }
           }
 
           const latestContent =
@@ -453,28 +553,102 @@ export class ChatPage {
 
           if (latestArtifactCount > initialArtifactCount) {
             return true;
-          }
+        }
 
-          const loadingCount = document.querySelectorAll('[data-testid="message-assistant-loading"]').length;
-          const stopButton = document.querySelector<HTMLElement>('[data-testid="stop-button"]');
-          const stopVisible =
-            !!stopButton &&
-            stopButton.offsetParent !== null &&
-            window.getComputedStyle(stopButton).visibility !== 'hidden';
+        const stopButton = document.querySelector<HTMLElement>('[data-testid="stop-button"]');
+        const stopVisible = resolveVisibility(stopButton);
 
-          if (stopVisible) {
-            /**
-             * Inline edit submissions reuse the global composer state. When the
-             * stop button is visible we know the chat helpers started
-             * streaming, so the fallback can return immediately without
-             * waiting for additional DOM signals.
-             */
-            return true;
-          }
+        if (stopVisible && !baselineStopButtonVisible) {
+          return true;
+        }
 
-          if (loadingCount === 0 && !stopVisible) {
-            return true;
-          }
+        const sendButton = document.querySelector<HTMLElement>('[data-testid="send-button"]');
+        const sendVisible = resolveVisibility(sendButton);
+        const sendEnabled = !!sendButton &&
+          sendVisible &&
+          !sendButton.hasAttribute('disabled') &&
+          sendButton.getAttribute('aria-disabled') !== 'true';
+
+        if (!sendVisible && baselineSendButtonVisible) {
+          return true;
+        }
+
+        if (
+          sendVisible &&
+          baselineSendButtonEnabled &&
+          !sendEnabled
+        ) {
+          return true;
+        }
+
+        if (
+          sendVisible &&
+          !baselineSendButtonEnabled &&
+          sendEnabled
+        ) {
+          return true;
+        }
+
+        const loadingCount = document.querySelectorAll('[data-testid="message-assistant-loading"]').length;
+
+        if (stopVisible) {
+          /**
+           * Inline edit submissions reuse the global composer state. When the
+           * stop button is visible we know the chat helpers started streaming,
+           * so the fallback can return immediately without waiting for
+           * additional DOM signals.
+           */
+          return true;
+        }
+
+        if (loadingCount > 0) {
+          /**
+           * The assistant renders a dedicated loading placeholder while the
+           * stream hydrates. Treat its appearance as proof that the toolchain
+           * kicked off so we do not wait for textual updates when the reply
+           * exclusively surfaces artefacts.
+           */
+          return true;
+        }
+
+        const suggestedActions = document.querySelector<HTMLElement>('[data-testid="suggested-actions"]');
+        const suggestedActionsVisible = resolveVisibility(suggestedActions);
+
+        if (baselineSuggestedActionsVisible && !suggestedActionsVisible) {
+          return true;
+        }
+
+        if (!baselineSuggestedActionsVisible && suggestedActionsVisible) {
+          return true;
+        }
+
+        const userCount = document.querySelectorAll('[data-testid="message-user"]').length;
+        if (userCount > baselineUserMessageCount) {
+          return true;
+        }
+
+        const composer = document.querySelector<HTMLTextAreaElement>(
+          "textarea[data-testid='multimodal-input']"
+        );
+        const composerValue = composer?.value ?? '';
+        const composerTrimmed = composerValue.trim();
+        const baselineComposerTrimmed = baselineComposerValue.trim();
+
+        if (
+          baselineComposerTrimmed.length > 0 &&
+          composerTrimmed.length === 0 &&
+          composerValue !== baselineComposerValue
+        ) {
+          return true;
+        }
+
+        if (
+          expectedComposerPrefill &&
+          expectedComposerPrefill.trim().length > 0 &&
+          composerTrimmed === expectedComposerPrefill.trim() &&
+          composerValue !== baselineComposerValue
+        ) {
+          return true;
         }
 
         return false;
@@ -484,9 +658,27 @@ export class ChatPage {
         initialLatestMessageId,
         initialLatestMessage,
         initialArtifactCount,
+        initialLatestMessageStatus,
+        baselineSignalCount,
+        baselineStopButtonVisible,
+        baselineSendButtonVisible,
+        baselineSendButtonEnabled,
+        baselineUserMessageCount,
+        baselineComposerValue,
+        expectedComposerPrefill,
+        baselineSuggestedActionsVisible,
       },
       { timeout: 60_000 }
     );
+
+    /**
+     * Inline edit submissions temporarily clear the trailing assistant reply
+     * before the regeneration begins streaming. Ensure a fresh assistant
+     * bubble is attached before continuing so downstream helpers never observe
+     * an empty timeline (which previously triggered "No assistant message"
+     * errors in the Playwright harness).
+     */
+    await expect(assistantMessages).not.toHaveCount(0, { timeout: 60_000 });
 
     /**
      * The assistant stream reuses the same container while piping tool results
@@ -853,9 +1045,16 @@ export class ChatPage {
   }
 
   async getRecentAssistantMessage() {
-    const messageElements = await this.page
-      .getByTestId("message-assistant")
-      .all();
+    const assistantLocator = this.page.getByTestId("message-assistant");
+
+    /**
+     * Inline edit regenerations temporarily clear the assistant bubble before
+     * the new response attaches.  Wait for the element collection to repopulate
+     * so downstream assertions never observe an empty timeline.
+     */
+    await expect(assistantLocator).not.toHaveCount(0, { timeout: 60_000 });
+
+    const messageElements = await assistantLocator.all();
     const lastMessageElement = messageElements.at(-1);
 
     if (!lastMessageElement) {
@@ -1193,12 +1392,16 @@ export class ChatPage {
         latestArtifactCount: 0,
         latestMessageId: null,
         latestMessageText: "",
+        latestMessageStatus: null,
       };
     }
 
     const latestAssistant = assistantMessages.nth(count - 1);
     const latestMessageId = await latestAssistant
       .getAttribute("data-message-id")
+      .catch(() => null);
+    const latestMessageStatus = await latestAssistant
+      .getAttribute("data-message-status")
       .catch(() => null);
     const latestMessageText = await latestAssistant
       .getByTestId("message-content")
@@ -1215,6 +1418,7 @@ export class ChatPage {
       latestArtifactCount,
       latestMessageId,
       latestMessageText,
+      latestMessageStatus,
     };
   }
 
@@ -1814,6 +2018,57 @@ export class ChatPage {
 
     const baselineComposerTrimmed = baselineComposerValue.trim();
 
+    logStreamingProbe("poll:start", () => ({
+      baselineAssistantCount: baseline.count,
+      baselineUserMessageCount,
+      baselineStopVisible: baselineStopButtonVisible,
+      baselineSendVisible: baselineSendButtonVisible,
+      baselineSendEnabled: baselineSendButtonEnabled,
+      baselineChatSignalCount,
+      baselineComposerLength: baselineComposerValue.length,
+      baselineComposerHasContent: baselineComposerTrimmed.length > 0,
+      baselineSuggestedActionsVisible,
+      baselineLatestStatus: baseline.latestMessageStatus,
+    }));
+
+    const logResolution = (
+      reason: string,
+      extra: Record<string, unknown> = {},
+    ) => {
+      logStreamingProbe("poll:resolved", () => ({
+        reason,
+        ...extra,
+      }));
+    };
+
+    /**
+     * Compact representation of the metrics gathered on each polling iteration.
+     * Persisting the latest snapshot allows the timeout branch to surface the
+     * final DOM state, which is invaluable when diagnosing flakiness on CI.
+     */
+    type PollSnapshot = {
+      assistantCount: number;
+      spinnerCount: number;
+      stopVisible: boolean;
+      sendVisible: boolean;
+      sendEnabled: boolean;
+      userCount: number;
+      signalCount: number;
+      composerLength: number;
+      composerChanged: boolean;
+      suggestedActionsVisible: boolean;
+      latestStatus?: string | null;
+      latestTextLength?: number;
+      latestArtifactCount?: number;
+    };
+
+    /**
+     * Remember the most recent observation so that timeout logs can include
+     * the last known DOM state. The value starts as `null` and is populated
+     * after the first iteration succeeds.
+     */
+    let lastObservation: PollSnapshot | null = null;
+
     while (Date.now() < deadline) {
       const [
         assistantCount,
@@ -1847,7 +2102,37 @@ export class ChatPage {
         suggestedActionsLocator.isVisible().catch(() => false),
       ]);
 
+      lastObservation = {
+        assistantCount,
+        spinnerCount,
+        stopVisible,
+        sendVisible,
+        sendEnabled,
+        userCount,
+        signalCount,
+        composerLength: composerValue.length,
+        composerChanged: composerValue !== baselineComposerValue,
+        suggestedActionsVisible,
+      } satisfies PollSnapshot;
+
+      logStreamingProbe("poll:iteration", () => ({
+        assistantCount,
+        spinnerCount,
+        stopVisible,
+        sendVisible,
+        sendEnabled,
+        userCount,
+        signalCount,
+        composerLength: composerValue.length,
+        composerChanged: composerValue !== baselineComposerValue,
+        suggestedActionsVisible,
+      }));
+
       if (baselineSuggestedActionsVisible && !suggestedActionsVisible) {
+        logResolution("suggested-actions-hidden", {
+          assistantCount,
+          signalCount,
+        });
         return;
       }
 
@@ -1856,10 +2141,23 @@ export class ChatPage {
       }
 
       if (signalCount > baselineChatSignalCount) {
+        logResolution("signal-count-increased", { signalCount });
+        return;
+      }
+
+      if (assistantCount < baseline.count) {
+        /**
+         * Inline edit submissions briefly clear the trailing assistant reply
+         * before reattaching a fresh bubble.  Detect the drop immediately so
+         * the fallback acknowledges that streaming kicked off instead of
+         * idling until the replacement content finishes rendering.
+         */
+        logResolution("assistant-count-decreased", { assistantCount });
         return;
       }
 
       if (spinnerCount > 0) {
+        logResolution("spinner-visible", { spinnerCount });
         return;
       }
 
@@ -1879,6 +2177,9 @@ export class ChatPage {
       if (baselineComposerTrimmed.length > 0) {
         if (composerTrimmed.length === 0 && composerValue !== baselineComposerValue) {
           if (hasObservedComposerPrefill || !expectedComposerPrefill) {
+            logResolution("composer-cleared", {
+              composerLength: composerValue.length,
+            });
             return;
           }
         }
@@ -1886,6 +2187,7 @@ export class ChatPage {
 
       if (!sendVisible) {
         if (hasObservedSendButtonVisible) {
+          logResolution("send-button-hidden", { sendEnabled });
           return;
         }
       } else {
@@ -1894,6 +2196,7 @@ export class ChatPage {
         }
 
         if (!sendEnabled && hasObservedSendButtonEnabled) {
+          logResolution("send-button-disabled", { sendEnabled });
           return;
         }
 
@@ -1904,10 +2207,12 @@ export class ChatPage {
 
       if (stopVisible) {
         if (!baselineStopButtonVisible) {
+          logResolution("stop-button-visible");
           return;
         }
 
         if (hasObservedStopButtonHidden) {
+          logResolution("stop-button-reappeared");
           return;
         }
       } else if (baselineStopButtonVisible && !hasObservedStopButtonHidden) {
@@ -1915,37 +2220,97 @@ export class ChatPage {
       }
 
       if (userCount > baselineUserMessageCount) {
+        logResolution("user-count-increased", { userCount });
         return;
       }
 
       if (assistantCount > baseline.count) {
+        logResolution("assistant-count-increased", { assistantCount });
         return;
       }
 
       if (assistantCount > 0) {
         const latestAssistant = assistantLocator.nth(assistantCount - 1);
-        const [latestId, latestText, latestArtifactCount] = await Promise.all([
-          latestAssistant.getAttribute("data-message-id").catch(() => null),
-          latestAssistant
+        const [latestId, latestStatus, latestText, latestArtifactCount] =
+          await Promise.all([
+            latestAssistant.getAttribute("data-message-id").catch(() => null),
+            latestAssistant
+              .getAttribute("data-message-status")
+              .catch(() => null),
+            latestAssistant
             .getByTestId("message-content")
             .innerText()
             .then((value) => value.trim())
             .catch(() => ""),
-          latestAssistant
-            .locator('[data-testid$="-artifact"]')
-            .count()
-            .catch(() => 0),
-        ]);
+            latestAssistant
+              .locator('[data-testid$="-artifact"]')
+              .count()
+              .catch(() => 0),
+          ]);
+
+        if (lastObservation) {
+          lastObservation = {
+            ...lastObservation,
+            latestStatus,
+            latestTextLength: latestText.length,
+            latestArtifactCount,
+          } satisfies PollSnapshot;
+        }
+
+        if (typeof latestStatus === "string") {
+          if (latestStatus === "streaming") {
+            /**
+             * Inline edits reuse the existing assistant bubble while toggling its
+             * lifecycle flag to `streaming`.  Treat that attribute change as
+             * progress so the fallback no longer requires a DOM removal or text
+             * mutation to acknowledge the regeneration.
+             */
+            logResolution("latest-status-streaming", { latestStatus });
+            return;
+          }
+
+          if (baseline.latestMessageStatus) {
+            if (latestStatus !== baseline.latestMessageStatus) {
+              /**
+               * Some providers toggle through additional lifecycle markers such as
+               * `in_progress` before exposing token deltas.  Recognise any change
+               * away from the previous status as streaming progress so edits no
+               * longer rely on DOM churn to unblock.
+               */
+              logResolution("latest-status-changed", {
+                latestStatus,
+                previousStatus: baseline.latestMessageStatus,
+              });
+              return;
+            }
+          } else if (latestStatus.length > 0) {
+            /**
+             * When no status was present initially, the first non-empty value is a
+             * strong indication that streaming resumed.  Accept it as evidence so
+             * the fallback unblocks even if the assistant bubble keeps the same
+             * identifier and text while rehydrating tokens.
+             */
+            logResolution("latest-status-initialised", { latestStatus });
+            return;
+          }
+        }
 
         if (latestId && latestId !== baseline.latestMessageId) {
+          logResolution("latest-id-changed", { latestId });
           return;
         }
 
-        if (latestText && latestText !== baseline.latestMessageText) {
+        if (latestText !== baseline.latestMessageText) {
+          logResolution("latest-text-updated", {
+            latestLength: latestText.length,
+          });
           return;
         }
 
         if (latestArtifactCount > baseline.latestArtifactCount) {
+          logResolution("latest-artifact-count-increased", {
+            latestArtifactCount,
+          });
           return;
         }
       }
@@ -1953,7 +2318,20 @@ export class ChatPage {
       await this.page.waitForTimeout(200);
     }
 
-    throw new Error("Timed out waiting for chat UI to start streaming");
+    logResolution("timeout", {
+      baselineAssistantCount: baseline.count,
+      baselineUserMessageCount,
+      baselineChatSignalCount,
+      lastObservation,
+    });
+
+    const timeoutDetails = lastObservation
+      ? ` last observed state: ${JSON.stringify(lastObservation)}`
+      : "";
+
+    throw new Error(
+      `Timed out waiting for chat UI to start streaming.${timeoutDetails}`,
+    );
   }
 
   private async waitForVoteRequest(direction: "up" | "down"): Promise<void> {

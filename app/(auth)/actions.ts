@@ -1,9 +1,10 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import { didSignInSucceed, extractRedirectPath } from "@/lib/auth/sign-in-response";
-import { createUser, getUser } from "@/lib/db/queries";
+import { createInitialChat, createUser, getUser } from "@/lib/db/queries";
 
 import { signIn } from "./auth";
 
@@ -112,6 +113,31 @@ export const register = async (
     }
     await createUser(validatedData.email, validatedData.password);
 
+    /**
+     * Fetch the freshly inserted account so we can seed an onboarding chat tied
+     * to the real user identifier. When the lookup fails we fall back to the
+     * generic failure state, signalling the client to display the error toast
+     * instead of attempting a redirect with an unknown chat id.
+     */
+    const [createdUser] = await getUser(validatedData.email);
+
+    if (!createdUser) {
+      return { status: "failed" } as RegisterActionState;
+    }
+
+    const initialChat = await createInitialChat({
+      userId: createdUser.id,
+    });
+
+    /**
+     * Ensure the chat dashboard and the newly provisioned conversation render
+     * up-to-date data the moment the client redirects by invalidating their
+     * cached pages. This mirrors the behaviour of the regular chat creation
+     * flow triggered from the sidebar.
+     */
+    revalidatePath("/chat");
+    revalidatePath(`/chat/${initialChat.chatId}`);
+
     const signInResponse = await signIn("credentials", {
       email: validatedData.email,
       password: validatedData.password,
@@ -137,11 +163,11 @@ export const register = async (
 
     const redirectTo = extractRedirectPath(signInResponse, {
       baseUrl: process.env.NEXTAUTH_URL ?? "http://localhost:3000",
-    });
+    }) ?? `/chat/${initialChat.chatId}`;
 
     return {
       status: "success",
-      redirectTo: redirectTo ?? "/chat",
+      redirectTo,
     };
   } catch (error) {
     if (error instanceof z.ZodError) {

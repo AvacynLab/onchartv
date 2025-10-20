@@ -484,7 +484,7 @@ describe("createAuthenticatedContext", () => {
       {
         name: "chat-model",
         value: "chat-model-reasoning",
-        url: "http://localhost:3100/",
+        url: "http://localhost:3100",
       },
     ]);
     expect(chatPageStubs.chooseModelFromSelector).not.toHaveBeenCalled();
