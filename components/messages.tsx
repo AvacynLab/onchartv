@@ -33,11 +33,13 @@ type MessagesProps = {
   financeFeatureEnabledOverride?: boolean;
 };
 
-const isRenderableMessage = (value: ChatMessage | null | undefined): value is ChatMessage => {
+const isRenderableMessage = (
+  value: ChatMessage | null | undefined
+): value is ChatMessage => {
   return (
     Boolean(value) &&
     typeof value?.id === "string" &&
-    Array.isArray(value.parts)
+    typeof value?.role === "string"
   );
 };
 
@@ -254,6 +256,36 @@ function PureMessages({
             );
 
             /**
+             * Guard against upstream payloads that temporarily omit the `parts`
+             * array.  The Vercel AI SDK promises to attach the collection, yet
+             * we have observed transient states where Playwright snapshots only
+             * expose the other message fields.  Normalising the shape here keeps
+             * the renderer stable and emits a diagnostic so future agents can
+             * investigate the upstream race without sacrificing end-user
+             * resilience.
+             */
+            const messageWithUnknownParts = message as unknown as {
+              parts?: ChatMessage["parts"] | unknown;
+            };
+            const hasRenderableParts = Array.isArray(
+              messageWithUnknownParts.parts
+            );
+            const originalParts = hasRenderableParts
+              ? (messageWithUnknownParts.parts as ChatMessage["parts"])
+              : [];
+
+            if (!hasRenderableParts) {
+              logWarning(
+                "chat:messages",
+                "[Messages] message arrived without a parts array; defaulting to empty",
+                {
+                  messageId: message.id,
+                  role: message.role,
+                }
+              );
+            }
+
+            /**
              * Guard the artefact list because assistant responses sometimes
              * return `null` or omit the property entirely. We cast through
              * `unknown` to inspect the optional field without fighting the
@@ -311,8 +343,8 @@ function PureMessages({
               return typeof transientValue === "boolean" ? transientValue : false;
             };
 
-            const deduplicatedParts = Array.isArray(message.parts)
-              ? message.parts.reduce<ChatMessage["parts"]>((acc, part) => {
+            const deduplicatedParts = originalParts.length > 0
+              ? originalParts.reduce<ChatMessage["parts"]>((acc, part) => {
                   if (
                     !part ||
                     typeof part !== "object" ||
