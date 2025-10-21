@@ -61,13 +61,26 @@ export function convertToModelMessages(
         return part;
       });
 
+    /**
+     * The UI message contract historically exposed both a `parts` collection
+     * and a derived `content` array.  When inline edits occur the `parts`
+     * payload is refreshed with the latest prompt, yet the legacy `content`
+     * snapshot may linger with the stale text.  The upstream
+     * `convertToModelMessages` helper prioritises `content` when present,
+     * therefore we strip it from the shape we forward so the freshly
+     * normalised `parts` array becomes the single source of truth.
+     */
+    const { content: _legacyContent, ...messageWithoutContent } = message as typeof message & {
+      content?: unknown;
+    };
+
     return {
-      ...message,
+      ...messageWithoutContent,
       parts:
         message.role === "user"
           ? normaliseUserTextFragments(filteredParts)
           : filteredParts,
-    };
+    } as typeof message;
   });
 
   return ai.convertToModelMessages(sanitisedMessages, options);
