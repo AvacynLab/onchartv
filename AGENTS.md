@@ -1,68 +1,55 @@
-# Agent Brief — reset 2025-12-09
+# Agent Brief — reset 2025-12-12
 
 ## Context
-The latest `pnpm e2e` run (2025-12-09) exposed two blocking regressions in addition to the previously failing edit flows:
-- **Chat activity › Send a user message and receive response** — No assistant messages ever appear (`data-testid="message-assistant"` count remains 0), so even the first chat send stalls.
-- **chat activity with reasoning › Curie can edit message and resubmit** — The polling assertion still captures the pre-edit assistant reply instead of the refreshed answer.
+The most recent `pnpm e2e` run (2025-12-12) now passes the baseline chat send but still reports three blocking flows:
+- **Chat activity › Edit user message and resubmit** – the assistant reply never updates after editing; the DOM continues to show the pre-edit "green" answer.
+- **Finance end-to-end journeys › streams a BTCUSD chart and exposes interactive controls** – the finance conversation never surfaces an assistant bubble (`data-testid="message-assistant"` count stays at 0).
+- **Login and Registration › Register new account** – after registration the dashboard loads without a visible composer, so the poll for `.prompt-composer` times out.
 
-Accessibility, finance, registration, and other chat scenarios now pass, so the remaining scope is focused on restoring assistant message rendering and edit resiliency.
+Other finance and reasoning paths are currently green, so effort should focus on restoring assistant rendering in tool-heavy chats and keeping the composer visible for fresh accounts.
 
 ## Objectives
-- Restore deterministic streaming behaviour after editing chat messages for both standard and reasoning conversations.
-- Ensure the reasoning transcript helpers observe the refreshed assistant output after an edit.
-- Guarantee that a newly registered account lands on an interactive chat (composer visible, chat id present).
-- Keep the Playwright auth warm-up and storage state reuse intact while iterating on the fixes above.
+- Ensure assistant messages persist (and render) after finance tool execution so Playwright can observe chart replies.
+- Make standard chat edits emit a refreshed assistant response while preserving the existing reasoning success case.
+- Guarantee new registrations always land on a chat with a visible composer, even if the session refresh lags.
+- Keep recently added diagnostics intact to speed up further Playwright debugging.
 
 ## Task Checklist
 
-### 1. Assistant message regression (baseline send fails)
-- [ ] Reproduce the missing assistant bubble locally (focus the "Send a user message and receive response" test) and inspect the DOM to confirm whether the assistant block fails to mount or is immediately removed. *(still blocked — browsers installed but `playwright install-deps` pulls ~500 MB of packages; run once the environment budget allows)*
-- [x] Trace the message rendering pipeline (`components/messages.tsx`, `lib/chat/message-status.ts`, `lib/ai/providers.ts`) to ensure assistant messages remain in the array after edits and that status derivation does not filter them out.
-- [x] Add unit coverage (ideally in `tests/unit/components/message*.spec.tsx`) that asserts assistant messages render when the provider returns a response without a `status` field.
-- [x] Patch the chat surface (`components/chat.tsx`) to synthesise stable identifiers as soon as streamed assistant messages land and emit diagnostics for every fallback.
-- [x] Guard synthetic identifier generation when `metadata.createdAt` is missing so the renderer never throws while streaming transient payloads.
-- [x] Refine identifier normalisation to mutate the existing message collection unless objects are non-extensible, and add unit coverage for the cloned-array fallback.
-- [x] Guard the identifier normalisation effect against stale snapshots by funnelling updates through `setMessages` functional setters.
-- [ ] Run `pnpm exec playwright test tests/e2e/chat.test.ts -g "Send a user message and receive response"` and keep the passing trace for reference. *(2025-12-12 — intermittent: first rerun under `PLAYWRIGHT_STREAM_DEBUG=1` passed once, subsequent attempt regressed with zero assistant messages; latest local attempt fails earlier because Playwright browsers are missing — install via `pnpm exec playwright install` before the next rerun.)*
+### 1. Finance assistant bubble regression
+- [ ] Re-run the focused Playwright spec once browsers/deps are installed: `pnpm exec playwright test tests/e2e/finance.spec.ts -g "streams a BTCUSD chart"`.
+- [ ] Inspect `ChatPage.waitForUiStreamingFallback` logs and the stream debug snapshots to confirm whether assistant messages remain in state during finance tool runs.
+- [ ] Audit `lib/ai/providers.ts` and downstream reducers to ensure tool completions append an assistant turn (rather than only tool artifacts).
+- [ ] Add unit coverage around the finance mock/tool transcript to guarantee an assistant summary is emitted after the chart data resolves.
+- [ ] Re-run the focused Playwright test and archive the passing trace.
 
-### 2. Chat edit/resubmit streaming
-- [ ] Verify that whatever fix restores baseline assistant rendering also re-enables the edit flow; if not, instrument `ChatPage.waitForUiStreamingFallback` to log the message ids and statuses it observes.
-- [ ] Ensure the updated message state triggers a `streaming → complete` transition on edits, updating both helper logic and component props as needed.
-- [ ] Extend the existing Vitest coverage to include an edit scenario where the assistant response arrives without explicit status flags.
-- [ ] Re-run `pnpm exec playwright test tests/e2e/chat.test.ts -g "Edit user message and resubmit"` and archive the trace on success.
+### 2. Chat edit/resubmit (standard conversations)
+- [ ] Use the stream debug output to verify the message statuses transition from `streaming` to `complete` after an edit-triggered resend.
+- [ ] Confirm `resolveLatestRelevantMessage` (or equivalent helper) selects the edited user turn before invoking the provider.
+- [ ] Add Vitest coverage that simulates editing a message followed by a provider response lacking explicit status metadata.
+- [ ] Re-run `pnpm exec playwright test tests/e2e/chat.test.ts -g "Edit user message and resubmit"` and capture the passing trace.
 
-### 3. Reasoning edit/resubmit expectations
-- [ ] Confirm how `ChatPage.getRecentAssistantMessage` filters reasoning turns and adjust it to fetch the latest assistant content after edits.
-- [x] Align the reasoning mock provider (if applicable) so that re-issued prompts return updated reasoning steps plus the final answer.
-- [ ] Extend `tests/e2e/reasoning.test.ts` with stronger polling (or helper assertions) that validate the message actually changes.
-- [ ] Re-run `pnpm exec playwright test tests/e2e/reasoning.test.ts -g "Curie can edit message and resubmit"` to validate.
+### 3. Registration composer visibility
+- [ ] Trace the post-registration redirect to ensure a chat id is present in both the URL and client-side state.
+- [ ] Update the client onboarding hook/page so the composer renders while session validation is pending.
+- [ ] Extend unit or integration tests to assert the composer is visible immediately after a successful registration.
+- [ ] Re-run `pnpm exec playwright test tests/e2e/session.test.ts -g "Register new account"` and inspect the trace for composer presence.
 
-### 4. Registration composer visibility
-- [x] Instrument the registration action/page to log the redirect target and the created chat id when running under `PLAYWRIGHT=true`.
-- [x] Ensure the server-side registration flow creates or fetches a chat and returns a redirect to `/chat/:id`.
-- [ ] Update the client-side onboarding hook so the composer mounts even if the session refresh is still in flight.
-- [x] Add coverage (unit or integration) proving a freshly registered user sees an enabled composer.
-- [ ] Re-run `pnpm exec playwright test tests/e2e/session.test.ts -g "Register new account"` and inspect the trace for the composer state.
+### 4. Playwright readiness & diagnostics
+- [ ] Install Playwright browsers and (if allowed) `playwright install-deps` so local reruns no longer skip due to missing binaries.
+- [ ] Keep `PLAYWRIGHT_STREAM_DEBUG=1` available for targeted runs and clean up logging once the regressions are fixed.
 
 ## Validation Matrix
-Run the following once all fixes are applied:
-1. `pnpm exec vitest run tests/unit/ai/providers.spec.ts tests/unit/pages/chat-page.spec.ts`
+Run these once the fixes above are complete:
+1. `pnpm exec vitest run tests/unit/ai/providers.spec.ts tests/unit/components/chat.spec.tsx`
 2. `pnpm exec playwright test tests/e2e/chat.test.ts -g "Edit user message and resubmit"`
-3. `pnpm exec playwright test tests/e2e/reasoning.test.ts -g "Curie can edit message and resubmit"`
+3. `pnpm exec playwright test tests/e2e/finance.spec.ts -g "streams a BTCUSD chart"`
 4. `pnpm exec playwright test tests/e2e/session.test.ts -g "Register new account"`
 5. `pnpm e2e`
 
 ## Handoff Notes
-- Keep `DEBUG=playwright` handy for additional instrumentation; traces from the failing runs live under `playwright-results/` with matching names.
-- Avoid modifying the Playwright storage state schema unless necessary; current runs regenerate credentials when missing.
-- Document any new instrumentation directly in the relevant module comments so future agents can disable it cleanly.
-- 2025-12-08 — Introduced `lib/ai/prompt-helpers.ts` so both the inline mocks and the production provider select the freshest user/tool prompt, and updated `tests/prompts/utils.spec.ts`/`tests/unit/ai/providers.spec.ts` accordingly. Registration flow now logs seeded chat ids under Playwright and prefers the seeded redirect over the generic `/chat` fallback; added unit coverage for both success branches. Targeted Vitest suites pass (`ai/providers`, prompts, auth actions) but `tests/unit/pages/chat-page.spec.ts` repeatedly exhausted the container (SIGKILL) and the focused Playwright edit test still stalls with zero assistant messages; traces saved under `playwright-results/e2e-chat-Chat-activity-Edit-user-message-and-resubmit-e2e/` for investigation.
-- 2025-12-09 — Added `lib/chat/message-status.ts` to derive deterministic assistant statuses and rewired `components/messages.tsx` to consume it so inline edits always surface a `streaming` flag. Introduced `tests/unit/components/messages.status.spec.ts` to cover the fallback logic. Targeted edit Playwright run still times out because no assistant bubble ever reattaches (`message-assistant` count stays at 0); inspect the latest trace under `playwright-results/e2e-chat-Chat-activity-Edit-user-message-and-resubmit-e2e/` for DOM + network clues.
-- 2025-12-10 — Latest full `pnpm e2e` run shows baseline chat send now fails (no assistant messages rendered) while the reasoning edit resubmit still returns the pre-edit answer. Accessibility and registration flows pass. Focus next steps on restoring assistant message rendering and updating reasoning polling once baseline chat behaviour is recovered. Relevant traces: `playwright-results/e2e-chat-Chat-activity-Sen-83c51-essage-and-receive-response-e2e/` and `playwright-results/e2e-reasoning-chat-activit-c5759-n-edit-message-and-resubmit-e2e/`.
-- 2025-12-11 — Normalised message hydration in `components/messages.tsx` to tolerate missing `parts` arrays and emit targeted diagnostics, added `tests/unit/components/messages.render.spec.tsx` to lock in the regression fix, and started the Playwright browser/dependency installs so targeted chat runs can execute locally (still downloading system packages — rerun the focused chat test once the install completes).
-- 2025-12-11 — Synthesised fallback message identifiers in `components/messages.tsx` so assistant bubbles render even when the SDK omits `id`, added unit coverage for the synthetic-id path, and attempted to run the focused chat Playwright test. Browsers are now installed but the shared container lacks the desktop dependencies (`playwright install-deps` tries to fetch ~500 MB); rerun the e2e check once the host allows the package install.
-- 2025-12-11 — Added `lib/chat/message-identifiers.ts` with helpers shared by `components/chat.tsx` and `components/messages.tsx` so streamed assistant replies receive deterministic ids before rendering. Patched the chat component to log each synthesised identifier and wrote `tests/unit/lib/chat.message-identifiers.spec.ts` to lock the behaviour before rerunning targeted renderer tests. Playwright checks remain blocked until the container installs the browser dependencies.
-- 2025-12-12 — Hardened the identifier helper against absent metadata timestamps, added regression coverage, and reran the focused chat Playwright test (still failing with zero assistant messages despite the guard; see latest trace under `playwright-results/e2e-chat-Chat-activity-Sen-83c51-essage-and-receive-response-e2e/`).
-- 2025-12-12 — Instrumented the chat surface and mock provider with stream-aware diagnostics, then reran `pnpm exec playwright test tests/e2e/chat.test.ts -g "Send a user message and receive response"` under `PLAYWRIGHT_STREAM_DEBUG=1`. The first rerun passed but the follow-up attempt still timed out with zero assistant bubbles; keep the new debug hooks while triaging the remaining regressions.
-- 2025-12-12 — Updated `lib/chat/message-identifiers.ts` to retain the existing message array when possible (only cloning when messages are frozen), adjusted `components/chat.tsx` to reuse that signal, and expanded the identifier unit suite accordingly. Focused `pnpm exec playwright test … "Send a user message and receive response"` still times out in the `beforeEach` navigation after ~4 minutes, so baseline assistant rendering remains unresolved.
-- 2025-12-12 — Channelled the identifier normalisation effect through the functional `setMessages` updater to avoid overriding newer chat payloads, introduced `prepareNormalisedMessageUpdate` for reuse, and extended the identifier tests to cover the new helper. Targeted Playwright chat run is still pending because the shared container lacks installed browsers (`pnpm exec playwright install` required).
+- Keep `DEBUG=playwright` handy; failing traces live in `playwright-results/` with descriptive names.
+- Finance traces without assistant bubbles: `playwright-results/e2e-finance-Finance-end-to-2ebe4-xposes-interactive-controls-e2e/`.
+- Edit-resubmit traces capturing the stale "green" reply: `playwright-results/e2e-chat-Chat-activity-Edit-user-message-and-resubmit-e2e/`.
+- Registration traces where the composer stays hidden: `playwright-results/e2e-session-Login-and-Registration-Register-new-account-e2e/`.
+- 2025-12-12 — Baseline send now succeeds; outstanding work is limited to finance assistant rendering, standard edit refreshes, and registration composer visibility. Diagnostics for message ids/status remain in place.
