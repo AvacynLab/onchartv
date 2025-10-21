@@ -111,6 +111,24 @@ Your app template should now be running on [localhost:3000](http://localhost:300
 6. **Artefacts finance vides ?** Assurez-vous que chaque route `/api/finance/*` est interceptée par `tests/helpers/finance-mocks.ts` et que `PLAYWRIGHT=true` est exporté (sinon le rate-limit bloque les requêtes).
 7. Les traces Playwright sont stockées sous `artifacts/` en cas d'échec ; inspectez-les via `pnpm exec playwright show-trace <trace.zip>`.
 
+### Dépendances runtime optionnelles
+
+Certaines investigations Playwright nécessitent des dépendances non incluses
+dans l'installation par défaut :
+
+- `pnpm exec playwright install-deps` installe les binaires système requis par
+  les navigateurs headless (bibliothèques graphiques, codecs, etc.).
+- `pnpm exec playwright install` télécharge les navigateurs Chromium, Firefox
+  et WebKit.
+- `pnpm add -D @tanstack/react-query lightweight-charts` est inutile sur CI mais
+  pratique en local si vous souhaitez exécuter le serveur Next.js (`pnpm dev`)
+  pendant une session Playwright : ces paquets optionnels sont chargés dynamiquement par
+  le rendu finance et la console de tests les réclame lorsqu'ils sont absents.
+
+Documentez l'installation sur votre machine pour éviter que de futurs agents ne
+reproduisent les mêmes erreurs de « module introuvable » lors de l'exécution des
+tests e2e.
+
 ## Avertissements / Usage responsable
 
 Les fonctionnalités finance intégrées à Chat SDK sont fournies à titre éducatif uniquement. Elles reposent sur des données **mockées hors ligne** conçues pour garantir la reproductibilité des tests et des exemples.
