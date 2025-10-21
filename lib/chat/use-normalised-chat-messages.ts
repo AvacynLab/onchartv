@@ -51,7 +51,13 @@ export function useNormaliseChatMessages({
       return;
     }
 
-    let identifierPatches: readonly IdentifierPatch[] | null = null;
+    /**
+     * Hold the identifier patches emitted while normalising the message
+     * collection.  The array stays mutable because the downstream logging hook
+     * expects a standard list, and retaining the union with `null` makes the
+     * post-effect guard trivial.
+     */
+    let identifierPatches: IdentifierPatch[] | null = null;
 
     setMessages((currentMessages) => {
       const prepared = prepareNormalisedMessageUpdate({
