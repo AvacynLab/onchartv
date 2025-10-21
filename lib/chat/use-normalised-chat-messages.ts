@@ -73,9 +73,11 @@ export function useNormaliseChatMessages({
       return prepared.messages;
     });
 
-    const patchesToLog = identifierPatches;
+    const patchesToLog = Array.isArray(identifierPatches)
+      ? identifierPatches
+      : [];
 
-    if (Array.isArray(patchesToLog) && patchesToLog.length > 0) {
+    if (patchesToLog.length > 0) {
       onIdentifierPatches?.(patchesToLog);
     }
   }, [chatId, messages, onIdentifierPatches, setMessages]);

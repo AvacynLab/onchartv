@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { UseChatHelpers } from "@ai-sdk/react";
 
 import { logPlaywrightStreamDebug } from "@/lib/playwright-debug";
@@ -118,6 +118,54 @@ export function useChatPlaywrightStreamDebug({
         };
       }),
     }));
+  }, [safeMessages]);
+
+  /**
+   * Track message lifecycle transitions so Playwright can assert that edited
+   * prompts drive the assistant from the transient `streaming` state to the
+   * terminal `completed` status.  Persisting the previous snapshot in a ref
+   * avoids polluting the dependency array while still surfacing every change as
+   * a dedicated debug event.
+   */
+  const previousStatusesRef = useRef<Map<string, ChatMessage["status"] | null>>(
+    new Map()
+  );
+
+  useEffect(() => {
+    const nextStatuses = new Map<string, ChatMessage["status"] | null>();
+
+    safeMessages.forEach((message, index) => {
+      if (!message || typeof message !== "object") {
+        return;
+      }
+
+      const identifier =
+        typeof message.id === "string" && message.id.trim().length > 0
+          ? message.id
+          : `index-${index}`;
+      const nextStatus = message.status ?? null;
+      const previousStatus = previousStatusesRef.current.get(identifier) ?? null;
+
+      nextStatuses.set(identifier, nextStatus);
+
+      if (previousStatus === nextStatus) {
+        return;
+      }
+
+      logPlaywrightStreamDebug(
+        "chat-component",
+        "message-status-transition",
+        () => ({
+          id: identifier,
+          index,
+          role: message.role ?? "unknown",
+          previousStatus,
+          nextStatus,
+        })
+      );
+    });
+
+    previousStatusesRef.current = nextStatuses;
   }, [safeMessages]);
 
   return { safeMessages, messageCount };

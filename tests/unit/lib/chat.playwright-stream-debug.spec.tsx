@@ -110,4 +110,52 @@ describe("chat Playwright stream debug helpers", () => {
 
     expect(getByTestId("summary").dataset.count).toBe("1");
   });
+
+  it("logs message status transitions for Playwright diagnostics", async () => {
+    const Harness = ({ status }: { status?: ChatMessage["status"] }) => {
+      useChatPlaywrightStreamDebug({
+        messages: [
+          {
+            id: "assistant-42",
+            role: "assistant",
+            parts: [{ type: "text", text: "Streaming..." }],
+            status,
+          } as ChatMessage,
+        ],
+        status: "streaming",
+      });
+
+      return null;
+    };
+
+    const { rerender } = render(<Harness status="streaming" />);
+
+    await waitFor(() => {
+      expect(
+        logPlaywrightStreamDebugMock
+          .mock.calls.filter(([, event]) => event === "message-status-transition")
+          .length
+      ).toBeGreaterThan(0);
+    });
+
+    rerender(<Harness status="completed" />);
+
+    await waitFor(() => {
+      const transitionCalls = logPlaywrightStreamDebugMock.mock.calls.filter(
+        ([, event]) => event === "message-status-transition"
+      );
+
+      const latestCall = transitionCalls.at(-1);
+      expect(latestCall).toBeTruthy();
+
+      const payloadFactory = latestCall?.[2];
+      expect(payloadFactory?.()).toEqual({
+        id: "assistant-42",
+        index: 0,
+        role: "assistant",
+        previousStatus: "streaming",
+        nextStatus: "completed",
+      });
+    });
+  });
 });

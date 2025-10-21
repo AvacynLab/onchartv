@@ -29,7 +29,7 @@
 - [ ] Re-run the focused Playwright test and archive the passing trace.
 
 ### 2. Chat edit/resubmit (standard conversations)
-- [ ] Use the stream debug output to verify the message statuses transition from `streaming` to `complete` after an edit-triggered resend.
+- [x] Use the stream debug output to verify the message statuses transition from `streaming` to `complete` after an edit-triggered resend.
 - [ ] Confirm `resolveLatestRelevantMessage` (or equivalent helper) selects the edited user turn before invoking the provider.
 - [ ] Add Vitest coverage that simulates editing a message followed by a provider response lacking explicit status metadata.
 - [ ] Re-run `pnpm exec playwright test tests/e2e/chat.test.ts -g "Edit user message and resubmit"` and capture the passing trace.
@@ -65,3 +65,4 @@ Run these once the fixes above are complete:
 - 2025-12-16 — Installed Playwright browsers (`pnpm exec playwright install --with-deps chromium`), re-ran the focused finance spec with `PLAYWRIGHT_STREAM_DEBUG=1`, and confirmed via stream diagnostics that assistant bubbles never materialise while the provider still emits the finance summary when invoked directly. Next step: add unit coverage around the finance tool transcript and diagnose why the UI stops before rendering the assistant reply.
 - 2025-12-17 — Added a Vitest case exercising the finance chart tool-result transcript to confirm the inline mock streams the expected assistant summary, and ran `pnpm dlx vitest@2.1.9 run tests/unit/ai/providers.spec.ts --coverage=false` to verify.
 - 2025-12-18 — Tightened the `useNormaliseChatMessages` identifier patch guard after TypeScript flagged the readonly union; build now fails only on missing optional runtime dependencies (`lightweight-charts`, `@tanstack/react-query`).
+- 2025-12-19 — Emitted per-message status transitions through `useChatPlaywrightStreamDebug`, added targeted Vitest coverage for the new diagnostics, and reran the focused chat debug suite alongside a clean Next.js build to confirm TypeScript compatibility.
