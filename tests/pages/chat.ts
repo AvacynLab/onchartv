@@ -981,8 +981,6 @@ export class ChatPage {
     await expect(attachmentsButton).toBeVisible({ timeout: 60_000 });
     await expect(attachmentsButton).toBeEnabled({ timeout: 60_000 });
 
-    const fileInput = this.page.getByTestId("file-input");
-
     const filePath = path.join(
       process.cwd(),
       "public",
@@ -992,12 +990,18 @@ export class ChatPage {
     const imageBuffer = fs.readFileSync(filePath);
 
     /**
-     * Playwright's synthetic file chooser occasionally misses the buffered
-     * upload when relying on the OS dialog event.  Drive the hidden input
-     * directly so the React handler always observes the change event and the
-     * attachments preview renders deterministically.
+     * Trigger the real file chooser flow so the composer observes the same
+     * events a user would generate.  Waiting for Playwright's `filechooser`
+     * event mirrors the browser dialog lifecycle and guarantees React receives
+     * the `change` notification required to populate the attachments preview
+     * before the test asserts on it.
      */
-    await fileInput.setInputFiles({
+    const [fileChooser] = await Promise.all([
+      this.page.waitForEvent("filechooser"),
+      attachmentsButton.click(),
+    ]);
+
+    await fileChooser.setFiles({
       name: "mouth of the seine, monet.jpg",
       mimeType: "image/jpeg",
       buffer: imageBuffer,
