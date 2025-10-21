@@ -357,4 +357,34 @@ describe("PreviewMessage finance feature flag", () => {
       expect.objectContaining({ artifact: backtestArtifact })
     );
   });
+
+  it("expose l'état du streaming via l'attribut data attendu par Playwright", () => {
+    // Le status provient du SDK Vercel AI et pilote la synchronisation de nos
+    // tests de bout en bout. Le composant doit le refléter dans le DOM pour
+    // que les helpers Playwright puissent détecter les reprises de streaming.
+    const message: ChatMessage = {
+      ...createFinanceToolMessage(),
+      status: "streaming",
+    };
+
+    const { getByTestId } = render(
+      <DataStreamProvider>
+        <PreviewMessage
+          chatId="chat-42"
+          isLoading={false}
+          isReadonly={true}
+          message={message}
+          regenerate={noop as any}
+          requiresScrollPadding={false}
+          setMessages={noop as any}
+          vote={undefined}
+        />
+      </DataStreamProvider>
+    );
+
+    expect(getByTestId("message-assistant")).toHaveAttribute(
+      "data-message-status",
+      "streaming"
+    );
+  });
 });

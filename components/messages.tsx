@@ -18,6 +18,10 @@ import { financeMessageArtifactSchema } from "@/lib/artifacts/types";
 import * as featureFlags from "@/lib/feature-flags";
 import { logWarning } from "@/lib/logging";
 import { logPlaywrightStreamDebug } from "@/lib/playwright-debug";
+import {
+  resolveStableMessageId,
+} from "@/lib/chat/message-identifiers";
+import { deriveAssistantMessageStatus } from "@/lib/chat/message-status";
 
 type MessagesProps = {
   chatId: string;
@@ -32,12 +36,10 @@ type MessagesProps = {
   financeFeatureEnabledOverride?: boolean;
 };
 
-const isRenderableMessage = (value: ChatMessage | null | undefined): value is ChatMessage => {
-  return (
-    Boolean(value) &&
-    typeof value?.id === "string" &&
-    Array.isArray(value.parts)
-  );
+const isRenderableMessage = (
+  value: ChatMessage | null | undefined
+): value is ChatMessage => {
+  return Boolean(value) && typeof value?.role === "string";
 };
 
 type InvalidArtifactLog = {
@@ -158,6 +160,20 @@ function PureMessages({
   const safeVotes = Array.isArray(votes) ? votes : votes ?? [];
 
   /**
+   * Locate the last assistant reply so we can surface a deterministic
+   * lifecycle attribute for inline regenerations that reuse the same DOM
+   * container.
+   */
+  const latestAssistantIndex = (() => {
+    for (let index = safeMessages.length - 1; index >= 0; index -= 1) {
+      if (safeMessages[index]?.role === "assistant") {
+        return index;
+      }
+    }
+    return -1;
+  })();
+
+  /**
    * Evaluate the finance flag once per render. Tests can inject
    * `financeFeatureEnabledOverride` to force the disabled branch without
    * mutating global process state.
@@ -234,9 +250,57 @@ function PureMessages({
               );
             }
 
+            const { id: stableMessageId, isSynthetic } = resolveStableMessageId({
+              chatId,
+              index,
+              message,
+            });
+
             const matchingVote = safeVotes.find(
-              (vote) => vote.messageId === message.id
+              (vote) => vote.messageId === stableMessageId
             );
+
+            if (isSynthetic) {
+              logWarning(
+                "chat:messages",
+                "[Messages] message arrived without a stable id; synthesising fallback",
+                {
+                  chatId,
+                  fallbackMessageId: stableMessageId,
+                  role: message.role,
+                }
+              );
+            }
+
+            /**
+             * Guard against upstream payloads that temporarily omit the `parts`
+             * array.  The Vercel AI SDK promises to attach the collection, yet
+             * we have observed transient states where Playwright snapshots only
+             * expose the other message fields.  Normalising the shape here keeps
+             * the renderer stable and emits a diagnostic so future agents can
+             * investigate the upstream race without sacrificing end-user
+             * resilience.
+             */
+            const messageWithUnknownParts = message as unknown as {
+              parts?: ChatMessage["parts"] | unknown;
+            };
+            const hasRenderableParts = Array.isArray(
+              messageWithUnknownParts.parts
+            );
+            const originalParts = hasRenderableParts
+              ? (messageWithUnknownParts.parts as ChatMessage["parts"])
+              : [];
+
+            if (!hasRenderableParts) {
+              logWarning(
+                "chat:messages",
+                "[Messages] message arrived without a parts array; defaulting to empty",
+                {
+                  messageId: stableMessageId,
+                  role: message.role,
+                }
+              );
+            }
 
             /**
              * Guard the artefact list because assistant responses sometimes
@@ -296,8 +360,8 @@ function PureMessages({
               return typeof transientValue === "boolean" ? transientValue : false;
             };
 
-            const deduplicatedParts = Array.isArray(message.parts)
-              ? message.parts.reduce<ChatMessage["parts"]>((acc, part) => {
+            const deduplicatedParts = originalParts.length > 0
+              ? originalParts.reduce<ChatMessage["parts"]>((acc, part) => {
                   if (
                     !part ||
                     typeof part !== "object" ||
@@ -391,7 +455,7 @@ function PureMessages({
                   const parsed = parseFinanceArtifact(
                     candidate.value,
                     artifactIndex,
-                    message.id,
+                    stableMessageId,
                     invalidArtifacts,
                     candidate.typeHint
                   );
@@ -422,7 +486,7 @@ function PureMessages({
                 "[Messages] finance artefact candidates dropped after parsing",
                 {
                   artifactCandidateCount: artifactCandidates.length,
-                  messageId: message.id,
+                  messageId: stableMessageId,
                 }
               );
             }
@@ -436,20 +500,37 @@ function PureMessages({
                */
               logWarning("chat:messages", "[Messages] finance artefact hidden by feature flag", {
                 artifactCount: artifactCandidates.length,
-                messageId: message.id,
+                messageId: stableMessageId,
               });
             }
 
             const normalisedMessage = {
               ...message,
               artifacts: sanitizedArtifacts,
+              id: stableMessageId,
               parts: deduplicatedParts,
             } as ChatMessage;
+
+            const derivedStatus = deriveAssistantMessageStatus({
+              index,
+              latestAssistantIndex,
+              chatStatus: status,
+              messageStatus: normalisedMessage.status,
+              role: normalisedMessage.role,
+            });
+
+            const messageForRender =
+              derivedStatus && derivedStatus !== normalisedMessage.status
+                ? ({
+                    ...normalisedMessage,
+                    status: derivedStatus,
+                  } as ChatMessage)
+                : normalisedMessage;
 
             const invalidCount = financeFeatureEnabled ? invalidArtifacts.length : 0;
 
             logPlaywrightStreamDebug("messages", "message-normalised", () => ({
-              messageId: message.id,
+              messageId: stableMessageId,
               artifactCandidateCount: artifactCandidates.length,
               sanitizedArtifactCount: sanitizedArtifacts.length,
               financeFingerprintCount: financePartFingerprints.size,
@@ -459,14 +540,14 @@ function PureMessages({
             }));
 
             return (
-              <Fragment key={message.id}>
+              <Fragment key={stableMessageId}>
                 <PreviewMessage
                   chatId={chatId}
                   isLoading={
                     status === "streaming" && safeMessages.length - 1 === index
                   }
                   isReadonly={isReadonly}
-                  message={normalisedMessage}
+                  message={messageForRender}
                   regenerate={regenerate}
                   requiresScrollPadding={
                     hasSentMessage && index === safeMessages.length - 1

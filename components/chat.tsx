@@ -17,6 +17,7 @@ import type { Attachment, ChatMessage, MessageMetadata } from "@/lib/types";
 import { messageMetadataSchema } from "@/lib/types";
 import type { AppUsage } from "@/lib/usage";
 import { logPlaywrightStreamDebug } from "@/lib/playwright-debug";
+import { logWarning } from "@/lib/logging";
 import { fetcher, fetchWithErrorHandlers, generateUUID } from "@/lib/utils";
 import {
   ChatComposerPrefillOptions,
@@ -26,6 +27,10 @@ import { Artifact } from "./artifact";
 import { useOptionalDataStream } from "./data-stream-provider";
 import { Messages } from "./messages";
 import { MultimodalInput } from "./multimodal-input";
+import {
+  prepareNormalisedMessageUpdate,
+  type IdentifierPatch,
+} from "@/lib/chat/message-identifiers";
 import { getChatHistoryPaginationKey } from "./sidebar-history";
 import { toast } from "./toast";
 import type { VisibilityType } from "./visibility-selector";
@@ -96,7 +101,16 @@ export function Chat({
     resumeStream,
   } = useChat<ChatMessage>({
     id,
-    messages: initialMessages,
+    /**
+     * `useChat` exposes both a controlled `messages` prop and an
+     * `initialMessages` seed.  We deliberately rely on the uncontrolled
+     * variant so the hook can append streaming payloads to its internal state
+     * without React treating our prop as the single source of truth.  Passing
+     * the controlled prop here would freeze the conversation to the initial
+     * snapshot (an empty array during first render) which is exactly what the
+     * Playwright suite observed when no assistant bubble ever appeared.
+     */
+    initialMessages,
     experimental_throttle: 100,
     generateId: generateUUID,
     transport: new DefaultChatTransport({
@@ -285,6 +299,130 @@ export function Chat({
 
     return messages;
   }, [messages]);
+
+  useEffect(() => {
+    /**
+     * Surface the roles and lifecycle states observed by the chat hook when
+     * Playwright stream debug mode is active.  This keeps the noisy logging
+     * hidden during regular sessions while giving end-to-end diagnostics an
+     * easy way to confirm that assistant messages are still present in the
+     * state array when the DOM disagrees.
+     */
+    logPlaywrightStreamDebug("chat-component", "messages-summary", () => ({
+      count: safeMessages.length,
+      messages: safeMessages.map((message, index) => {
+        const partTypes = Array.isArray(message?.parts)
+          ? message!.parts.map((part) =>
+              part && typeof part === "object" && "type" in part
+                ? (part as { type?: unknown }).type ?? typeof part
+                : typeof part
+            )
+          : null;
+
+        /**
+         * Conserver une référence typée vers les parties "text" du SDK nous
+         * permet de bénéficier du raffinement TypeScript tout en conservant la
+         * souplesse du filtre runtime utilisé pour les diagnostics Playwright.
+         */
+        type TextPart = Extract<
+          NonNullable<ChatMessage["parts"]>[number],
+          { type: "text"; text?: string }
+        >;
+
+        const textPreview = Array.isArray(message?.parts)
+          ? message!.parts
+              .filter((part): part is TextPart => {
+                if (!part || typeof part !== "object") {
+                  return false;
+                }
+
+                return (
+                  "type" in part &&
+                  (part as { type?: unknown }).type === "text"
+                );
+              })
+              .map((part) => (part.text ?? "").slice(0, 80))
+          : null;
+
+        return {
+          index,
+          id:
+            typeof message?.id === "string" && message.id.trim().length > 0
+              ? message.id
+              : null,
+          role: message?.role ?? "unknown",
+          status: message?.status ?? null,
+          partTypes,
+          textPreview,
+        };
+      }),
+    }));
+  }, [safeMessages]);
+
+  /**
+   * Les flux d'assistant observés via Playwright exposent parfois des messages
+   * dépourvus d'identifiant stable. Nous normalisons ici la collection dès que
+   * le hook `useChat` la met à jour afin de conserver un état cohérent pour les
+   * actions (votes, édition) et pour les outils de synchronisation e2e.
+   */
+  useEffect(() => {
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return;
+    }
+
+    /**
+     * Éviter de déclencher systématiquement le setter lorsque tous les messages
+     * disposent déjà d'un identifiant stable. Cela limite les écritures
+     * concurrentes pendant le streaming tout en conservant le normaliseur pour
+     * les rares flux où le SDK omet l'`id`.
+     */
+    const hasMessageWithoutId = messages.some((message) => {
+      if (!message || typeof message !== "object") {
+        return false;
+      }
+
+      return !(
+        typeof message.id === "string" && message.id.trim().length > 0
+      );
+    });
+
+    if (!hasMessageWithoutId) {
+      return;
+    }
+
+    let patchesToLog: IdentifierPatch[] | null = null;
+
+    setMessages((currentMessages) => {
+      const prepared = prepareNormalisedMessageUpdate({
+        chatId: id,
+        messages: currentMessages,
+      });
+
+      if (!prepared) {
+        return currentMessages;
+      }
+
+      patchesToLog = prepared.patches;
+      return prepared.messages;
+    });
+
+    if (!Array.isArray(patchesToLog) || patchesToLog.length === 0) {
+      return;
+    }
+
+    for (const patch of patchesToLog) {
+      logWarning(
+        "chat:messages",
+        "[Chat] synthesised fallback identifier for streamed message",
+        {
+          chatId: id,
+          fallbackMessageId: patch.fallbackId,
+          index: patch.index,
+          role: patch.role,
+        }
+      );
+    }
+  }, [id, messages, setMessages]);
 
   const { data: votes } = useSWR<Vote[]>(
     safeMessages.length >= 2 ? `/api/vote?chatId=${id}` : null,

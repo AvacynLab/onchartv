@@ -471,13 +471,15 @@ describe("Chat", () => {
       { wrapper: Wrapper }
     );
 
-    expect(logPlaywrightStreamDebugMock).toHaveBeenCalledWith(
-      "chat-component",
-      "status-change",
-      expect.any(Function)
+    expect(logPlaywrightStreamDebugMock).toHaveBeenCalled();
+
+    const statusCall = logPlaywrightStreamDebugMock.mock.calls.find(
+      ([scope, event]) => scope === "chat-component" && event === "status-change"
     );
 
-    const payloadFactory = logPlaywrightStreamDebugMock.mock.calls.at(-1)?.[2];
+    expect(statusCall).toBeDefined();
+
+    const payloadFactory = statusCall?.[2];
     expect(typeof payloadFactory).toBe("function");
 
     const payload = payloadFactory?.();
