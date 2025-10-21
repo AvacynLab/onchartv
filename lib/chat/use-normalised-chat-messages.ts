@@ -51,7 +51,7 @@ export function useNormaliseChatMessages({
       return;
     }
 
-    let identifierPatches: IdentifierPatch[] | null = null;
+    let identifierPatches: readonly IdentifierPatch[] | null = null;
 
     setMessages((currentMessages) => {
       const prepared = prepareNormalisedMessageUpdate({
@@ -67,8 +67,10 @@ export function useNormaliseChatMessages({
       return prepared.messages;
     });
 
-    if (identifierPatches && identifierPatches.length > 0) {
-      onIdentifierPatches?.(identifierPatches);
+    const patchesToLog = identifierPatches;
+
+    if (Array.isArray(patchesToLog) && patchesToLog.length > 0) {
+      onIdentifierPatches?.(patchesToLog);
     }
   }, [chatId, messages, onIdentifierPatches, setMessages]);
 }
