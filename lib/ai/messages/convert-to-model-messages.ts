@@ -120,30 +120,37 @@ function normaliseUserTextFragments(
 function extractTextFromFragment(
   part: NonNullable<ChatMessage["parts"]>[number]
 ): string | null {
-  if (typeof part === "string") {
-    const trimmed = part.trim();
+  /**
+   * The SDK typings guarantee structured parts, yet legacy cached payloads may
+   * still surface raw strings. Casting through `unknown` lets us safely apply
+   * runtime guards without fighting the stricter compile-time shape.
+   */
+  const candidate = part as unknown;
+
+  if (typeof candidate === "string") {
+    const trimmed = candidate.trim();
 
     return trimmed.length > 0 ? trimmed : null;
   }
 
-  if (typeof part !== "object" || part === null) {
+  if (typeof candidate !== "object" || candidate === null) {
     return null;
   }
 
   if (
-    "text" in part &&
-    typeof (part as { text?: unknown }).text === "string"
+    "text" in (candidate as Record<string, unknown>) &&
+    typeof (candidate as { text?: unknown }).text === "string"
   ) {
-    const text = (part as { text: string }).text;
+    const text = (candidate as { text: string }).text;
     const trimmed = text.trim();
     return trimmed.length > 0 ? trimmed : null;
   }
 
   if (
-    "input_text" in part &&
-    typeof (part as { input_text?: unknown }).input_text === "string"
+    "input_text" in (candidate as Record<string, unknown>) &&
+    typeof (candidate as { input_text?: unknown }).input_text === "string"
   ) {
-    const text = (part as { input_text: string }).input_text;
+    const text = (candidate as { input_text: string }).input_text;
     const trimmed = text.trim();
     return trimmed.length > 0 ? trimmed : null;
   }
