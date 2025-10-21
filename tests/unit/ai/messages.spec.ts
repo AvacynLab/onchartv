@@ -318,4 +318,59 @@ describe("convertToModelMessages", () => {
       },
     ]);
   });
+
+  it("normalises input_text fragments emitted by inline edits", () => {
+    const editedMessage: ChatMessage = {
+      id: "user-inline",
+      role: "user",
+      parts: [
+        { type: "input_text", input_text: "Why is the sky blue?" },
+      ],
+      metadata: { createdAt: new Date("2025-02-16T08:00:00Z").toISOString() },
+    };
+
+    const { id: _id, ...messageWithoutId } = editedMessage;
+
+    const modelMessages = convertToModelMessages([messageWithoutId]);
+
+    expect(modelMessages).toEqual([
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Why is the sky blue?",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("handles legacy fragments lacking a declared type but providing input_text", () => {
+    const legacyMessage: ChatMessage = {
+      id: "user-legacy",
+      role: "user",
+      // Some SDK variants omit the type field while still nesting the
+      // `input_text` payload. We coerce the structure to keep the mock provider
+      // consistent during Playwright runs.
+      parts: [{ input_text: "Why is the sky blue?" } as never],
+      metadata: { createdAt: new Date("2025-02-16T08:05:00Z").toISOString() },
+    };
+
+    const { id: _id, ...messageWithoutId } = legacyMessage;
+
+    const modelMessages = convertToModelMessages([messageWithoutId]);
+
+    expect(modelMessages).toEqual([
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Why is the sky blue?",
+          },
+        ],
+      },
+    ]);
+  });
 });

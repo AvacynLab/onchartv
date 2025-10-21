@@ -24,12 +24,48 @@ export function convertToModelMessages(
       return message;
     }
 
-    const filteredParts = message.parts.filter((part) => {
-      return typeof part.type !== "string" || !part.type.startsWith(FINANCE_DATA_PREFIX);
-    });
+    const filteredParts = message.parts
+      .filter((part) => {
+        return (
+          typeof part.type !== "string" ||
+          !part.type.startsWith(FINANCE_DATA_PREFIX)
+        );
+      })
+      .map((part) => {
+        if (!part || typeof part !== "object") {
+          return part;
+        }
+
+        const hasInputText =
+          "input_text" in part &&
+          typeof (part as { input_text?: unknown }).input_text === "string";
+
+        const declaredType = (part as { type?: unknown }).type;
+
+        if (hasInputText) {
+          const text = (part as { input_text: string }).input_text;
+
+          if (declaredType === "input_text" || declaredType == null) {
+            /**
+             * Inline edits surface user prompts as `input_text` fragments.
+             * Normalising them to the standard text shape keeps the
+             * downstream AI SDK helper aware of the freshest user edit.
+             */
+            return {
+              type: "text" as const,
+              text,
+            };
+          }
+        }
+
+        return part;
+      });
 
     if (filteredParts.length === message.parts.length) {
-      return message;
+      return {
+        ...message,
+        parts: filteredParts,
+      };
     }
 
     return {
