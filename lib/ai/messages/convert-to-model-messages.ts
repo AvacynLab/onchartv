@@ -61,18 +61,123 @@ export function convertToModelMessages(
         return part;
       });
 
-    if (filteredParts.length === message.parts.length) {
-      return {
-        ...message,
-        parts: filteredParts,
-      };
-    }
-
     return {
       ...message,
-      parts: filteredParts,
+      parts:
+        message.role === "user"
+          ? normaliseUserTextFragments(filteredParts)
+          : filteredParts,
     };
   });
 
   return ai.convertToModelMessages(sanitisedMessages, options);
+}
+
+/**
+ * Collapse multiple textual fragments into a single authoritative entry for
+ * user prompts. Inline edit flows occasionally retain the previous question as
+ * an earlier fragment (string, `text`, or legacy `input_text`).
+ *
+ * Keeping only the freshest fragment avoids replaying stale prompts while
+ * preserving the original order of non-text parts (attachments, tool results,
+ * etc.).
+ */
+function normaliseUserTextFragments(
+  parts: ChatMessage["parts"]
+): ChatMessage["parts"] {
+  if (!Array.isArray(parts) || parts.length === 0) {
+    return parts;
+  }
+
+  const normalisedParts: ChatMessage["parts"] = [];
+  let textIndex: number | null = null;
+
+  for (const part of parts) {
+    if (part == null) {
+      continue;
+    }
+
+    const nextText = extractTextFromFragment(part);
+
+    if (nextText == null) {
+      normalisedParts.push(part);
+      continue;
+    }
+
+    const normalisedTextPart = createTextPart(part, nextText);
+
+    if (textIndex === null) {
+      textIndex = normalisedParts.length;
+      normalisedParts.push(normalisedTextPart);
+    } else {
+      normalisedParts[textIndex] = normalisedTextPart;
+    }
+  }
+
+  return normalisedParts;
+}
+
+function extractTextFromFragment(
+  part: NonNullable<ChatMessage["parts"]>[number]
+): string | null {
+  if (typeof part === "string") {
+    const trimmed = part.trim();
+
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  if (typeof part !== "object" || part === null) {
+    return null;
+  }
+
+  if (
+    "text" in part &&
+    typeof (part as { text?: unknown }).text === "string"
+  ) {
+    const text = (part as { text: string }).text;
+    const trimmed = text.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  if (
+    "input_text" in part &&
+    typeof (part as { input_text?: unknown }).input_text === "string"
+  ) {
+    const text = (part as { input_text: string }).input_text;
+    const trimmed = text.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  return null;
+}
+
+/**
+ * Build a canonical text fragment while preserving any ancillary properties
+ * present on the original part (for example annotations emitted by the SDK).
+ */
+function createTextPart(
+  source: NonNullable<ChatMessage["parts"]>[number],
+  text: string
+): NonNullable<ChatMessage["parts"]>[number] {
+  if (typeof source === "object" && source !== null) {
+    if ("text" in source && typeof (source as { text?: unknown }).text === "string") {
+      return {
+        ...(source as Record<string, unknown>),
+        type: "text",
+        text,
+      } as NonNullable<ChatMessage["parts"]>[number];
+    }
+
+    if (
+      "input_text" in source &&
+      typeof (source as { input_text?: unknown }).input_text === "string"
+    ) {
+      return {
+        type: "text", // ensure downstream helpers receive a standard text fragment
+        text,
+      } as NonNullable<ChatMessage["parts"]>[number];
+    }
+  }
+
+  return { type: "text", text } as NonNullable<ChatMessage["parts"]>[number];
 }

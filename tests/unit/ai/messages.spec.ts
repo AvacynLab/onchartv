@@ -373,4 +373,52 @@ describe("convertToModelMessages", () => {
       },
     ]);
   });
+
+  it("collapses duplicate textual fragments to the freshest edit", () => {
+    const editedMessage: ChatMessage = {
+      id: "user-edited",
+      role: "user",
+      parts: [
+        { type: "text", text: "Why is grass green?" },
+        { type: "text", text: "Why is the sky blue?" },
+        { type: "tool-result", toolCallId: "noop", toolName: "noop", result: {} },
+      ],
+      metadata: { createdAt: new Date("2025-02-16T09:00:00Z").toISOString() },
+    };
+
+    const { id: _id, ...messageWithoutId } = editedMessage;
+
+    const modelMessages = convertToModelMessages([messageWithoutId]);
+
+    expect(modelMessages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "Why is the sky blue?" }],
+      },
+    ]);
+  });
+
+  it("upgrades bare string fragments while preserving trailing attachments", () => {
+    const editedMessage: ChatMessage = {
+      id: "user-string",
+      role: "user",
+      parts: [
+        "Why is grass green?",
+        { type: "text", text: "Why is the sky blue?" },
+        { type: "image", image_url: "https://example.com/sky.png" } as never,
+      ],
+      metadata: { createdAt: new Date("2025-02-16T09:05:00Z").toISOString() },
+    };
+
+    const { id: _id, ...messageWithoutId } = editedMessage;
+
+    const modelMessages = convertToModelMessages([messageWithoutId]);
+
+    expect(modelMessages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "Why is the sky blue?" }],
+      },
+    ]);
+  });
 });
