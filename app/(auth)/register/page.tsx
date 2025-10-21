@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { useActionState, useEffect, useState } from "react";
+import { startTransition, useActionState, useEffect, useState } from "react";
 import { AuthForm } from "@/components/auth-form";
 import { SubmitButton } from "@/components/submit-button";
 import { toast } from "@/components/toast";
@@ -88,6 +88,22 @@ export default function Page() {
           }
         };
 
+        const scheduleHardRedirects = () => {
+          if (typeof window === "undefined") {
+            console.warn(
+              "[register] window object unavailable – cannot enforce redirect"
+            );
+            return;
+          }
+
+          const delays = [0, IMMEDIATE_REDIRECT_DELAY_MS, HARD_REDIRECT_DELAY_MS];
+          for (const delay of delays) {
+            window.setTimeout(() => {
+              ensureHardRedirect();
+            }, delay);
+          }
+        };
+
         if (typeof updateSession === "function") {
           const refreshPromise = updateSession();
           let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
@@ -121,33 +137,18 @@ export default function Page() {
          * in case the client transition never commits.
          */
         try {
-          router.replace(destination);
+          startTransition(() => {
+            router.replace(destination);
+          });
           console.info("[register] scheduled router.replace for dashboard", {
             destination,
           });
-          /**
-           * Kick off the window-level redirect immediately so navigation begins even if
-           * the Next.js router never commits (for example when hydration stalls during
-           * hermetic Playwright runs). The delayed timeouts below remain as safety nets
-           * should the direct call be pre-empted by another transition.
-           */
-          ensureHardRedirect();
         } catch (error) {
           console.error("[register] router.replace failed", error);
         }
 
-        /**
-         * Trigger a defensive hard redirect in case the Next.js router fails to
-         * commit the navigation (for example during flaky hydration on CI).
-         * The delayed fallback gives the client transition time to complete
-         * while still guaranteeing we eventually land on the chat dashboard.
-         */
-        if (typeof window !== "undefined") {
-          window.setTimeout(ensureHardRedirect, IMMEDIATE_REDIRECT_DELAY_MS);
-          window.setTimeout(ensureHardRedirect, HARD_REDIRECT_DELAY_MS);
-        } else {
-          console.warn("[register] window object unavailable – cannot enforce redirect");
-        }
+        ensureHardRedirect();
+        scheduleHardRedirects();
 
         /**
          * Give the success toast a brief window to render before navigating away

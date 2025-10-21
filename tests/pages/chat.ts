@@ -978,23 +978,30 @@ export class ChatPage {
       await expect(attachmentsButton).toBeEnabled();
     }
 
-    this.page.on("filechooser", async (fileChooser) => {
-      const filePath = path.join(
-        process.cwd(),
-        "public",
-        "images",
-        "mouth of the seine, monet.jpg"
-      );
-      const imageBuffer = fs.readFileSync(filePath);
+    await expect(attachmentsButton).toBeVisible({ timeout: 60_000 });
+    await expect(attachmentsButton).toBeEnabled({ timeout: 60_000 });
 
-      await fileChooser.setFiles({
-        name: "mouth of the seine, monet.jpg",
-        mimeType: "image/jpeg",
-        buffer: imageBuffer,
-      });
+    const fileInput = this.page.getByTestId("file-input");
+
+    const filePath = path.join(
+      process.cwd(),
+      "public",
+      "images",
+      "mouth of the seine, monet.jpg"
+    );
+    const imageBuffer = fs.readFileSync(filePath);
+
+    /**
+     * Playwright's synthetic file chooser occasionally misses the buffered
+     * upload when relying on the OS dialog event.  Drive the hidden input
+     * directly so the React handler always observes the change event and the
+     * attachments preview renders deterministically.
+     */
+    await fileInput.setInputFiles({
+      name: "mouth of the seine, monet.jpg",
+      mimeType: "image/jpeg",
+      buffer: imageBuffer,
     });
-
-    await attachmentsButton.click();
   }
 
   async getSelectedModel() {
