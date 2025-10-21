@@ -101,7 +101,16 @@ export function Chat({
     resumeStream,
   } = useChat<ChatMessage>({
     id,
-    messages: initialMessages,
+    /**
+     * `useChat` exposes both a controlled `messages` prop and an
+     * `initialMessages` seed.  We deliberately rely on the uncontrolled
+     * variant so the hook can append streaming payloads to its internal state
+     * without React treating our prop as the single source of truth.  Passing
+     * the controlled prop here would freeze the conversation to the initial
+     * snapshot (an empty array during first render) which is exactly what the
+     * Playwright suite observed when no assistant bubble ever appeared.
+     */
+    initialMessages,
     experimental_throttle: 100,
     generateId: generateUUID,
     transport: new DefaultChatTransport({
@@ -361,6 +370,26 @@ export function Chat({
       return;
     }
 
+    /**
+     * Éviter de déclencher systématiquement le setter lorsque tous les messages
+     * disposent déjà d'un identifiant stable. Cela limite les écritures
+     * concurrentes pendant le streaming tout en conservant le normaliseur pour
+     * les rares flux où le SDK omet l'`id`.
+     */
+    const hasMessageWithoutId = messages.some((message) => {
+      if (!message || typeof message !== "object") {
+        return false;
+      }
+
+      return !(
+        typeof message.id === "string" && message.id.trim().length > 0
+      );
+    });
+
+    if (!hasMessageWithoutId) {
+      return;
+    }
+
     let patchesToLog: IdentifierPatch[] | null = null;
 
     setMessages((currentMessages) => {
@@ -377,34 +406,11 @@ export function Chat({
       return prepared.messages;
     });
 
-    /**
-     * Lorsque le normalisateur n'applique aucun correctif nous sortons tôt :
-     * l'opérateur optionnel permet de couvrir le cas où `patchesToLog` reste
-     * `null` sans heurter le typage strict de TypeScript (5.6+ interdirait
-     * l'accès à `.length` sur un union non raffiné dans une expression `||`).
-     */
-    if (!Array.isArray(patchesToLog)) {
-      /**
-       * Aucun correctif à journaliser lorsque le normaliseur n'a généré aucun
-       * patch (ou que la fonction de préparation a court-circuité). Nous
-       * sortons tôt pour éviter d'accéder à `.length` tant que TypeScript n'a
-       * pas raffiné l'union vers `IdentifierPatch[]`.
-       */
+    if (!Array.isArray(patchesToLog) || patchesToLog.length === 0) {
       return;
     }
 
-    const patches = patchesToLog as IdentifierPatch[];
-
-    if (patches.length === 0) {
-      /**
-       * Même lorsqu'un tableau est renvoyé, il peut être vide. Nous évitons un
-       * for-of inutile et laissons la boucle principale se déclencher uniquement
-       * lorsque des identifiants synthétiques ont réellement été créés.
-       */
-      return;
-    }
-
-    for (const patch of patches) {
+    for (const patch of patchesToLog) {
       logWarning(
         "chat:messages",
         "[Chat] synthesised fallback identifier for streamed message",
