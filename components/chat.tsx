@@ -102,15 +102,14 @@ export function Chat({
   } = useChat<ChatMessage>({
     id,
     /**
-     * `useChat` exposes both a controlled `messages` prop and an
-     * `initialMessages` seed.  We deliberately rely on the uncontrolled
-     * variant so the hook can append streaming payloads to its internal state
-     * without React treating our prop as the single source of truth.  Passing
-     * the controlled prop here would freeze the conversation to the initial
-     * snapshot (an empty array during first render) which is exactly what the
-     * Playwright suite observed when no assistant bubble ever appeared.
+     * `useChat` initialise son état interne à l'aide de la propriété
+     * `messages`. Nous la renseignons avec l'instantané fourni par le serveur
+     * tout en laissant le hook gérer ensuite ses mises à jour en autonomie.
+     * Cela évite l'effet « prop contrôlée » observé lorsque l'on passait le
+     * tableau via `messages` depuis React à chaque rendu (ce qui gelait le
+     * stream Playwright faute d'assistant visible).
      */
-    initialMessages,
+    messages: initialMessages,
     experimental_throttle: 100,
     generateId: generateUUID,
     transport: new DefaultChatTransport({
