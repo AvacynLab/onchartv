@@ -131,8 +131,7 @@ export function normaliseUserMessageParts(
 
   // The canonical fragment is reused for the first textual slot so capture it
   // once and keep subsequent iterations focused on attachment ordering.
-  const resolvedBestText = bestText;
-  const canonicalTextPart = resolvedBestText.canonical;
+  const canonicalTextPart = bestText!.canonical;
 
   const normalised: ChatMessage["parts"] = [];
   let textInserted = false;
