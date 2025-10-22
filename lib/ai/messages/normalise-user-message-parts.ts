@@ -129,6 +129,10 @@ export function normaliseUserMessageParts(
     return parts.filter((part): part is NonNullable<ChatMessage["parts"]>[number] => part != null);
   }
 
+  // The canonical fragment is reused for the first textual slot so capture it
+  // once and keep subsequent iterations focused on attachment ordering.
+  const canonicalTextPart = bestText.canonical;
+
   const normalised: ChatMessage["parts"] = [];
   let textInserted = false;
 
@@ -145,7 +149,7 @@ export function normaliseUserMessageParts(
     }
 
     if (!textInserted) {
-      normalised.push(bestText.canonical);
+      normalised.push(canonicalTextPart);
       textInserted = true;
     }
     // Skip any remaining textual fragments so only the canonical entry
