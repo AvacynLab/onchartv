@@ -63,7 +63,12 @@ import {
 import { normaliseAssistantMessage } from "@/lib/chat/stream-fallback";
 
 import { wrapFinanceArtifact } from "@/lib/artifacts/types";
-import { convertToUIMessages, generateUUID } from "@/lib/utils";
+import {
+  convertToUIMessages,
+  generateUUID,
+  stableStringifyForHash,
+} from "@/lib/utils";
+import { logPlaywrightStreamDebug } from "@/lib/chat/playwright-stream-debug";
 import { generateTitleFromUserMessage } from "../../actions";
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
 
@@ -605,17 +610,25 @@ export async function POST(request: Request) {
       incomingSignature === persistedSignature;
 
     let resolvedParts: ChatMessage["parts"];
+    let resolvedSource: "incoming" | "persisted" | "fallback" = "fallback";
 
     if (incomingHasText) {
       const clientMatchesPersisted =
         typeof clientSignature === "string" && clientSignature === persistedSignature;
 
+      const partsStructurallyMatch =
+        Array.isArray(persistedParts) &&
+        stableStringifyForHash(persistedParts) ===
+          stableStringifyForHash(incomingParts);
+
       if (
         signaturesMatch &&
         persistedParts &&
-        (clientSignature == null || clientMatchesPersisted)
+        (clientSignature == null || clientMatchesPersisted) &&
+        partsStructurallyMatch
       ) {
         resolvedParts = persistedParts;
+        resolvedSource = "persisted";
       } else {
         if (persistedHasText && !signaturesMatch) {
           logWarning(
@@ -637,15 +650,45 @@ export async function POST(request: Request) {
               persistedSignature,
             }
           );
+        } else if (signaturesMatch && persistedParts && !partsStructurallyMatch) {
+          logWarning(
+            "chat:message",
+            "Persisted text matched but structural differences were detected; using incoming parts",
+            {
+              clientSignature,
+              incomingSignature,
+              persistedSignature,
+            }
+          );
         }
 
         resolvedParts = incomingParts;
+        resolvedSource = "incoming";
       }
     } else if (persistedParts) {
       resolvedParts = persistedParts;
+      resolvedSource = "persisted";
     } else {
       resolvedParts = incomingParts;
+      resolvedSource = "incoming";
     }
+
+    logPlaywrightStreamDebug(
+      "chat.api",
+      "resolve-user-message",
+      () => ({
+        chatId: id,
+        messageId: incomingMessage.id,
+        incomingSignature,
+        persistedSignature,
+        clientSignature,
+        resolvedSource,
+        incomingPartCount: incomingParts.length,
+        persistedPartCount: persistedParts?.length ?? 0,
+        usedIncomingReference: resolvedParts === incomingParts,
+      }),
+      { withTimestamp: true }
+    );
 
     const resolvedAttachments: Attachment[] = Array.isArray(
       persistedMessage?.attachments
