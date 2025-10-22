@@ -483,4 +483,70 @@ describe("MessageEditor", () => {
       vi.useRealTimers();
     }
   });
+
+  it("normalises legacy string fragments when resubmitting an edit", async () => {
+    const setMode = vi.fn();
+    const regenerate = vi.fn().mockResolvedValue(undefined);
+    let messages: ChatMessage[] = [
+      {
+        ...baseMessage,
+        parts: ["Original legacy prompt"],
+      },
+    ];
+
+    const setMessages = vi.fn(
+      (
+        updater:
+          | ChatMessage[]
+          | ((currentMessages: ChatMessage[]) => ChatMessage[])
+      ) => {
+        messages =
+          typeof updater === "function" ? updater(messages) : updater;
+      }
+    );
+
+    render(
+      <MessageEditor
+        message={{ ...baseMessage, parts: ["Original legacy prompt"] }}
+        regenerate={regenerate}
+        setMode={setMode}
+        setMessages={setMessages}
+      />
+    );
+
+    const editor = screen.getByTestId("message-editor");
+
+    await act(async () => {
+      fireEvent.change(editor, { target: { value: "Edited legacy prompt" } });
+    });
+
+    const submit = screen.getByTestId("message-editor-send-button");
+
+    await act(async () => {
+      fireEvent.click(submit);
+    });
+
+    await flushAsyncUpdates();
+
+    const updateArgs =
+      updateMessagePartsMock.mock.calls[updateMessagePartsMock.mock.calls.length - 1]?.[0];
+
+    expect(updateArgs).toEqual({
+      id: baseMessage.id,
+      attachments: [],
+      parts: [{ type: "text", text: "Edited legacy prompt" }],
+    });
+
+    expect(messages).toEqual([
+      {
+        ...baseMessage,
+        attachments: [],
+        metadata: {
+          createdAt: baseMessage.metadata?.createdAt,
+          clientTextSignature: "Edited legacy prompt",
+        },
+        parts: [{ type: "text", text: "Edited legacy prompt" }],
+      },
+    ]);
+  });
 });
