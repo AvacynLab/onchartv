@@ -90,8 +90,47 @@ export function normaliseUserMessageParts(
     return [];
   }
 
+  /**
+   * Inline edits frequently emit a fresh `input_text` fragment while still
+   * carrying the previously persisted `text` payload. We determine the most
+   * authoritative entry ahead of time so we can replace the first textual
+   * fragment in the list with the refreshed value while preserving the order of
+   * non-text attachments and tool references.
+   */
+  let bestText: {
+    canonical: NonNullable<ChatMessage["parts"]>[number];
+    priority: number;
+    index: number;
+  } | null = null;
+
+  parts.forEach((part, index) => {
+    if (part == null) {
+      return;
+    }
+
+    const extractedText = extractTextFromMessagePart(part);
+    if (extractedText == null) {
+      return;
+    }
+
+    const canonicalPart = createCanonicalTextPart(part, extractedText);
+    const priority = resolveTextPriority(part);
+
+    if (
+      !bestText ||
+      priority > bestText.priority ||
+      (priority === bestText.priority && index > bestText.index)
+    ) {
+      bestText = { canonical: canonicalPart, priority, index };
+    }
+  });
+
+  if (!bestText) {
+    return parts.filter((part): part is NonNullable<ChatMessage["parts"]>[number] => part != null);
+  }
+
   const normalised: ChatMessage["parts"] = [];
-  let textIndex: number | null = null;
+  let textInserted = false;
 
   for (const part of parts) {
     if (part == null) {
@@ -105,15 +144,36 @@ export function normaliseUserMessageParts(
       continue;
     }
 
-    const canonicalPart = createCanonicalTextPart(part, extractedText);
-
-    if (textIndex === null) {
-      textIndex = normalised.length;
-      normalised.push(canonicalPart);
-    } else {
-      normalised[textIndex] = canonicalPart;
+    if (!textInserted) {
+      normalised.push(bestText.canonical);
+      textInserted = true;
     }
+    // Skip any remaining textual fragments so only the canonical entry
+    // persists in the array.
   }
 
   return normalised;
+}
+
+function resolveTextPriority(
+  part: NonNullable<ChatMessage["parts"]>[number]
+): number {
+  if (typeof part === "object" && part !== null) {
+    if (
+      "input_text" in part &&
+      typeof (part as { input_text?: unknown }).input_text === "string"
+    ) {
+      return 3;
+    }
+
+    if (
+      "text" in part &&
+      typeof (part as { text?: unknown }).text === "string"
+    ) {
+      return 2;
+    }
+  }
+
+  // Legacy string fragments are still valid but have the lowest priority.
+  return 1;
 }

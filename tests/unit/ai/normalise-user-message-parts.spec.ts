@@ -35,6 +35,17 @@ describe("normaliseUserMessageParts", () => {
     ]);
   });
 
+  it("prioritises input_text fragments over trailing text entries", () => {
+    const parts: ChatMessage["parts"] = [
+      { type: "input_text", input_text: "Refreshed prompt" } as any,
+      { type: "text", text: "Stale prompt" },
+    ];
+
+    const result = normaliseUserMessageParts(parts);
+
+    expect(result).toEqual([{ type: "text", text: "Refreshed prompt" }]);
+  });
+
   it("returns an empty array when the source parts are empty", () => {
     expect(normaliseUserMessageParts([])).toEqual([]);
   });
