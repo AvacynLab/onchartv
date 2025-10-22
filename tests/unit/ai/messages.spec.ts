@@ -421,4 +421,27 @@ describe("convertToModelMessages", () => {
       },
     ]);
   });
+
+  it("derives fresh text fragments from legacy content-only payloads", () => {
+    const legacyContentMessage: ChatMessage = {
+      id: "user-content",
+      role: "user",
+      content: [
+        { type: "text", text: "Why is grass green?" },
+        { type: "text", text: "Why is the sky blue?" },
+      ] as never,
+      metadata: { createdAt: new Date("2025-02-16T09:10:00Z").toISOString() },
+    };
+
+    const { id: _id, ...messageWithoutId } = legacyContentMessage;
+
+    const modelMessages = convertToModelMessages([messageWithoutId]);
+
+    expect(modelMessages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "Why is the sky blue?" }],
+      },
+    ]);
+  });
 });
