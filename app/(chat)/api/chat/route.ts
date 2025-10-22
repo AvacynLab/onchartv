@@ -27,6 +27,7 @@ import { getWeather } from "@/lib/ai/tools/get-weather";
 import { requestSuggestions } from "@/lib/ai/tools/request-suggestions";
 import { updateDocument } from "@/lib/ai/tools/update-document";
 import { convertToModelMessages } from "@/lib/ai/messages/convert-to-model-messages";
+import { deriveMessageParts } from "@/lib/ai/messages/derive-message-parts";
 import {
   streamChatResponse,
   type StreamTextOptions,
@@ -68,7 +69,7 @@ import {
   generateUUID,
   stableStringifyForHash,
 } from "@/lib/utils";
-import { logPlaywrightStreamDebug } from "@/lib/chat/playwright-stream-debug";
+import { logPlaywrightStreamDebug } from "@/lib/playwright-debug";
 import { generateTitleFromUserMessage } from "../../actions";
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
 
@@ -579,9 +580,7 @@ export async function POST(request: Request) {
     const messagesFromDb = await getMessagesByChatId({ id });
     const [persistedMessage] = await getMessageById({ id: incomingMessage.id });
 
-    const incomingParts = Array.isArray(incomingMessage.parts)
-      ? (incomingMessage.parts as ChatMessage["parts"])
-      : [];
+    const incomingParts = deriveMessageParts(incomingMessage);
     const persistedParts = Array.isArray(persistedMessage?.parts)
       ? (persistedMessage!.parts as ChatMessage["parts"])
       : null;
@@ -757,9 +756,57 @@ export async function POST(request: Request) {
         )
       : messagesFromDb;
 
-    const uiMessages = persistedMessage
-      ? convertToUIMessages(updatedMessagesFromDb)
-      : [...convertToUIMessages(updatedMessagesFromDb), resolvedMessage];
+    const baseUiMessages = convertToUIMessages(updatedMessagesFromDb);
+
+    const uiMessages = (() => {
+      const hasResolvedMessage = baseUiMessages.some(
+        (message) => message.id === resolvedMessage.id
+      );
+
+      if (!hasResolvedMessage) {
+        return [...baseUiMessages, resolvedMessage];
+      }
+
+      return baseUiMessages.map((message) => {
+        if (message.id !== resolvedMessage.id) {
+          return message;
+        }
+
+        const messageCreatedAt = (() => {
+          const resolvedCreatedAt =
+            typeof resolvedMessage.metadata === "object" &&
+            resolvedMessage.metadata !== null &&
+            typeof (resolvedMessage.metadata as { createdAt?: unknown }).createdAt ===
+              "string"
+              ? (resolvedMessage.metadata as { createdAt: string }).createdAt
+              : null;
+
+          if (resolvedCreatedAt) {
+            return resolvedCreatedAt;
+          }
+
+          const existingCreatedAt =
+            typeof message.metadata === "object" &&
+            message.metadata !== null &&
+            typeof (message.metadata as { createdAt?: unknown }).createdAt ===
+              "string"
+              ? (message.metadata as { createdAt: string }).createdAt
+              : null;
+
+          return existingCreatedAt ?? new Date().toISOString();
+        })();
+
+        return {
+          ...message,
+          parts: resolvedMessage.parts,
+          metadata: {
+            ...message.metadata,
+            ...resolvedMessage.metadata,
+            createdAt: messageCreatedAt,
+          },
+        } satisfies ChatMessage;
+      });
+    })();
 
     // Resolve coarse location data without triggering network calls during
     // hermetic Playwright runs. The helper gracefully falls back to an empty
