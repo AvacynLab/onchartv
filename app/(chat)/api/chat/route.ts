@@ -28,6 +28,7 @@ import { requestSuggestions } from "@/lib/ai/tools/request-suggestions";
 import { updateDocument } from "@/lib/ai/tools/update-document";
 import { convertToModelMessages } from "@/lib/ai/messages/convert-to-model-messages";
 import { deriveMessageParts } from "@/lib/ai/messages/derive-message-parts";
+import { normaliseUserMessageParts } from "@/lib/ai/messages/normalise-user-message-parts";
 import {
   streamChatResponse,
   type StreamTextOptions,
@@ -580,10 +581,30 @@ export async function POST(request: Request) {
     const messagesFromDb = await getMessagesByChatId({ id });
     const [persistedMessage] = await getMessageById({ id: incomingMessage.id });
 
-    const incomingParts = deriveMessageParts(incomingMessage);
-    const persistedParts = Array.isArray(persistedMessage?.parts)
+    let incomingParts = deriveMessageParts(incomingMessage);
+    if (incomingMessage.role === "user") {
+      /**
+       * Inline edit flows may keep the previous prompt in the payload while
+       * appending the refreshed text as an additional fragment. Collapsing the
+       * parts down to a single textual entry keeps signature comparisons and
+       * downstream providers aligned with what the user just typed.
+       */
+      incomingParts = normaliseUserMessageParts(incomingParts);
+    }
+
+    let persistedParts: ChatMessage["parts"] | null = Array.isArray(
+      persistedMessage?.parts
+    )
       ? (persistedMessage!.parts as ChatMessage["parts"])
       : null;
+
+    if (
+      persistedMessage?.role === "user" &&
+      Array.isArray(persistedParts) &&
+      persistedParts.length > 0
+    ) {
+      persistedParts = normaliseUserMessageParts(persistedParts);
+    }
 
     const incomingSignature = buildMessageTextSignature(incomingParts);
     const persistedSignature = buildMessageTextSignature(persistedParts);
