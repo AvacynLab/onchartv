@@ -97,11 +97,19 @@ export function normaliseUserMessageParts(
    * fragment in the list with the refreshed value while preserving the order of
    * non-text attachments and tool references.
    */
-  let bestText: {
+  /**
+   * Internal representation used while scanning the incoming fragments for the
+   * most up-to-date textual payload. Tracking the original index allows us to
+   * prefer the latest entry when priorities are equal (for example multiple
+   * `input_text` parts that may appear during rapid edits).
+   */
+  interface CandidateTextPart {
     canonical: NonNullable<ChatMessage["parts"]>[number];
     priority: number;
     index: number;
-  } | null = null;
+  }
+
+  let bestText: CandidateTextPart | undefined;
 
   parts.forEach((part, index) => {
     if (part == null) {
@@ -117,7 +125,7 @@ export function normaliseUserMessageParts(
     const priority = resolveTextPriority(part);
 
     if (
-      !bestText ||
+      bestText === undefined ||
       priority > bestText.priority ||
       (priority === bestText.priority && index > bestText.index)
     ) {
@@ -125,18 +133,13 @@ export function normaliseUserMessageParts(
     }
   });
 
-  if (bestText === null) {
+  if (bestText === undefined) {
     return parts.filter((part): part is NonNullable<ChatMessage["parts"]>[number] => part != null);
   }
 
   // The canonical fragment is reused for the first textual slot so capture it
   // once and keep subsequent iterations focused on attachment ordering.
-  const resolvedBestText = bestText as {
-    canonical: NonNullable<ChatMessage["parts"]>[number];
-    priority: number;
-    index: number;
-  };
-  const canonicalTextPart = resolvedBestText.canonical;
+  const canonicalTextPart = bestText.canonical;
 
   const normalised: ChatMessage["parts"] = [];
   let textInserted = false;
