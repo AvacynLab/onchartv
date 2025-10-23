@@ -54,12 +54,6 @@ export default function Page() {
 
       setIsSuccessful(true);
       void (async () => {
-        /**
-         * Refresh the credentials session before redirecting to the dashboard
-         * so authenticated routes stay accessible during the subsequent
-         * Playwright steps.  Cap the wait time so CI does not stall when the
-         * dev server takes longer than expected to resolve the update request.
-         */
         const destination = state.redirectTo ?? "/chat";
 
         const ensureHardRedirect = () => {
@@ -88,54 +82,15 @@ export default function Page() {
           }
         };
 
-        const scheduleHardRedirects = () => {
-          if (typeof window === "undefined") {
-            console.warn(
-              "[register] window object unavailable – cannot enforce redirect"
-            );
-            return;
-          }
-
-          const delays = [0, IMMEDIATE_REDIRECT_DELAY_MS, HARD_REDIRECT_DELAY_MS];
-          for (const delay of delays) {
-            window.setTimeout(() => {
-              ensureHardRedirect();
-            }, delay);
-          }
-        };
-
         if (typeof updateSession === "function") {
-          const refreshPromise = updateSession();
-          let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-
-          try {
-            await Promise.race([
-              refreshPromise.catch((error) => {
-                console.error(
-                  "Failed to refresh session before redirecting",
-                  error
-                );
-              }),
-              new Promise<void>((resolve) => {
-                timeoutHandle = setTimeout(
-                  resolve,
-                  SESSION_REFRESH_TIMEOUT_MS
-                );
-              }),
-            ]);
-          } finally {
-            if (timeoutHandle) {
-              clearTimeout(timeoutHandle);
-            }
-          }
+          void updateSession().catch((error) => {
+            console.error(
+              "Failed to refresh session before redirecting",
+              error
+            );
+          });
         }
 
-        /**
-         * Kick off the soft navigation as soon as the session refresh step
-         * completes so `/chat` begins hydrating while the toast remains
-         * visible.  The delayed hard redirect below still acts as a safety net
-         * in case the client transition never commits.
-         */
         try {
           startTransition(() => {
             router.replace(destination);
@@ -148,14 +103,16 @@ export default function Page() {
         }
 
         ensureHardRedirect();
-        scheduleHardRedirects();
 
-        /**
-         * Give the success toast a brief window to render before navigating away
-         * so hermetic Playwright runs can reliably observe the notification. A
-         * slightly longer pause keeps the automation bridge mounted even when
-         * slower CI runners are still hydrating the Sonner portal.
-         */
+        if (typeof window !== "undefined") {
+          const fallbackDelays = [IMMEDIATE_REDIRECT_DELAY_MS, HARD_REDIRECT_DELAY_MS];
+          for (const delay of fallbackDelays) {
+            window.setTimeout(() => {
+              ensureHardRedirect();
+            }, delay);
+          }
+        }
+
         await new Promise((resolve) =>
           setTimeout(resolve, TOAST_GRACE_PERIOD_MS)
         );
