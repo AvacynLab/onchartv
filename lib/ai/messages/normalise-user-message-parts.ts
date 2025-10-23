@@ -20,19 +20,19 @@ export function extractTextFromMessagePart(
   }
 
   if (
-    "text" in (candidate as Record<string, unknown>) &&
-    typeof (candidate as { text?: unknown }).text === "string"
+    "input_text" in (candidate as Record<string, unknown>) &&
+    typeof (candidate as { input_text?: unknown }).input_text === "string"
   ) {
-    const text = (candidate as { text: string }).text;
+    const text = (candidate as { input_text: string }).input_text;
     const trimmed = text.trim();
     return trimmed.length > 0 ? trimmed : null;
   }
 
   if (
-    "input_text" in (candidate as Record<string, unknown>) &&
-    typeof (candidate as { input_text?: unknown }).input_text === "string"
+    "text" in (candidate as Record<string, unknown>) &&
+    typeof (candidate as { text?: unknown }).text === "string"
   ) {
-    const text = (candidate as { input_text: string }).input_text;
+    const text = (candidate as { text: string }).text;
     const trimmed = text.trim();
     return trimmed.length > 0 ? trimmed : null;
   }

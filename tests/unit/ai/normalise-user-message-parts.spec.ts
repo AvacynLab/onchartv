@@ -46,6 +46,22 @@ describe("normaliseUserMessageParts", () => {
     expect(result).toEqual([{ type: "text", text: "Refreshed prompt" }]);
   });
 
+  it("prefers inline edit payloads when both text and input_text are present", () => {
+    const parts: ChatMessage["parts"] = [
+      {
+        type: "text",
+        text: "Why is grass green?",
+        input_text: "Why is the sky blue?",
+      } as any,
+    ];
+
+    const result = normaliseUserMessageParts(parts);
+
+    expect(result).toEqual([
+      { type: "text", text: "Why is the sky blue?", input_text: "Why is the sky blue?" },
+    ]);
+  });
+
   it("returns an empty array when the source parts are empty", () => {
     expect(normaliseUserMessageParts([])).toEqual([]);
   });
