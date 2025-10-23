@@ -1001,7 +1001,23 @@ export class ChatPage {
 
     await expect
       .poll(async () =>
-        hiddenFileInput.evaluate((input) => input.files?.length ?? 0)
+        hiddenFileInput.evaluate((element) => {
+          // Ensure we are dealing with the hidden `<input type="file">` so the
+          // automation flow fails loudly if the selector starts targeting a
+          // different node (for example an SVG icon wrapper).
+          if (!(element instanceof HTMLInputElement)) {
+            throw new Error(
+              "Playwright expected the hidden file input to be an HTMLInputElement"
+            );
+          }
+
+          const { files } = element;
+
+          // `files` should always be defined on a valid file input, but guard in
+          // case the DOM changes unexpectedly so the polling loop emits a
+          // descriptive error rather than returning `undefined`.
+          return files?.length ?? 0;
+        })
       )
       .toBeGreaterThan(0);
 
