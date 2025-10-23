@@ -27,6 +27,8 @@ import { getWeather } from "@/lib/ai/tools/get-weather";
 import { requestSuggestions } from "@/lib/ai/tools/request-suggestions";
 import { updateDocument } from "@/lib/ai/tools/update-document";
 import { convertToModelMessages } from "@/lib/ai/messages/convert-to-model-messages";
+import { deriveMessageParts } from "@/lib/ai/messages/derive-message-parts";
+import { normaliseUserMessageParts } from "@/lib/ai/messages/normalise-user-message-parts";
 import {
   streamChatResponse,
   type StreamTextOptions,
@@ -63,7 +65,12 @@ import {
 import { normaliseAssistantMessage } from "@/lib/chat/stream-fallback";
 
 import { wrapFinanceArtifact } from "@/lib/artifacts/types";
-import { convertToUIMessages, generateUUID } from "@/lib/utils";
+import {
+  convertToUIMessages,
+  generateUUID,
+  stableStringifyForHash,
+} from "@/lib/utils";
+import { logPlaywrightStreamDebug } from "@/lib/playwright-debug";
 import { generateTitleFromUserMessage } from "../../actions";
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
 
@@ -574,12 +581,30 @@ export async function POST(request: Request) {
     const messagesFromDb = await getMessagesByChatId({ id });
     const [persistedMessage] = await getMessageById({ id: incomingMessage.id });
 
-    const incomingParts = Array.isArray(incomingMessage.parts)
-      ? (incomingMessage.parts as ChatMessage["parts"])
-      : [];
-    const persistedParts = Array.isArray(persistedMessage?.parts)
+    let incomingParts = deriveMessageParts(incomingMessage);
+    if (incomingMessage.role === "user") {
+      /**
+       * Inline edit flows may keep the previous prompt in the payload while
+       * appending the refreshed text as an additional fragment. Collapsing the
+       * parts down to a single textual entry keeps signature comparisons and
+       * downstream providers aligned with what the user just typed.
+       */
+      incomingParts = normaliseUserMessageParts(incomingParts);
+    }
+
+    let persistedParts: ChatMessage["parts"] | null = Array.isArray(
+      persistedMessage?.parts
+    )
       ? (persistedMessage!.parts as ChatMessage["parts"])
       : null;
+
+    if (
+      persistedMessage?.role === "user" &&
+      Array.isArray(persistedParts) &&
+      persistedParts.length > 0
+    ) {
+      persistedParts = normaliseUserMessageParts(persistedParts);
+    }
 
     const incomingSignature = buildMessageTextSignature(incomingParts);
     const persistedSignature = buildMessageTextSignature(persistedParts);
@@ -605,17 +630,25 @@ export async function POST(request: Request) {
       incomingSignature === persistedSignature;
 
     let resolvedParts: ChatMessage["parts"];
+    let resolvedSource: "incoming" | "persisted" | "fallback" = "fallback";
 
     if (incomingHasText) {
       const clientMatchesPersisted =
         typeof clientSignature === "string" && clientSignature === persistedSignature;
 
+      const partsStructurallyMatch =
+        Array.isArray(persistedParts) &&
+        stableStringifyForHash(persistedParts) ===
+          stableStringifyForHash(incomingParts);
+
       if (
         signaturesMatch &&
         persistedParts &&
-        (clientSignature == null || clientMatchesPersisted)
+        (clientSignature == null || clientMatchesPersisted) &&
+        partsStructurallyMatch
       ) {
         resolvedParts = persistedParts;
+        resolvedSource = "persisted";
       } else {
         if (persistedHasText && !signaturesMatch) {
           logWarning(
@@ -637,15 +670,45 @@ export async function POST(request: Request) {
               persistedSignature,
             }
           );
+        } else if (signaturesMatch && persistedParts && !partsStructurallyMatch) {
+          logWarning(
+            "chat:message",
+            "Persisted text matched but structural differences were detected; using incoming parts",
+            {
+              clientSignature,
+              incomingSignature,
+              persistedSignature,
+            }
+          );
         }
 
         resolvedParts = incomingParts;
+        resolvedSource = "incoming";
       }
     } else if (persistedParts) {
       resolvedParts = persistedParts;
+      resolvedSource = "persisted";
     } else {
       resolvedParts = incomingParts;
+      resolvedSource = "incoming";
     }
+
+    logPlaywrightStreamDebug(
+      "chat.api",
+      "resolve-user-message",
+      () => ({
+        chatId: id,
+        messageId: incomingMessage.id,
+        incomingSignature,
+        persistedSignature,
+        clientSignature,
+        resolvedSource,
+        incomingPartCount: incomingParts.length,
+        persistedPartCount: persistedParts?.length ?? 0,
+        usedIncomingReference: resolvedParts === incomingParts,
+      }),
+      { withTimestamp: true }
+    );
 
     const resolvedAttachments: Attachment[] = Array.isArray(
       persistedMessage?.attachments
@@ -714,9 +777,57 @@ export async function POST(request: Request) {
         )
       : messagesFromDb;
 
-    const uiMessages = persistedMessage
-      ? convertToUIMessages(updatedMessagesFromDb)
-      : [...convertToUIMessages(updatedMessagesFromDb), resolvedMessage];
+    const baseUiMessages = convertToUIMessages(updatedMessagesFromDb);
+
+    const uiMessages = (() => {
+      const hasResolvedMessage = baseUiMessages.some(
+        (message) => message.id === resolvedMessage.id
+      );
+
+      if (!hasResolvedMessage) {
+        return [...baseUiMessages, resolvedMessage];
+      }
+
+      return baseUiMessages.map((message) => {
+        if (message.id !== resolvedMessage.id) {
+          return message;
+        }
+
+        const messageCreatedAt = (() => {
+          const resolvedCreatedAt =
+            typeof resolvedMessage.metadata === "object" &&
+            resolvedMessage.metadata !== null &&
+            typeof (resolvedMessage.metadata as { createdAt?: unknown }).createdAt ===
+              "string"
+              ? (resolvedMessage.metadata as { createdAt: string }).createdAt
+              : null;
+
+          if (resolvedCreatedAt) {
+            return resolvedCreatedAt;
+          }
+
+          const existingCreatedAt =
+            typeof message.metadata === "object" &&
+            message.metadata !== null &&
+            typeof (message.metadata as { createdAt?: unknown }).createdAt ===
+              "string"
+              ? (message.metadata as { createdAt: string }).createdAt
+              : null;
+
+          return existingCreatedAt ?? new Date().toISOString();
+        })();
+
+        return {
+          ...message,
+          parts: resolvedMessage.parts,
+          metadata: {
+            ...message.metadata,
+            ...resolvedMessage.metadata,
+            createdAt: messageCreatedAt,
+          },
+        } satisfies ChatMessage;
+      });
+    })();
 
     // Resolve coarse location data without triggering network calls during
     // hermetic Playwright runs. The helper gracefully falls back to an empty

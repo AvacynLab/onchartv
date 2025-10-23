@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import {
   expect,
@@ -978,23 +977,57 @@ export class ChatPage {
       await expect(attachmentsButton).toBeEnabled();
     }
 
-    this.page.on("filechooser", async (fileChooser) => {
-      const filePath = path.join(
-        process.cwd(),
-        "public",
-        "images",
-        "mouth of the seine, monet.jpg"
-      );
-      const imageBuffer = fs.readFileSync(filePath);
+    await expect(attachmentsButton).toBeVisible({ timeout: 60_000 });
+    await expect(attachmentsButton).toBeEnabled({ timeout: 60_000 });
 
-      await fileChooser.setFiles({
-        name: "mouth of the seine, monet.jpg",
-        mimeType: "image/jpeg",
-        buffer: imageBuffer,
-      });
-    });
+    const filePath = path.join(
+      process.cwd(),
+      "public",
+      "images",
+      "mouth of the seine, monet.jpg"
+    );
+    const hiddenFileInput = this.page.getByTestId("file-input");
+    await expect(hiddenFileInput).toBeAttached({ timeout: 60_000 });
 
-    await attachmentsButton.click();
+    /**
+     * Inject the Monet fixture straight into the hidden file input. Relying on
+     * the Playwright file chooser proved flaky – Chromium occasionally kept the
+     * modal open after we populated it, which in turn prevented the React
+     * change handler from ever firing. Setting the file programmatically keeps
+     * the automation path deterministic and mirrors the server-side upload
+     * expectations exercised during manual QA.
+     */
+    await hiddenFileInput.setInputFiles(filePath);
+
+    await expect
+      .poll(async () =>
+        hiddenFileInput.evaluate((element) => {
+          // Ensure we are dealing with the hidden `<input type="file">` so the
+          // automation flow fails loudly if the selector starts targeting a
+          // different node (for example an SVG icon wrapper).
+          if (!(element instanceof HTMLInputElement)) {
+            throw new Error(
+              "Playwright expected the hidden file input to be an HTMLInputElement"
+            );
+          }
+
+          const { files } = element;
+
+          // `files` should always be defined on a valid file input, but guard in
+          // case the DOM changes unexpectedly so the polling loop emits a
+          // descriptive error rather than returning `undefined`.
+          return files?.length ?? 0;
+        })
+      )
+      .toBeGreaterThan(0);
+
+    /**
+     * Les chargements d'upload peuvent prendre quelques frames supplémentaires
+     * en CI. Patiente jusqu'à ce que l'aperçu se matérialise réellement avant
+     * de rendre la main au scénario principal.
+     */
+    const attachmentsPreview = this.page.getByTestId("attachments-preview");
+    await expect(attachmentsPreview).toBeVisible({ timeout: 60_000 });
   }
 
   async getSelectedModel() {

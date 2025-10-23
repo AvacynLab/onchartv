@@ -16,7 +16,7 @@ import { ChatSDKError } from "@/lib/errors";
 import type { Attachment, ChatMessage, MessageMetadata } from "@/lib/types";
 import { messageMetadataSchema } from "@/lib/types";
 import type { AppUsage } from "@/lib/usage";
-import { logPlaywrightStreamDebug } from "@/lib/playwright-debug";
+import { logWarning } from "@/lib/logging";
 import { fetcher, fetchWithErrorHandlers, generateUUID } from "@/lib/utils";
 import {
   ChatComposerPrefillOptions,
@@ -26,6 +26,11 @@ import { Artifact } from "./artifact";
 import { useOptionalDataStream } from "./data-stream-provider";
 import { Messages } from "./messages";
 import { MultimodalInput } from "./multimodal-input";
+import {
+  logChatDataPartDebug,
+  useChatPlaywrightStreamDebug,
+} from "@/lib/chat/playwright-stream-debug";
+import { useNormaliseChatMessages } from "@/lib/chat/use-normalised-chat-messages";
 import { getChatHistoryPaginationKey } from "./sidebar-history";
 import { toast } from "./toast";
 import type { VisibilityType } from "./visibility-selector";
@@ -96,6 +101,14 @@ export function Chat({
     resumeStream,
   } = useChat<ChatMessage>({
     id,
+    /**
+     * `useChat` initialise son état interne à l'aide de la propriété
+     * `messages`. Nous la renseignons avec l'instantané fourni par le serveur
+     * tout en laissant le hook gérer ensuite ses mises à jour en autonomie.
+     * Cela évite l'effet « prop contrôlée » observé lorsque l'on passait le
+     * tableau via `messages` depuis React à chaque rendu (ce qui gelait le
+     * stream Playwright faute d'assistant visible).
+     */
     messages: initialMessages,
     experimental_throttle: 100,
     generateId: generateUUID,
@@ -182,16 +195,7 @@ export function Chat({
         return;
       }
 
-      logPlaywrightStreamDebug("chat-component", "data-part", () => ({
-        partType:
-          typeof dataPart === "object" && dataPart && "type" in dataPart
-            ? (dataPart as { type?: unknown }).type
-            : typeof dataPart,
-        hasData:
-          typeof dataPart === "object" && dataPart && "data" in dataPart
-            ? Boolean((dataPart as { data?: unknown }).data)
-            : false,
-      }));
+      logChatDataPartDebug(dataPart);
 
       setDataStream((previousParts) => {
         const safePreviousParts = Array.isArray(previousParts)
@@ -219,21 +223,6 @@ export function Chat({
       }
     },
   });
-
-  /**
-   * Nous capturons le nombre de messages après l'initialisation du hook
-   * `useChat` pour éviter tout accès à des variables non définies pendant la
-   * phase de montage SSR (observé lors des tests Playwright ciblant la page
-   * d'accessibilité finance).
-   */
-  const messageCount = Array.isArray(messages) ? messages.length : 0;
-
-  useEffect(() => {
-    logPlaywrightStreamDebug("chat-component", "status-change", () => ({
-      status,
-      messageCount,
-    }));
-  }, [status, messageCount]);
 
   const searchParams = useSearchParams();
   /**
@@ -275,16 +264,43 @@ export function Chat({
   }, [initialQuery, sendMessage, hasAppendedQuery, id]);
 
   /**
-   * Les flux de messages peuvent être transitoirement `undefined` pendant le
-   * streaming. Ce mémo normalise la valeur pour le rendu et les effets.
+   * Centralise the Playwright diagnostics in a dedicated hook so the render
+   * path remains focused on UI concerns while the debug layer retains access to
+   * the streaming lifecycle. The hook mirrors the previous inline behaviour:
+   * it logs status transitions and snapshots of the current message array
+   * whenever the chat state changes.
    */
-  const safeMessages = useMemo<ChatMessage[]>(() => {
-    if (!Array.isArray(messages)) {
-      return [];
-    }
+  const { safeMessages } = useChatPlaywrightStreamDebug({
+    messages,
+    status,
+  });
 
-    return messages;
-  }, [messages]);
+  /**
+   * Les flux d'assistant observés via Playwright exposent parfois des messages
+   * dépourvus d'identifiant stable. Le hook dédié encapsule la logique de
+   * normalisation afin de conserver un état cohérent pour les actions (votes,
+   * édition) et pour les outils de synchronisation e2e, tout en regroupant les
+   * diagnostics au même endroit que la mise à jour de l'état.
+   */
+  useNormaliseChatMessages({
+    chatId: id,
+    messages,
+    setMessages,
+    onIdentifierPatches: (patches) => {
+      for (const patch of patches) {
+        logWarning(
+          "chat:messages",
+          "[Chat] synthesised fallback identifier for streamed message",
+          {
+            chatId: id,
+            fallbackMessageId: patch.fallbackId,
+            index: patch.index,
+            role: patch.role,
+          }
+        );
+      }
+    },
+  });
 
   const { data: votes } = useSWR<Vote[]>(
     safeMessages.length >= 2 ? `/api/vote?chatId=${id}` : null,

@@ -318,4 +318,130 @@ describe("convertToModelMessages", () => {
       },
     ]);
   });
+
+  it("normalises input_text fragments emitted by inline edits", () => {
+    const editedMessage: ChatMessage = {
+      id: "user-inline",
+      role: "user",
+      parts: [
+        { type: "input_text", input_text: "Why is the sky blue?" },
+      ],
+      metadata: { createdAt: new Date("2025-02-16T08:00:00Z").toISOString() },
+    };
+
+    const { id: _id, ...messageWithoutId } = editedMessage;
+
+    const modelMessages = convertToModelMessages([messageWithoutId]);
+
+    expect(modelMessages).toEqual([
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Why is the sky blue?",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("handles legacy fragments lacking a declared type but providing input_text", () => {
+    const legacyMessage: ChatMessage = {
+      id: "user-legacy",
+      role: "user",
+      // Some SDK variants omit the type field while still nesting the
+      // `input_text` payload. We coerce the structure to keep the mock provider
+      // consistent during Playwright runs.
+      parts: [{ input_text: "Why is the sky blue?" } as never],
+      metadata: { createdAt: new Date("2025-02-16T08:05:00Z").toISOString() },
+    };
+
+    const { id: _id, ...messageWithoutId } = legacyMessage;
+
+    const modelMessages = convertToModelMessages([messageWithoutId]);
+
+    expect(modelMessages).toEqual([
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Why is the sky blue?",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("collapses duplicate textual fragments to the freshest edit", () => {
+    const editedMessage: ChatMessage = {
+      id: "user-edited",
+      role: "user",
+      parts: [
+        { type: "text", text: "Why is grass green?" },
+        { type: "text", text: "Why is the sky blue?" },
+        { type: "tool-result", toolCallId: "noop", toolName: "noop", result: {} },
+      ],
+      metadata: { createdAt: new Date("2025-02-16T09:00:00Z").toISOString() },
+    };
+
+    const { id: _id, ...messageWithoutId } = editedMessage;
+
+    const modelMessages = convertToModelMessages([messageWithoutId]);
+
+    expect(modelMessages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "Why is the sky blue?" }],
+      },
+    ]);
+  });
+
+  it("upgrades bare string fragments while preserving trailing attachments", () => {
+    const editedMessage: ChatMessage = {
+      id: "user-string",
+      role: "user",
+      parts: [
+        "Why is grass green?",
+        { type: "text", text: "Why is the sky blue?" },
+        { type: "image", image_url: "https://example.com/sky.png" } as never,
+      ],
+      metadata: { createdAt: new Date("2025-02-16T09:05:00Z").toISOString() },
+    };
+
+    const { id: _id, ...messageWithoutId } = editedMessage;
+
+    const modelMessages = convertToModelMessages([messageWithoutId]);
+
+    expect(modelMessages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "Why is the sky blue?" }],
+      },
+    ]);
+  });
+
+  it("derives fresh text fragments from legacy content-only payloads", () => {
+    const legacyContentMessage: ChatMessage = {
+      id: "user-content",
+      role: "user",
+      content: [
+        { type: "text", text: "Why is grass green?" },
+        { type: "text", text: "Why is the sky blue?" },
+      ] as never,
+      metadata: { createdAt: new Date("2025-02-16T09:10:00Z").toISOString() },
+    };
+
+    const { id: _id, ...messageWithoutId } = legacyContentMessage;
+
+    const modelMessages = convertToModelMessages([messageWithoutId]);
+
+    expect(modelMessages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "Why is the sky blue?" }],
+      },
+    ]);
+  });
 });

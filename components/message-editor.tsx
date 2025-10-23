@@ -270,6 +270,22 @@ function rebuildMessageParts(
   let textFragmentReplaced = false;
 
   for (const part of existingParts) {
+    if (typeof part === "string") {
+      /**
+       * Legacy payloads persisted prior to the parts migration can surface raw
+       * strings instead of structured `text` fragments. When editing such
+       * messages we replace the first occurrence with the freshly edited
+       * prompt and drop the legacy value to avoid replaying the stale text
+       * alongside the updated content.
+       */
+      if (!textFragmentReplaced) {
+        updatedParts.push({ type: "text", text: nextText });
+        textFragmentReplaced = true;
+      }
+
+      continue;
+    }
+
     /**
      * The AI SDK emits both `text` parts (with a `type` discriminator) and
      * legacy fragments that surface the edited prompt through an
@@ -285,9 +301,24 @@ function rebuildMessageParts(
       continue;
     }
 
+    const isObjectPart = typeof part === "object" && part !== null;
+
+    const hasExplicitText =
+      isObjectPart &&
+      "text" in (part as Record<string, unknown>) &&
+      typeof (part as { text?: unknown }).text === "string";
+
+    if (hasExplicitText) {
+      if (!textFragmentReplaced) {
+        updatedParts.push({ type: "text", text: nextText });
+        textFragmentReplaced = true;
+      }
+
+      continue;
+    }
+
     const hasInputText =
-      typeof part === "object" &&
-      part !== null &&
+      isObjectPart &&
       "input_text" in part &&
       typeof (part as { input_text?: unknown }).input_text === "string";
 

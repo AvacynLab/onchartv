@@ -18,6 +18,31 @@ import type { ModelMessage } from "ai";
 import { isPlaywrightLikeEnvironment } from "./playwright-env";
 import { DEFAULT_ONBOARDING_SUGGESTION } from "../constants";
 import { logWarning } from "@/lib/logging";
+import { logPlaywrightStreamDebug } from "@/lib/playwright-debug";
+
+function isStringFragment(fragment: unknown): fragment is string {
+  return typeof fragment === "string";
+}
+
+function hasTextFragment(fragment: unknown): fragment is { text: string } {
+  return (
+    fragment != null &&
+    typeof fragment === "object" &&
+    "text" in fragment &&
+    typeof (fragment as { text?: unknown }).text === "string"
+  );
+}
+
+function hasInputTextFragment(
+  fragment: unknown
+): fragment is { input_text: string } {
+  return (
+    fragment != null &&
+    typeof fragment === "object" &&
+    "input_text" in fragment &&
+    typeof (fragment as { input_text?: unknown }).input_text === "string"
+  );
+}
 
 type CreateOpenAI = typeof import("@ai-sdk/openai").createOpenAI;
 
@@ -339,11 +364,89 @@ function buildPlaywrightChunks({
   readonly includeReasoning: boolean;
   readonly fallbackText: string;
 }): LanguageModelV2StreamPart[] {
+  /**
+   * When stream debugging is enabled we surface the mock provider prompt so
+   * Playwright traces can confirm which roles and fragments were evaluated. The
+   * payload is truncated to keep console output manageable while still showing
+   * the most recent text edits.
+   */
+  logPlaywrightStreamDebug(
+    "mock-provider",
+    "build-playwright-chunks",
+    () => ({
+      promptRoles: prompt.map((message) => message?.role ?? "unknown"),
+      promptContent: prompt.map((message, index) => ({
+        index,
+        role: message?.role ?? "unknown",
+        contentSummary: Array.isArray(message?.content)
+          ? (message.content as unknown[])
+              .map((fragment) => {
+                if (fragment == null) {
+                  return null;
+                }
+
+                if (isStringFragment(fragment)) {
+                  return fragment.slice(0, 80);
+                }
+
+                if (hasTextFragment(fragment)) {
+                  return fragment.text.slice(0, 80);
+                }
+
+                if (hasInputTextFragment(fragment)) {
+                  return fragment.input_text.slice(0, 80);
+                }
+
+                return fragment;
+              })
+              .filter((value) => value != null)
+          : message?.content ?? null,
+      })),
+    }),
+    { withTimestamp: true }
+  );
+
   const recentMessage = resolveLatestRelevantMessage(prompt);
 
   if (!recentMessage) {
     throw new Error("No recent user message found!");
   }
+
+  /**
+   * Emit the resolved message as well so we can detect mismatches between the
+   * prompt sequence and the candidate the provider ultimately selects.
+   */
+  logPlaywrightStreamDebug(
+    "mock-provider",
+    "recent-message",
+    () => ({
+      role: recentMessage.role,
+      contentSummary: Array.isArray(recentMessage.content)
+        ? (recentMessage.content as unknown[])
+            .map((fragment) => {
+              if (fragment == null) {
+                return null;
+              }
+
+              if (isStringFragment(fragment)) {
+                return fragment.slice(0, 80);
+              }
+
+              if (hasTextFragment(fragment)) {
+                return fragment.text.slice(0, 80);
+              }
+
+              if (hasInputTextFragment(fragment)) {
+                return fragment.input_text.slice(0, 80);
+              }
+
+              return fragment;
+            })
+            .filter((value) => value != null)
+        : recentMessage.content ?? null,
+    }),
+    { withTimestamp: true }
+  );
 
   if (includeReasoning) {
     const reasoningChunks = resolveReasoningPrompt(recentMessage);
@@ -367,28 +470,32 @@ function resolveLatestRelevantMessage(
   prompt: ModelMessage[]
 ): ModelMessage | null {
   /**
-   * Tool responses arrive immediately before the assistant synthesises the
-   * final answer. Prioritise those payloads so the inline mocks can emit
-   * follow-up text without re-triggering the tool dispatch. When no tool
-   * result is present we fall back to the latest user-authored message so edit
-   * flows honour the freshly submitted prompt. The terminal entry remains the
-   * final fallback to keep the fixtures permissive for any future payload
-   * shapes.
+   * Tool responses generally precede the assistant’s final reply, but edit
+   * flows append a fresh user message after the tool output. We track the last
+   * observed indices for user and tool roles so we can prefer the edited
+   * prompt when it truly appears after a tool run, while still keeping the tool
+   * payload handy when no override exists. The terminal entry remains a
+   * fallback to keep the mocks tolerant of future payload permutations.
    */
-  for (let index = prompt.length - 1; index >= 0; index -= 1) {
+  let lastUserIndex = -1;
+  let lastToolIndex = -1;
+
+  for (let index = 0; index < prompt.length; index += 1) {
     const candidate = prompt[index];
 
-    if (candidate.role === "tool") {
-      return candidate;
+    if (candidate?.role === "user") {
+      lastUserIndex = index;
+    } else if (candidate?.role === "tool") {
+      lastToolIndex = index;
     }
   }
 
-  for (let index = prompt.length - 1; index >= 0; index -= 1) {
-    const candidate = prompt[index];
+  if (lastUserIndex > lastToolIndex && lastUserIndex >= 0) {
+    return prompt[lastUserIndex] ?? null;
+  }
 
-    if (candidate.role === "user") {
-      return candidate;
-    }
+  if (lastToolIndex >= 0) {
+    return prompt[lastToolIndex] ?? null;
   }
 
   return prompt.at(-1) ?? null;

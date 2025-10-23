@@ -1,10 +1,13 @@
 "use server";
 
+import { createHash } from "node:crypto";
+
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import { didSignInSucceed, extractRedirectPath } from "@/lib/auth/sign-in-response";
 import { createInitialChat, createUser, getUser } from "@/lib/db/queries";
+import { logWarning } from "@/lib/logging";
 
 import { signIn } from "./auth";
 
@@ -114,29 +117,39 @@ export const register = async (
     await createUser(validatedData.email, validatedData.password);
 
     /**
-     * Fetch the freshly inserted account so we can seed an onboarding chat tied
-     * to the real user identifier. When the lookup fails we fall back to the
-     * generic failure state, signalling the client to display the error toast
-     * instead of attempting a redirect with an unknown chat id.
+     * Seed an onboarding chat for the freshly created account so newcomers land
+     * on a populated workspace. If we fail to retrieve the account metadata we
+     * still proceed with the credentials hand-off and fall back to the generic
+     * dashboard redirect to avoid trapping the user on the register screen.
      */
     const [createdUser] = await getUser(validatedData.email);
 
-    if (!createdUser) {
-      return { status: "failed" } as RegisterActionState;
+    let seededChatRedirect: string | undefined;
+
+    if (createdUser) {
+      const initialChat = await createInitialChat({
+        userId: createdUser.id,
+      });
+
+      /**
+       * Ensure the chat dashboard and the newly provisioned conversation render
+       * up-to-date data the moment the client redirects by invalidating their
+       * cached pages. This mirrors the behaviour of the regular chat creation
+       * flow triggered from the sidebar.
+       */
+      revalidatePath("/chat");
+      revalidatePath(`/chat/${initialChat.chatId}`);
+
+      seededChatRedirect = `/chat/${initialChat.chatId}`;
+    } else {
+      logWarning(
+        "auth:register",
+        "Registration succeeded but the new user record was not immediately available; falling back to the dashboard redirect",
+        {
+          emailFingerprint: anonymiseEmail(validatedData.email),
+        }
+      );
     }
-
-    const initialChat = await createInitialChat({
-      userId: createdUser.id,
-    });
-
-    /**
-     * Ensure the chat dashboard and the newly provisioned conversation render
-     * up-to-date data the moment the client redirects by invalidating their
-     * cached pages. This mirrors the behaviour of the regular chat creation
-     * flow triggered from the sidebar.
-     */
-    revalidatePath("/chat");
-    revalidatePath(`/chat/${initialChat.chatId}`);
 
     const signInResponse = await signIn("credentials", {
       email: validatedData.email,
@@ -161,9 +174,10 @@ export const register = async (
       return { status: "failed" };
     }
 
-    const redirectTo = extractRedirectPath(signInResponse, {
-      baseUrl: process.env.NEXTAUTH_URL ?? "http://localhost:3000",
-    }) ?? `/chat/${initialChat.chatId}`;
+    const redirectTo =
+      extractRedirectPath(signInResponse, {
+        baseUrl: process.env.NEXTAUTH_URL ?? "http://localhost:3000",
+      }) ?? seededChatRedirect ?? "/chat";
 
     return {
       status: "success",
@@ -177,3 +191,18 @@ export const register = async (
     return { status: "failed" };
   }
 };
+
+/**
+ * Generate a deterministic fingerprint for an email address before logging it
+ * so we can correlate diagnostics without exposing personally identifiable
+ * information in shared CI logs.
+ */
+function anonymiseEmail(email: string): string {
+  if (email.length === 0) {
+    return "[redacted]";
+  }
+
+  const digest = createHash("sha256").update(email).digest("hex");
+
+  return `[fingerprint:${digest.slice(0, 12)}]`;
+}

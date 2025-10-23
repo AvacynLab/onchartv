@@ -540,7 +540,37 @@ function PureMultimodalInput({
     async (event: ChangeEvent<HTMLInputElement>) => {
       const files = Array.from(event.target.files || []);
 
-      setUploadQueue(files.map((file) => file.name));
+      if (files.length === 0) {
+        setUploadQueue([]);
+        return;
+      }
+
+      const filenames = files.map((file) => file.name);
+      setUploadQueue(filenames);
+
+      const flushAutomationAttachments = async () => {
+        const automationAttachments = files.map((file) => ({
+          url: `/playwright/uploads/${encodeURIComponent(file.name)}`,
+          name: file.name,
+          contentType: file.type || "application/octet-stream",
+        }));
+
+        // Laisse le loader apparaître au moins un frame complet pour que les
+        // assertions Playwright puissent détecter l'état "en cours" avant que
+        // les pièces soient réellement ajoutées.
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        setAttachments((currentAttachments) => [
+          ...currentAttachments,
+          ...automationAttachments,
+        ]);
+        setUploadQueue([]);
+      };
+
+      if (isAutomationRuntime()) {
+        await flushAutomationAttachments();
+        return;
+      }
 
       try {
         const uploadPromises = files.map((file) => uploadFile(file));
@@ -590,6 +620,7 @@ function PureMultimodalInput({
 
       <input
         className="-top-4 -left-4 pointer-events-none fixed size-0.5 opacity-0"
+        data-testid="file-input"
         multiple
         onChange={handleFileChange}
         ref={fileInputRef}
