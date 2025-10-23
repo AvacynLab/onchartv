@@ -1004,6 +1004,14 @@ export class ChatPage {
         hiddenFileInput.evaluate((input) => input.files?.length ?? 0)
       )
       .toBeGreaterThan(0);
+
+    /**
+     * Les chargements d'upload peuvent prendre quelques frames supplémentaires
+     * en CI. Patiente jusqu'à ce que l'aperçu se matérialise réellement avant
+     * de rendre la main au scénario principal.
+     */
+    const attachmentsPreview = this.page.getByTestId("attachments-preview");
+    await expect(attachmentsPreview).toBeVisible({ timeout: 60_000 });
   }
 
   async getSelectedModel() {

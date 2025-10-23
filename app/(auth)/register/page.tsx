@@ -16,9 +16,7 @@ import { type RegisterActionState, register } from "../actions";
  * ample time to attach in hermetic runs.
  */
 const TOAST_GRACE_PERIOD_MS = 5000;
-const SESSION_REFRESH_TIMEOUT_MS = 3000;
-const HARD_REDIRECT_DELAY_MS = 750;
-const IMMEDIATE_REDIRECT_DELAY_MS = 250;
+const REDIRECT_FALLBACK_DELAYS_MS = [0, 250, 750, 1500];
 
 export default function Page() {
   const router = useRouter();
@@ -53,35 +51,10 @@ export default function Page() {
       toast({ type: "success", description: "Account created successfully!" });
 
       setIsSuccessful(true);
-      void (async () => {
-        const destination = state.redirectTo ?? "/chat";
 
-        const ensureHardRedirect = () => {
-          if (typeof window === "undefined") {
-            return;
-          }
+      const destination = state.redirectTo ?? "/chat";
 
-          try {
-            const targetUrl = new URL(destination, window.location.origin).href;
-            if (window.location.href !== targetUrl) {
-              console.info("[register] enforcing window-level redirect", {
-                destination: targetUrl,
-              });
-              const navigator = window.location;
-
-              if (typeof navigator.replace === "function") {
-                navigator.replace(targetUrl);
-              } else if (typeof navigator.assign === "function") {
-                navigator.assign(targetUrl);
-              } else {
-                navigator.href = targetUrl;
-              }
-            }
-          } catch (error) {
-            console.error("[register] failed to compute hard redirect target", error);
-          }
-        };
-
+      const performRedirect = () => {
         if (typeof updateSession === "function") {
           void updateSession().catch((error) => {
             console.error(
@@ -95,28 +68,31 @@ export default function Page() {
           startTransition(() => {
             router.replace(destination);
           });
-          console.info("[register] scheduled router.replace for dashboard", {
-            destination,
-          });
         } catch (error) {
           console.error("[register] router.replace failed", error);
         }
 
-        ensureHardRedirect();
-
         if (typeof window !== "undefined") {
-          const fallbackDelays = [IMMEDIATE_REDIRECT_DELAY_MS, HARD_REDIRECT_DELAY_MS];
-          for (const delay of fallbackDelays) {
-            window.setTimeout(() => {
-              ensureHardRedirect();
-            }, delay);
+          try {
+            const targetUrl = new URL(destination, window.location.origin).href;
+            if (window.location.href !== targetUrl) {
+              window.location.replace(targetUrl);
+            }
+          } catch (error) {
+            console.error("[register] hard redirect failed", error);
           }
         }
+      };
 
-        await new Promise((resolve) =>
-          setTimeout(resolve, TOAST_GRACE_PERIOD_MS)
-        );
-      })();
+      performRedirect();
+
+      if (typeof window !== "undefined") {
+        REDIRECT_FALLBACK_DELAYS_MS.forEach((delay) => {
+          window.setTimeout(() => {
+            performRedirect();
+          }, delay);
+        });
+      }
     }
   }, [state.redirectTo, state.status, router, updateSession]);
 
