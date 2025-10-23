@@ -132,7 +132,9 @@ export default function Page() {
      * `<SubmitButton />` spinner. Returning the awaited call also guarantees the
      * success effect sees the updated state before we attempt to redirect.
      */
-    await formAction(formData);
+    const actionResultPromise = formAction(formData);
+    await actionResultPromise;
+    return actionResultPromise;
   };
 
   return (

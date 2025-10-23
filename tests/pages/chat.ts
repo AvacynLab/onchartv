@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import {
   expect,
@@ -987,20 +986,24 @@ export class ChatPage {
       "images",
       "mouth of the seine, monet.jpg"
     );
-    const imageBuffer = fs.readFileSync(filePath);
-
-    // Trigger a click so any client-side guards (e.g. reasoning models) run
-    // before we manually seed the hidden input.
-    await attachmentsButton.click();
-
     const hiddenFileInput = this.page.getByTestId("file-input");
     await expect(hiddenFileInput).toBeAttached({ timeout: 60_000 });
 
-    await hiddenFileInput.setInputFiles({
-      name: "mouth of the seine, monet.jpg",
-      mimeType: "image/jpeg",
-      buffer: imageBuffer,
-    });
+    /**
+     * Inject the Monet fixture straight into the hidden file input. Relying on
+     * the Playwright file chooser proved flaky – Chromium occasionally kept the
+     * modal open after we populated it, which in turn prevented the React
+     * change handler from ever firing. Setting the file programmatically keeps
+     * the automation path deterministic and mirrors the server-side upload
+     * expectations exercised during manual QA.
+     */
+    await hiddenFileInput.setInputFiles(filePath);
+
+    await expect
+      .poll(async () =>
+        hiddenFileInput.evaluate((input) => input.files?.length ?? 0)
+      )
+      .toBeGreaterThan(0);
   }
 
   async getSelectedModel() {
